@@ -459,6 +459,7 @@ class OpenmpVisitor(Transformer):
                     before_start.append(ir.Assign(omp_ub_expr, omp_ub_var, inst.loc))
 
                     const1_var = ir.Var(loop_index.scope, mk_unique_var("$const1"), inst.loc)
+                    start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", const1_var))
                     const1_assign = ir.Assign(ir.Const(1, inst.loc), const1_var, inst.loc)
                     before_start.append(const1_assign)
                     count_add_1 = ir.Expr.binop(operator.sub, omp_ub_var, const1_var, inst.loc)
@@ -481,6 +482,7 @@ class OpenmpVisitor(Transformer):
 
                     latch_block = ir.Block(scope, inst.loc)
                     const1_var = ir.Var(loop_index.scope, mk_unique_var("$const1"), inst.loc)
+                    start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", const1_var))
                     const1_assign = ir.Assign(ir.Const(1, inst.loc), const1_var, inst.loc)
                     latch_block.body.append(const1_assign)
                     latch_assign = ir.Assign(
@@ -550,6 +552,7 @@ class OpenmpVisitor(Transformer):
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.IV", omp_iv_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.UB", omp_ub_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_lb_var.name))
+                    start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_start_var.name))
                     #start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.IV", loop_index.name))
                     #start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.UB", size_var.name))
 
