@@ -90,6 +90,8 @@ class DefaultOptions:
     inline = _mapping("inline")
     enable_ssa = _mapping("enable_ssa")
 
+    target_backend = _mapping("target_backend")
+
 
 def include_default_options(*args):
     """Returns a mixin class with a subset of the options

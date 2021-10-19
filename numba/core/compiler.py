@@ -6,7 +6,6 @@ from numba.core.tracing import event
 from numba.core import (utils, errors, typing, interpreter, bytecode, postproc,
                         config, callconv, cpu)
 from numba.parfors.parfor import ParforDiagnostics
-from numba.core.inline_closurecall import InlineClosureCallPass
 from numba.core.errors import CompilerError
 from numba.core.environment import lookup_environment
 
@@ -29,7 +28,9 @@ from numba.core.typed_passes import (NopythonTypeInference, AnnotateTypes,
                                      ParforPass, DumpParforDiagnostics,
                                      IRLegalization, NoPythonBackend,
                                      InlineOverloads, PreLowerStripPhis,
-                                     NativeLowering)
+                                     NativeLowering,
+                                     NoPythonSupportedFeatureValidation,
+                                     )
 
 from numba.core.object_mode_passes import (ObjectModeFrontEnd,
                                            ObjectModeBackEnd)
@@ -133,6 +134,13 @@ detail""",
         type=cpu.InlineOptions,
         default=cpu.InlineOptions("never"),
         doc="TODO",
+    )
+    # Defines a new target option for tracking the "target backend".
+    # This will be the XYZ in @jit(_target=XYZ).
+    target_backend = Option(
+        type=str,
+        default="cpu", # if not set, default to CPU
+        doc="backend"
     )
 
 
@@ -292,6 +300,7 @@ def run_frontend(func, inline_closures=False, emit_dels=False):
     bc = bytecode.ByteCode(func_id=func_id)
     func_ir = interp.interpret(bc)
     if inline_closures:
+        from numba.core.inline_closurecall import InlineClosureCallPass
         inline_pass = InlineClosureCallPass(func_ir, cpu.ParallelOptions(False),
                                             {}, False)
         inline_pass.run()
@@ -457,6 +466,10 @@ class CompilerBase(object):
                     res = e.result
                     break
                 except Exception as e:
+                    if (utils.use_new_style_errors() and not
+                            isinstance(e, errors.NumbaError)):
+                        raise e
+
                     self.state.status.fail_reason = e
                     if is_final_pipeline:
                         raise e
@@ -540,6 +553,8 @@ class DefaultPassBuilder(object):
     def define_nopython_lowering_pipeline(state, name='nopython_lowering'):
         pm = PassManager(name)
         # legalise
+        pm.add_pass(NoPythonSupportedFeatureValidation,
+                    "ensure features that are in use are in a valid form")
         pm.add_pass(IRLegalization,
                     "ensure IR is legal prior to lowering")
 

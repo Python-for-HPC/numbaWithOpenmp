@@ -32,7 +32,6 @@ from numba.core.analysis import (
     compute_use_defs,
     compute_live_variables)
 from numba.core import postproc
-from numba.cpython.rangeobj import range_iter_len
 from numba.np.unsafe.ndarray import empty_inferred as unsafe_empty_inferred
 import numpy as np
 import operator
@@ -375,14 +374,14 @@ class InlineWorker(object):
         callee_blocks = callee_ir.blocks
 
         # 1. relabel callee_ir by adding an offset
-        max_label = max(ir_utils._max_label, max(caller_ir.blocks.keys()))
+        max_label = max(ir_utils._the_max_label.next(), max(caller_ir.blocks.keys()))
         callee_blocks = add_offset_to_labels(callee_blocks, max_label + 1)
         callee_blocks = simplify_CFG(callee_blocks)
         callee_ir.blocks = callee_blocks
         min_label = min(callee_blocks.keys())
         max_label = max(callee_blocks.keys())
         #    reset globals in ir_utils before we use it
-        ir_utils._max_label = max_label
+        ir_utils._the_max_label.update(max_label)
         self.debug_print("After relabel")
         _debug_dump(callee_ir)
 
@@ -396,7 +395,7 @@ class InlineWorker(object):
         var_dict = {}
         for var in callee_scope.localvars._con.values():
             if not (var.name in callee_freevars):
-                new_var = scope.redefine(mk_unique_var(var.name), loc=var.loc)
+                new_var = scope.redefine(var.name, loc=var.loc)
                 var_dict[var.name] = new_var
         self.debug_print("var_dict = ", var_dict)
         replace_vars(callee_blocks, var_dict)
@@ -580,14 +579,14 @@ def inline_closure_call(func_ir, glbls, block, i, callee, typingctx=None,
     callee_blocks = callee_ir.blocks
 
     # 1. relabel callee_ir by adding an offset
-    max_label = max(ir_utils._max_label, max(func_ir.blocks.keys()))
+    max_label = max(ir_utils._the_max_label.next(), max(func_ir.blocks.keys()))
     callee_blocks = add_offset_to_labels(callee_blocks, max_label + 1)
     callee_blocks = simplify_CFG(callee_blocks)
     callee_ir.blocks = callee_blocks
     min_label = min(callee_blocks.keys())
     max_label = max(callee_blocks.keys())
     #    reset globals in ir_utils before we use it
-    ir_utils._max_label = max_label
+    ir_utils._the_max_label.update(max_label)
     debug_print("After relabel")
     _debug_dump(callee_ir)
 
@@ -1069,6 +1068,7 @@ def _inline_arraycall(func_ir, cfg, visited, loop, swapped, enable_prange=False,
         # this doesn't work in objmode as it's effectively untyped
         if typed:
             len_func_var = ir.Var(scope, mk_unique_var("len_func"), loc)
+            from numba.cpython.rangeobj import range_iter_len
             stmts.append(_new_definition(func_ir, len_func_var,
                         ir.Global('range_iter_len', range_iter_len, loc=loc),
                         loc))

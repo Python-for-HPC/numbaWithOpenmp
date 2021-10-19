@@ -16,7 +16,6 @@ from numba.core.compiler_lock import global_compiler_lock
 import numba.core.entrypoints
 from numba.core.cpu_options import (ParallelOptions, FastMathOptions,
                                     InlineOptions)
-from numba.cpython import setobj, listobj
 from numba.np import ufunc_db
 from numba.parfors.parfor_lowering import in_openmp_region
 
@@ -37,6 +36,8 @@ if config.DEBUG_ARRAY_OPT >= 3:
     ll.set_option('openmp', '-debug')
     ll.set_option('openmp', '-print-after-all')
     ll.set_option('openmp', '-print-module-scope')
+# TODO
+# These can probably go but need to verify!
 ll.set_option('openmp', '-loopopt=0')
 ll.set_option('openmp', '-enable-lv')
 ll.set_option('openmp', '-disable-hir-generate-mkl-call')
@@ -73,13 +74,6 @@ class CPUContext(BaseContext):
         # Initialize NRT runtime
         rtsys.initialize(self)
 
-        # Initialize additional implementations
-        import numba.cpython.unicode
-        import numba.cpython.charseq
-        import numba.typed.dictimpl
-        import numba.experimental.function_type
-        import numba.experimental.jitclass
-
         # Add lower_extension attribute
         self.lower_extensions = {}
         from numba.parfors.parfor_lowering import _lower_parfor_parallel, _lower_openmp_region_start, _lower_openmp_region_end, openmp_region_start, openmp_region_end
@@ -90,6 +84,18 @@ class CPUContext(BaseContext):
         self.lower_extensions[openmp_region_end] = _lower_openmp_region_end
 
     def load_additional_registries(self):
+        # Add implementations that work via import
+        from numba.cpython import (builtins, charseq, enumimpl, hashing, heapq,
+                                   iterators, listobj, numbers, rangeobj,
+                                   setobj, slicing, tupleobj, unicode,)
+        from numba.core import optional
+        from numba.misc import gdb_hook, literal
+        from numba.np import linalg, polynomial, arraymath, arrayobj
+        from numba.typed import typeddict, dictimpl
+        from numba.typed import typedlist, listobject
+        from numba.experimental import jitclass, function_type
+        from numba.np import npdatetime
+
         # Add target specific implementations
         from numba.np import npyimpl
         from numba.cpython import cmathimpl, mathimpl, printimpl, randomimpl
@@ -157,12 +163,14 @@ class CPUContext(BaseContext):
         """
         Build a list from the Numba *list_type* and its initial *items*.
         """
+        from numba.cpython import listobj
         return listobj.build_list(self, builder, list_type, items)
 
     def build_set(self, builder, set_type, items):
         """
         Build a set from the Numba *set_type* and its initial *items*.
         """
+        from numba.cpython import setobj
         return setobj.build_set(self, builder, set_type, items)
 
     def build_map(self, builder, dict_type, item_types, items):
@@ -289,6 +297,8 @@ _options_mixin = include_default_options(
     "error_model",
     "inline",
     "enable_ssa",
+    # Add "target_backend" as a accepted option for the CPU in @jit(...)
+    "target_backend",
 )
 
 class CPUTargetOptions(_options_mixin, TargetOptions):
@@ -310,6 +320,11 @@ class CPUTargetOptions(_options_mixin, TargetOptions):
         flags.enable_pyobject_looplift = True
 
         flags.inherit_if_not_set("fastmath")
+
+        flags.inherit_if_not_set("error_model", default="python")
+
+        # Add "target_backend" as a option that inherits from the caller
+        flags.inherit_if_not_set("target_backend")
 
 # ----------------------------------------------------------------------------
 # Internal

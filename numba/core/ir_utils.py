@@ -37,7 +37,20 @@ def mk_unique_var(prefix):
     return var
 
 
-_max_label = 0
+class _MaxLabel:
+    def __init__(self, value=0):
+        self._value = value
+
+    def next(self):
+        self._value += 1
+        return self._value
+
+    def update(self, newval):
+        self._value = max(newval, self._value)
+
+
+_the_max_label = _MaxLabel()
+del _MaxLabel
 
 
 def get_unused_var_name(prefix, var_table):
@@ -53,14 +66,14 @@ def get_unused_var_name(prefix, var_table):
 
 
 def next_label():
-    global _max_label
-    _max_label += 1
-    return _max_label
+    return _the_max_label.next()
 
 
-def mk_alloc(typemap, calltypes, lhs, size_var, dtype, scope, loc, lhs_typ):
+def mk_alloc(typingctx, typemap, calltypes, lhs, size_var, dtype, scope, loc,
+             lhs_typ):
     """generate an array allocation with np.empty() and return list of nodes.
     size_var can be an int variable or tuple of int variables.
+    lhs_typ is the type of the array being allocated.
     """
     out = []
     ndims = 1
@@ -108,13 +121,17 @@ def mk_alloc(typemap, calltypes, lhs, size_var, dtype, scope, loc, lhs_typ):
     np_typ_getattr = ir.Expr.getattr(g_np_var, dtype_str, loc)
     typ_var_assign = ir.Assign(np_typ_getattr, typ_var, loc)
     alloc_call = ir.Expr.call(attr_var, [size_var, typ_var], (), loc)
-    if calltypes:
-        calltypes[alloc_call] = typemap[attr_var.name].get_call_type(
-            typing.Context(), [size_typ, types.functions.NumberClass(dtype)], {})
-    # signature(
-    #    types.npytypes.Array(dtype, ndims, 'C'), size_typ,
-    #    types.functions.NumberClass(dtype))
 
+    if calltypes:
+        cac = typemap[attr_var.name].get_call_type(
+            typingctx, [size_typ, types.functions.NumberClass(dtype)], {})
+        # By default, all calls to "empty" are typed as returning a standard
+        # NumPy ndarray.  If we are allocating a ndarray subclass here then
+        # just change the return type to be that of the subclass.
+        cac._return_type = (lhs_typ.copy(layout='C')
+                            if lhs_typ.layout == 'F'
+                            else lhs_typ)
+        calltypes[alloc_call] = cac
     if lhs_typ.layout == 'F':
         empty_c_typ = lhs_typ.copy(layout='C')
         empty_c_var = ir.Var(scope, mk_unique_var("$empty_c_var"), loc)
@@ -132,7 +149,7 @@ def mk_alloc(typemap, calltypes, lhs, size_var, dtype, scope, loc, lhs_typ):
         asfortranarray_call = ir.Expr.call(afa_attr_var, [empty_c_var], (), loc)
         if calltypes:
             calltypes[asfortranarray_call] = typemap[afa_attr_var.name].get_call_type(
-                typing.Context(), [empty_c_typ], {})
+                typingctx, [empty_c_typ], {})
 
         asfortranarray_assign = ir.Assign(asfortranarray_call, lhs, loc)
 
@@ -815,6 +832,8 @@ def find_potential_aliases(blocks, args, typemap, func_ir, alias_map=None,
                 if (isinstance(expr, ir.Expr) and (expr.op == 'cast' or
                     expr.op in ['getitem', 'static_getitem'])):
                     _add_alias(lhs, expr.value.name, alias_map, arg_aliases)
+                if isinstance(expr, ir.Expr) and expr.op == 'inplace_binop':
+                    _add_alias(lhs, expr.lhs.name, alias_map, arg_aliases)
                 # array attributes like A.T
                 if (isinstance(expr, ir.Expr) and expr.op == 'getattr'
                         and expr.attr in ['T', 'ctypes', 'flat']):
@@ -1310,7 +1329,7 @@ def simplify_CFG(blocks):
 
 
 arr_math = ['min', 'max', 'sum', 'prod', 'mean', 'var', 'std',
-            'cumsum', 'cumprod', 'argmin', 'argmax', 'argsort',
+            'cumsum', 'cumprod', 'argmax', 'argmin', 'argsort',
             'nonzero', 'ravel']
 
 
@@ -1669,10 +1688,9 @@ def compile_to_numba_ir(mk_func, glbls, typingctx=None, targetctx=None,
     remove_dels(f_ir.blocks)
 
     # relabel by adding an offset
-    global _max_label
-    f_ir.blocks = add_offset_to_labels(f_ir.blocks, _max_label + 1)
+    f_ir.blocks = add_offset_to_labels(f_ir.blocks, _the_max_label.next())
     max_label = max(f_ir.blocks.keys())
-    _max_label = max_label
+    _the_max_label.update(max_label)
 
     # rename all variables to avoid conflict
     var_table = get_name_var_table(f_ir.blocks)
@@ -1745,6 +1763,7 @@ def get_ir_of_code(glbls, fcode):
     rewrites.rewrite_registry.apply('before-inference', state)
     # call inline pass to handle cases like stencils and comprehensions
     swapped = {} # TODO: get this from diagnostics store
+    import numba.core.inline_closurecall
     inline_pass = numba.core.inline_closurecall.InlineClosureCallPass(
         ir, numba.core.cpu.ParallelOptions(False), swapped)
     inline_pass.run()
@@ -2189,6 +2208,12 @@ def enforce_no_phis(func_ir):
             raise CompilerError(msg, loc=phis[0].loc)
 
 
+def legalize_single_scope(blocks):
+    """Check the given mapping of ir.Block for containing a single scope.
+    """
+    return len({blk.scope for blk in blocks.values()}) == 1
+
+
 def check_and_legalize_ir(func_ir):
     """
     This checks that the IR presented is legal
@@ -2266,3 +2291,45 @@ def convert_code_obj_to_function(code_obj, caller_ir):
     # create the function and return it
     return _create_function_from_code_obj(fcode, func_env, func_arg, func_clo,
                                           glbls)
+
+
+def fixup_var_define_in_scope(blocks):
+    """Fixes the mapping of ir.Block to ensure all referenced ir.Var are
+    defined in every scope used by the function. Such that looking up a variable
+    from any scope in this function will not fail.
+
+    Note: This is a workaround. Ideally, all the blocks should refer to the
+    same ir.Scope, but that property is not maintained by all the passes.
+    """
+    # Scan for all used variables
+    used_var = {}
+    for blk in blocks.values():
+        scope = blk.scope
+        for inst in blk.body:
+            for var in inst.list_vars():
+                used_var[var] = inst
+    # Note: not all blocks share a single scope even though they should.
+    # Ensure the scope of each block defines all used variables.
+    for blk in blocks.values():
+        scope = blk.scope
+        for var, inst in used_var.items():
+            # add this variable if it's not in scope
+            if var.name not in scope.localvars:
+                # Note: using a internal method to reuse the same
+                scope.localvars.define(var.name, var)
+
+
+def transfer_scope(block, scope):
+    """Transfer the ir.Block to use the given ir.Scope.
+    """
+    old_scope = block.scope
+    if old_scope is scope:
+        # bypass if the block is already using the given scope
+        return block
+    # Ensure variables are defined in the new scope
+    for var in old_scope.localvars._con.values():
+        if var.name not in scope.localvars:
+            scope.localvars.define(var.name, var)
+    # replace scope
+    block.scope = scope
+    return block
