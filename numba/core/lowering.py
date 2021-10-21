@@ -300,6 +300,10 @@ class Lower(BaseLower):
         prevent alloca and subsequent load/store for locals) should be disabled.
         Currently, this is conditional solely on the presence of a request for
         the emission of debug information."""
+        # We need to disable this option for OpenMP at the moment.
+        # We should really disable only if there's an openmp region in a function.
+        # Potentially, there is another solution.
+        return True
         return False if self.flags is None else self.flags.debuginfo
 
     def _find_singly_assigned_variable(self):
