@@ -12,14 +12,21 @@ import operator
 import sys
 import copy
 import os
+import ctypes.util
 
-#iomplib = '/opt/intel/compilers_and_libraries_2018.0.128/linux/compiler/lib/intel64_lin/libiomp5.so'
-iomplib = os.getenv('NUMBA_OMP_LIB','/opt/intel/compilers_and_libraries_2020/linux/lib/intel64/libiomp5.so')
-ll.load_library_permanently(iomplib)
+library_missing = False
 
-#irclib = '/opt/intel/compilers_and_libraries_2018.0.128/linux/compiler/lib/intel64_lin/libirc.so'
-irclib = os.getenv('NUMBA_IRC_LIB','/opt/intel/compilers_and_libraries_2020/linux/lib/intel64/libirc.so')
-ll.load_library_permanently(irclib)
+iomplib = os.getenv('NUMBA_OMP_LIB',None)
+if iomplib is None:
+    iomplib = ctypes.util.find_library("libomp.so")
+if iomplib is None:
+    iomplib = ctypes.util.find_library("libiomp5.so")
+if iomplib is None:
+    library_missing = True
+else:
+    if config.DEBUG_OPENMP >= 1:
+        print("Found OpenMP runtime library at", iomplib)
+    ll.load_library_permanently(iomplib)
 
 class PythonOpenmp:
     def __init__(self, *args):
@@ -49,6 +56,7 @@ class _OpenmpContextType(WithContext):
         assert flags is not None
         flags.enable_ssa = False
         flags.release_gil = True
+        flags.noalias = True
         _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra, state)
         if config.DEBUG_OPENMP >= 1:
             print("post-with-removal")
@@ -1393,6 +1401,15 @@ def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra
     openmp ir nodes in it and adds the ending openmp ir nodes to
     the end block.
     """
+    # First check for presence of required libraries.
+    if library_missing:
+        if iomplib is None:
+            print("OpenMP runtime library could not be found.")
+            print("Make sure that libomp.so or libiomp5.so is in your library path or")
+            print("specify the location of the OpenMP runtime library with the")
+            print("NUMBA_OMP_LIB environment variables.")
+            sys.exit(-1)
+
     sblk = blocks[blk_start]
     scope = sblk.scope
     loc = sblk.loc
@@ -1440,7 +1457,6 @@ ffi.cdef('int omp_get_max_active_levels(void);')
 ffi.cdef('int omp_get_max_threads(void);')
 
 C = ffi.dlopen(None)
-#C = ffi.dlopen(iomplib)
 omp_set_num_threads = C.omp_set_num_threads
 omp_get_thread_num = C.omp_get_thread_num
 omp_get_num_threads = C.omp_get_num_threads

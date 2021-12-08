@@ -683,6 +683,7 @@ class CPUCodeLibrary(CodeLibrary):
         with self._recorded_timings.record(cheap_name):
             # A cheaper optimisation pass is run first to try and get as many
             # refops into the same function as possible via inlining
+            #self._codegen._mpm_full.run(self._final_module)
             self._codegen._mpm_cheap.run(self._final_module)
         # Refop pruning is then run on the heavily inlined function
         if not config.LLVM_REFPRUNE_PASS:
@@ -1209,7 +1210,7 @@ class CPUCodegen(Codegen):
         self._data_layout = str(self._target_data)
         self._mpm_cheap = self._module_pass_manager(loop_vectorize=False,
                                                     slp_vectorize=False,
-                                                    opt=0,
+                                                    opt=3,
                                                     cost="cheap")
         self._mpm_full = self._module_pass_manager()
 
@@ -1241,7 +1242,8 @@ class CPUCodegen(Codegen):
             # working. The desired vectorization effects can be achieved
             # with this in LLVM 11 (and also < 11) but at a potentially
             # slightly higher cost:
-            pm.add_licm_pass()
+#            Todd: I don't remember why I commented this out.  Re-evaluate later.
+#            pm.add_licm_pass()
             pm.add_cfg_simplification_pass()
         if config.LLVM_REFPRUNE_PASS:
             pm.add_refprune_pass(_parse_refprune_flags())
