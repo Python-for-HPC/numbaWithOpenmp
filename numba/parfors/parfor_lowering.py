@@ -63,8 +63,11 @@ class openmp_tag(object):
         self.arg = arg
         self.load = load
         self.loaded_arg = None
+        self.xarginfo = []
 
     def arg_to_str(self, x, lowerer):
+        if config.DEBUG_ARRAY_OPT >= 1:
+            print("arg_to_str:", x, type(x), self.load, type(self.load))
         if isinstance(x, ir.Var):
             # Make sure the var referred to has been alloc'ed already.
             lowerer._alloca_var(x.name, lowerer.fndesc.typemap[x.name])
@@ -82,7 +85,10 @@ class openmp_tag(object):
         elif isinstance(x, lir.instructions.AllocaInstr):
             decl = x.get_decl()
         elif isinstance(x, str):
-            lowerer._alloca_var(x, lowerer.fndesc.typemap[x])
+            xtyp = lowerer.fndesc.typemap[x]
+            if config.DEBUG_ARRAY_OPT >= 1:
+                print("xtyp:", xtyp, type(xtyp))
+            lowerer._alloca_var(x, xtyp)
             if self.load:
                 if not self.loaded_arg:
                     self.loaded_arg = lowerer.loadvar(x)
@@ -100,6 +106,72 @@ class openmp_tag(object):
             print("unknown arg type:", x, type(x))
 
         return decl
+
+    def post_entry(self, lowerer):
+        for xarginfo, xarginfo_args, x, alloca_tuple_list in self.xarginfo:
+            loaded_args = [lowerer.builder.load(alloca_tuple[2]) for alloca_tuple in alloca_tuple_list]
+            fa_res = xarginfo.from_arguments(lowerer.builder,tuple(loaded_args))
+            #fa_res = xarginfo.from_arguments(lowerer.builder,tuple([xarg for xarg in xarginfo_args]))
+            assert(len(fa_res) == 1)
+            lowerer.storevar(fa_res[0], x)
+
+    def unpack_arg(self, x, lowerer, xarginfo_list):
+        if isinstance(x, ir.Var):
+            return [x], None
+        elif isinstance(x, lir.instructions.AllocaInstr):
+            return [x], None
+        elif isinstance(x, str):
+            xtyp = lowerer.fndesc.typemap[x]
+            if config.DEBUG_ARRAY_OPT >= 1:
+                print("xtyp:", xtyp, type(xtyp))
+            if self.load:
+                return [x], None
+            else:
+                if isinstance(xtyp, types.npytypes.Array):
+                    # from core/datamodel/packer.py
+                    xarginfo = lowerer.context.get_arg_packer((xtyp,))
+                    xloaded = lowerer.loadvar(x)
+                    xarginfo_args = list(xarginfo.as_arguments(lowerer.builder, [xloaded]))
+                    xarg_alloca_vars = []
+                    for xarg in xarginfo_args:
+                        if config.DEBUG_ARRAY_OPT >= 1:
+                            print("xarg:", type(xarg), xarg, "agg:", xarg.aggregate, type(xarg.aggregate), "ind:", xarg.indices)
+                            print(xarg.aggregate.type.elements[xarg.indices[0]])
+                        alloca_name = "$alloca_" + xarg.name
+                        alloca_typ = xarg.aggregate.type.elements[xarg.indices[0]]
+                        alloca_res = lowerer.alloca_lltype(alloca_name, alloca_typ)
+                        if config.DEBUG_ARRAY_OPT >= 1:
+                            print("alloca:", alloca_name, alloca_typ, alloca_res, alloca_res.get_reference())
+                        xarg_alloca_vars.append((alloca_name, alloca_typ, alloca_res))
+                        lowerer.builder.store(xarg, alloca_res)
+                    xarginfo_list.append((xarginfo, xarginfo_args, x, xarg_alloca_vars))
+                    return [xarg[2] for xarg in xarg_alloca_vars], [x]
+                else:
+                    return [x], None
+        elif isinstance(x, int):
+            return [x], None
+        else:
+            print("unknown arg type:", x, type(x))
+
+        return [x], None
+
+    def unpack_arrays(self, lowerer):
+        if isinstance(self.arg, list):
+            arg_list = self.arg
+        elif self.arg is not None:
+            arg_list = [self.arg]
+        else:
+            return self, None
+        new_xarginfo = []
+        unpack_res = [self.unpack_arg(arg, lowerer, new_xarginfo) for arg in arg_list]
+        new_args = [x[0] for x in unpack_res]
+        arrays_to_private = []
+        for x in unpack_res:
+            if x[1]:
+                arrays_to_private.append(x[1])
+        ot_res = openmp_tag(self.name, sum(new_args, []), self.load)
+        ot_res.xarginfo = new_xarginfo
+        return ot_res, None if len(arrays_to_private) == 0 else openmp_tag("QUAL.OMP.PRIVATE", sum(arrays_to_private, []), self.load)
 
     def lower(self, lowerer, debug):
         builder = lowerer.builder
@@ -128,6 +200,7 @@ class openmp_tag(object):
 
     def __str__(self):
         return "openmp_tag(" + str(self.name) + "," + str(self.arg) + ")"
+
 
 def openmp_tag_list_to_str(tag_list, lowerer, debug):
     tag_strs = [x.lower(lowerer, debug) for x in tag_list]
@@ -217,7 +290,7 @@ class openmp_region_start(ir.Stmt):
 
             while True:
                 last_instr = self.builder.block.instructions[cur_instr]
-                if isinstance(last_instr, lir.instructions.CallInstr) and len(last_instr.tags) > 0:
+                if isinstance(last_instr, lir.instructions.CallInstr) and last_instr.tags is not None and len(last_instr.tags) > 0:
                     break
                 cur_instr -= 1
 
@@ -283,8 +356,26 @@ class openmp_region_start(ir.Stmt):
         if config.DEBUG_ARRAY_OPT >= 1:
             print("lower:block", self.block, type(self.block))
 
+        for otag in self.tags:
+            print("otag:", otag)
+        tags_unpacked_arrays = []
+        for tag in self.tags:
+            unpack_res = tag.unpack_arrays(lowerer)
+            print("unpack_res:", unpack_res, type(unpack_res))
+            if unpack_res[1] is None:
+                tags_unpacked_arrays.append(unpack_res[0])
+            else:
+                tags_unpacked_arrays.append(unpack_res[0])
+                tags_unpacked_arrays.append(unpack_res[1])
+        self.tags = tags_unpacked_arrays
+        # get all the array args
+        for otag in self.tags:
+            print("otag:", otag)
+
+        """
         if self.has_target():
             builder.module.device_triples = "spir64"
+        """
 
         if config.DEBUG_ARRAY_OPT >= 1:
             print("push_alloca_callbacks")
@@ -295,6 +386,7 @@ class openmp_region_start(ir.Stmt):
         tag_str = openmp_tag_list_to_str(self.tags, lowerer, True)
         pre_fn = builder.module.declare_intrinsic('llvm.directive.region.entry', (), fnty)
         self.omp_region_var = builder.call(pre_fn, [], tail=False, tags=tag_str)
+        """
         if self.omp_metadata is None and self.has_target():
             self.omp_metadata = builder.module.add_metadata([
                  lir.IntType(32)(0),   # Kind of this metadata.  0 is for target.
@@ -307,10 +399,14 @@ class openmp_region_start(ir.Stmt):
                  lir.IntType(32)(0)    # Entry kind.  Should always be 0 I think.
                 ])
             add_offload_info(lowerer, self.omp_metadata)
+        """
         if self.acq_res:
             builder.fence("acquire")
         if self.acq_rel:
             builder.fence("acq_rel")
+
+        for otag in self.tags:
+            otag.post_entry(lowerer)
 
     def __str__(self):
         return "openmp_region_start " + ", ".join([str(x) for x in self.tags])
