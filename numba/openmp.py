@@ -248,6 +248,19 @@ class OpenmpVisitor(Transformer):
             if is_internal_var(itr_var):
                 start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", itr_var))
 
+    def flatten(self, incoming_clauses):
+        clauses = []
+        for clause in incoming_clauses:
+            if config.DEBUG_OPENMP >= 1:
+                print("clause:", clause, type(clause))
+            if isinstance(clause, openmp_tag):
+                clauses.append(clause)
+            elif isinstance(clause, list):
+                clauses.extend(remove_indirections(clause))
+            else:
+                assert(0)
+        return clauses
+
     def some_for_directive(self, args, main_start_tag, main_end_tag, first_clause, gen_shared):
         sblk = self.blocks[self.blk_start]
         scope = sblk.scope
@@ -641,8 +654,24 @@ class OpenmpVisitor(Transformer):
         or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TASKWAIT")], self.loc)
         sblk.body = [or_start] + [or_end] + sblk.body[:]
 
-    def target_directive(self, args):
-        pass
+    def map_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit map_clause", args, type(args), args[0])
+        if args[0] in ["to", "from", "alloc", "tofrom"]:
+            map_type = args[0].upper()
+            var_list = args[1:]
+        else:
+            map_type = "TOFROM"  # is this default right?  FIX ME
+            var_list = args
+        ret = []
+        for var in var_list:
+            ret.append(openmp_tag("QUAL.OMP.MAP." + map_type, var))
+        return ret
+
+    def map_type(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit map_type", args, type(args), args[0])
+        return str(args[0])
 
     def critical_directive(self, args):
         sblk = self.blocks[self.blk_start]
@@ -671,6 +700,34 @@ class OpenmpVisitor(Transformer):
 
         sblk.body = [or_start] + sblk.body[:]
         eblk.body = reset + [or_end] + eblk.body[:]
+
+    def target_directive(self, args):
+        clauses = args[1:]
+        tag_clauses = self.flatten(clauses)
+
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_directive", args, type(args))
+        or_start = openmp_region_start([openmp_tag("DIR.OMP.TARGET")] + tag_clauses, 0, self.loc)
+        or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TARGET")], self.loc)
+        sblk.body = [or_start] + sblk.body[:]
+        eblk.body = [or_end]   + eblk.body[:]
+
+    def target_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_clause", args, type(args), args[0])
+        return args[0]
+
+    def variable_array_section_list(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit variable_array_section_list", args, type(args))
+        if len(args) == 1:
+            return args
+        else:
+            args[0].append(args[1])
+            return args[0]
 
     def single_directive(self, args):
         sblk = self.blocks[self.blk_start]
@@ -1151,8 +1208,12 @@ openmp_grammar = r"""
                       | map_clause
                       | if_clause
     device_clause: "device" "(" const_num_or_var ")"
-    map_clause: "map" "(" [map_type] variable_array_section_list ")"
-    map_type: "alloc:" | "to:" | "from:" | "tofrom:"
+    map_clause: "map" "(" [map_type ":"] variable_array_section_list ")"
+    map_type: ALLOC | TO | FROM | TOFROM
+    TO: "to"
+    FROM: "from"
+    ALLOC: "alloc"
+    TOFROM: "tofrom"
     parallel_sections_construct: parallel_sections_directive
     parallel_sections_directive: PARALLEL SECTIONS [parallel_sections_clause*]
     parallel_sections_clause: unique_parallel_clause
@@ -1455,6 +1516,7 @@ ffi.cdef('void omp_set_nested(int nested);')
 ffi.cdef('void omp_set_max_active_levels(int levels);')
 ffi.cdef('int omp_get_max_active_levels(void);')
 ffi.cdef('int omp_get_max_threads(void);')
+ffi.cdef('int omp_is_initial_device(void);')
 
 C = ffi.dlopen(None)
 omp_set_num_threads = C.omp_set_num_threads
@@ -1466,3 +1528,4 @@ omp_set_nested = C.omp_set_nested
 omp_set_max_active_levels = C.omp_set_max_active_levels
 omp_get_max_active_levels = C.omp_get_max_active_levels
 omp_get_max_threads = C.omp_get_max_threads
+omp_is_initial_device = C.omp_is_initial_device
