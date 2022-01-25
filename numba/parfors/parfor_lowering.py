@@ -65,6 +65,55 @@ class openmp_tag(object):
         self.loaded_arg = None
         self.xarginfo = []
 
+    def arg_size(self, x, lowerer):
+        print("arg_size:", x, type(x))
+        if isinstance(x, ir.Var):
+            # Make sure the var referred to has been alloc'ed already.
+            lowerer._alloca_var(x.name, lowerer.fndesc.typemap[x.name])
+            if self.load:
+                assert(False)
+                """
+                if not self.loaded_arg:
+                    self.loaded_arg = lowerer.loadvar(x.name)
+                lop = self.loaded_arg.operands[0]
+                loptype = lop.type
+                pointee = loptype.pointee
+                ref = self.loaded_arg._get_reference()
+                decl = str(pointee) + " " + ref
+                """
+            else:
+                arg_str = lowerer.getvar(x.name)
+                return lowerer.context.get_abi_sizeof(arg_str.type.pointee)
+        elif isinstance(x, lir.instructions.AllocaInstr):
+            return lowerer.context.get_abi_sizeof(x.type.pointee)
+        elif isinstance(x, str):
+            xtyp = lowerer.fndesc.typemap[x]
+            if config.DEBUG_ARRAY_OPT >= 1:
+                print("xtyp:", xtyp, type(xtyp))
+            lowerer._alloca_var(x, xtyp)
+            if self.load:
+                assert(False)
+                """
+                if not self.loaded_arg:
+                    self.loaded_arg = lowerer.loadvar(x)
+                lop = self.loaded_arg.operands[0]
+                loptype = lop.type
+                pointee = loptype.pointee
+                ref = self.loaded_arg._get_reference()
+                decl = str(pointee) + " " + ref
+                """
+            else:
+                arg_str = lowerer.getvar(x)
+                return lowerer.context.get_abi_sizeof(arg_str.type.pointee)
+        elif isinstance(x, int):
+            assert(False)
+            """
+            decl = "i32 " + str(x)
+            """
+        else:
+            print("unknown arg type:", x, type(x))
+            assert(False)
+
     def arg_to_str(self, x, lowerer):
         if config.DEBUG_ARRAY_OPT >= 1:
             print("arg_to_str:", x, type(x), self.load, type(self.load))
@@ -115,17 +164,24 @@ class openmp_tag(object):
             assert(len(fa_res) == 1)
             lowerer.storevar(fa_res[0], x)
 
+    def add_length_firstprivate(self, x, lowerer):
+        if self.name == "QUAL.OMP.FIRSTPRIVATE":
+            return [x, self.arg_size(x, lowerer)]
+            #return [x, lowerer.context.get_constant(types.uintp, self.arg_size(x, lowerer))]
+        else:
+            return [x]
+
     def unpack_arg(self, x, lowerer, xarginfo_list):
         if isinstance(x, ir.Var):
-            return [x], None
+            return self.add_length_firstprivate(x, lowerer), None
         elif isinstance(x, lir.instructions.AllocaInstr):
-            return [x], None
+            return self.add_length_firstprivate(x, lowerer), None
         elif isinstance(x, str):
             xtyp = lowerer.fndesc.typemap[x]
             if config.DEBUG_ARRAY_OPT >= 1:
                 print("xtyp:", xtyp, type(xtyp))
             if self.load:
-                return [x], None
+                return self.add_length_firstprivate(x, lowerer), None
             else:
                 if isinstance(xtyp, types.npytypes.Array):
                     # from core/datamodel/packer.py
@@ -145,15 +201,30 @@ class openmp_tag(object):
                         xarg_alloca_vars.append((alloca_name, alloca_typ, alloca_res))
                         lowerer.builder.store(xarg, alloca_res)
                     xarginfo_list.append((xarginfo, xarginfo_args, x, xarg_alloca_vars))
-                    return [xarg[2] for xarg in xarg_alloca_vars], [x]
+                    rets = []
+                    for i, xarg in enumerate(xarg_alloca_vars):
+                        rets.append(xarg[2])
+                        if i == 4:
+                            alloca_name = "$alloca_total_size_" + str(x)
+                            print("alloca_name:", alloca_name)
+                            alloca_typ = lowerer.context.get_value_type(types.intp) #lc.Type.int(64)
+                            alloca_res = lowerer.alloca_lltype(alloca_name, alloca_typ)
+                            if config.DEBUG_ARRAY_OPT >= 1:
+                                print("alloca:", alloca_name, alloca_typ, alloca_res, alloca_res.get_reference())
+                            mul_res = lowerer.builder.mul(lowerer.builder.load(xarg_alloca_vars[2][2]), lowerer.builder.load(xarg_alloca_vars[3][2]))
+                            lowerer.builder.store(mul_res, alloca_res)
+                            rets.append(alloca_res)
+                        else:
+                            rets.append(self.arg_size(xarg[2], lowerer))
+                    return rets, [x]
                 else:
-                    return [x], None
+                    return self.add_length_firstprivate(x, lowerer), None
         elif isinstance(x, int):
-            return [x], None
+            return self.add_length_firstprivate(x, lowerer), None
         else:
             print("unknown arg type:", x, type(x))
 
-        return [x], None
+        return self.add_length_firstprivate(x, lowerer), None
 
     def unpack_arrays(self, lowerer):
         if isinstance(self.arg, list):
@@ -161,7 +232,7 @@ class openmp_tag(object):
         elif self.arg is not None:
             arg_list = [self.arg]
         else:
-            return self, None
+            return [self]
         new_xarginfo = []
         unpack_res = [self.unpack_arg(arg, lowerer, new_xarginfo) for arg in arg_list]
         new_args = [x[0] for x in unpack_res]
@@ -171,7 +242,7 @@ class openmp_tag(object):
                 arrays_to_private.append(x[1])
         ot_res = openmp_tag(self.name, sum(new_args, []), self.load)
         ot_res.xarginfo = new_xarginfo
-        return ot_res, None if len(arrays_to_private) == 0 else openmp_tag("QUAL.OMP.PRIVATE", sum(arrays_to_private, []), self.load)
+        return [ot_res] + ([] if len(arrays_to_private) == 0 else [openmp_tag("QUAL.OMP.PRIVATE", sum(arrays_to_private, []), self.load)])
 
     def lower(self, lowerer, debug):
         builder = lowerer.builder
@@ -330,7 +401,8 @@ class openmp_region_start(ir.Stmt):
         if not self.needs_implicit_vars():
             return has_update
         if avar not in self.tag_vars:
-            self.tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", alloca_instr))
+            self.tags.append(openmp_tag("QUAL.OMP.PRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
+            #self.tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
             self.tag_vars.add(avar)
             has_update = True
         return has_update
@@ -354,7 +426,7 @@ class openmp_region_start(ir.Stmt):
         self.builder = builder
         self.lowerer = lowerer
         if config.DEBUG_ARRAY_OPT >= 1:
-            print("lower:block", self.block, type(self.block))
+            print("lower:block", self.block, type(self.block), self.tags)
 
         for otag in self.tags:
             print("otag:", otag)
@@ -362,11 +434,7 @@ class openmp_region_start(ir.Stmt):
         for tag in self.tags:
             unpack_res = tag.unpack_arrays(lowerer)
             print("unpack_res:", unpack_res, type(unpack_res))
-            if unpack_res[1] is None:
-                tags_unpacked_arrays.append(unpack_res[0])
-            else:
-                tags_unpacked_arrays.append(unpack_res[0])
-                tags_unpacked_arrays.append(unpack_res[1])
+            tags_unpacked_arrays.extend(unpack_res)
         self.tags = tags_unpacked_arrays
         # get all the array args
         for otag in self.tags:
