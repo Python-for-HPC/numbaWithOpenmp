@@ -110,6 +110,14 @@ def get_user_defined_var(the_set):
             ret.add(x)
     return ret
 
+class NameSlice:
+    def __init__(self, name, the_slice):
+        self.name = name
+        self.the_slice = the_slice
+
+    def __str__(self):
+        return "NameSlice(" + str(self.name) + "," + str(self.the_slice) + ")"
+
 class OpenmpVisitor(Transformer):
     def __init__(self, func_ir, blocks, blk_start, blk_end, body_blocks, loc, state):
         self.func_ir = func_ir
@@ -370,7 +378,7 @@ class OpenmpVisitor(Transformer):
             if (isinstance(inst, ir.Assign)
                     and isinstance(inst.value, ir.Expr)
                     and inst.value.op == 'call'):
-                loop_kind = _get_loop_kind(inst.value.func.name, call_table) 
+                loop_kind = _get_loop_kind(inst.value.func.name, call_table)
                 if config.DEBUG_OPENMP >= 1:
                     print("loop_kind:", loop_kind)
                 if loop_kind != False and loop_kind == range:
@@ -1125,6 +1133,43 @@ class OpenmpVisitor(Transformer):
             print("visit RUNTIME", args, type(args))
         return "RUNTIME"
 
+    def COLON(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit COLON", args, type(args))
+        return ":"
+
+    def oslice(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit oslice", args, type(args))
+        start = None
+        end = None
+        if args[0] != ":":
+            start = args[0]
+            args = args[2:]
+        else:
+            args = args[1:]
+
+        if len(args) > 0:
+            end = args[0]
+        return slice(start, end)
+
+    def slice_list(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit slice_list", args, type(args))
+        if len(args) == 1:
+            return args
+        else:
+            args[0].append(args[1])
+            return args[0]
+
+    def name_slice(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit name_slice", args, type(args))
+        if len(args) == 1:
+            return args
+        else:
+            return NameSlice(args[0], args[1:])
+
     def var_list(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit var_list", args, type(args))
@@ -1307,8 +1352,6 @@ openmp_grammar = r"""
     NOTINBRANCH: "notinbranch"
     uniform_clause: UNIFORM "(" var_list ")"
     UNIFORM: "uniform"
-    ligned_clause: ALIGNED "(" var_list ")"
-                  | ALIGNED "(" var_list ":" const_num_or_var ")" 
     collapse_expr: COLLAPSE "(" const_num_or_var ")"
     COLLAPSE: "collapse"
     task_construct: task_directive
@@ -1404,7 +1447,11 @@ openmp_grammar = r"""
     GUIDED: "guided"
     RUNTIME: "runtime"
     AUTO: "auto"
-    var_list: PYTHON_NAME | var_list "," PYTHON_NAME
+    COLON: ":"
+    oslice: [const_num_or_var] COLON [const_num_or_var]
+    slice_list: oslice | slice_list "," oslice
+    name_slice: PYTHON_NAME [ "[" slice_list "]" ]
+    var_list: name_slice | var_list "," name_slice
     PLUS: "+"
     reduction_operator: PLUS | "\\" | "*" | "-" | "&" | "^" | "|" | "&&" | "||"
     threadprivate_directive: "threadprivate" "(" var_list ")"
@@ -1437,6 +1484,7 @@ openmp_grammar = r"""
     """
 
 """
+    name_slice: PYTHON_NAME [ "[" slice ["," slice]* "]" ]
     openmp_construct: parallel_construct
                     | target_teams_distribute_construct
                     | teams_distribute_parallel_for_simd_construct

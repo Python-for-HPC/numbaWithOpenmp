@@ -67,6 +67,8 @@ class openmp_tag(object):
 
     def arg_size(self, x, lowerer):
         print("arg_size:", x, type(x))
+        if isinstance(x, numba.openmp.NameSlice):
+            x = x.name
         if isinstance(x, ir.Var):
             # Make sure the var referred to has been alloc'ed already.
             lowerer._alloca_var(x.name, lowerer.fndesc.typemap[x.name])
@@ -117,6 +119,9 @@ class openmp_tag(object):
     def arg_to_str(self, x, lowerer):
         if config.DEBUG_ARRAY_OPT >= 1:
             print("arg_to_str:", x, type(x), self.load, type(self.load))
+        if isinstance(x, numba.openmp.NameSlice):
+            print("nameslice found:", x)
+            x = x.name
         if isinstance(x, ir.Var):
             # Make sure the var referred to has been alloc'ed already.
             lowerer._alloca_var(x.name, lowerer.fndesc.typemap[x.name])
@@ -166,7 +171,8 @@ class openmp_tag(object):
 
     def add_length_firstprivate(self, x, lowerer):
         if self.name == "QUAL.OMP.FIRSTPRIVATE":
-            return [x, self.arg_size(x, lowerer)]
+            return [x]
+            #return [x, self.arg_size(x, lowerer)]
             #return [x, lowerer.context.get_constant(types.uintp, self.arg_size(x, lowerer))]
         else:
             return [x]
@@ -183,7 +189,10 @@ class openmp_tag(object):
             if self.load:
                 return self.add_length_firstprivate(x, lowerer), None
             else:
-                if isinstance(xtyp, types.npytypes.Array):
+                names_to_unpack = []
+                #names_to_unpack = ["QUAL.OMP.FIRSTPRIVATE"]
+                #names_to_unpack = ["QUAL.OMP.PRIVATE", "QUAL.OMP.FIRSTPRIVATE"]
+                if isinstance(xtyp, types.npytypes.Array) and self.name in names_to_unpack:
                     # from core/datamodel/packer.py
                     xarginfo = lowerer.context.get_arg_packer((xtyp,))
                     xloaded = lowerer.loadvar(x)

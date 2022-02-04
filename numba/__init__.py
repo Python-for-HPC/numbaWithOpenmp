@@ -53,7 +53,7 @@ from numba import experimental
 import numba.core.withcontexts
 from numba.core.withcontexts import objmode_context as objmode
 
-from .openmp import openmp_context as openmp
+#from .openmp import openmp_context as openmp
 
 # Initialize target extensions
 import numba.core.target_extension
