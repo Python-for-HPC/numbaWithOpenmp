@@ -439,6 +439,7 @@ class openmp_region_start(ir.Stmt):
 
         for otag in self.tags:
             print("otag:", otag)
+        """
         tags_unpacked_arrays = []
         for tag in self.tags:
             unpack_res = tag.unpack_arrays(lowerer)
@@ -448,6 +449,7 @@ class openmp_region_start(ir.Stmt):
         # get all the array args
         for otag in self.tags:
             print("otag:", otag)
+        """
 
         """
         if self.has_target():
