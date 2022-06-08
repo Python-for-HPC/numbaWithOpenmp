@@ -11,6 +11,7 @@ from numba.core.ir_utils import (
     apply_copy_propagate_extensions,
     visit_vars_extensions,
     remove_dels,
+    visit_vars_inner,
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, find_top_level_loops
 from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms
@@ -502,9 +503,13 @@ class openmp_region_start(ir.Stmt):
                 returnto=end_block,
                 body_block_ids=blocks_in_region
             )
+            outline_arg_typs = tuple([typemap[x] for x in ins])
             if config.DEBUG_OPENMP >= 1:
                 print("ins:", ins)
                 print("outs:", outs)
+                print("args:", state.args)
+                print("rettype:", state.return_type, type(state.return_type))
+                print("outline_arg_typs:", outline_arg_typs)
             region_info = transforms._loop_lift_info(loop=None,
                                                      inputs=ins,
                                                      outputs=outs,
@@ -540,12 +545,16 @@ class openmp_region_start(ir.Stmt):
             #flags.fastmath = True
             compiler.compile_ir(cuda_typingctx,
                                 cuda_targetctx,
-                                func_ir,
-                                state.args,
-                                state.return_type,
+                                outlined_ir,
+                                outline_arg_typs,
+                                #state.args,
+                                types.containers.Tuple(()),
+                                #types.misc.NoneType('none'),
+                                #state.return_type,
                                 flags,
                                 {},
-                                pipeline_class=cuda_compiler.CUDACompiler)
+                                pipeline_class=cuda_compiler.CUDACompiler,
+                                is_lifted_loop=True)
 
         if config.DEBUG_OPENMP >= 1:
             print("push_alloca_callbacks")
