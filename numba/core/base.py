@@ -21,7 +21,7 @@ from numba.core.imputils import (user_function, user_generator,
                        builtin_registry, impl_ret_borrowed,
                        RegistryLoader)
 from numba.cpython import builtins
-from numba.parfors.parfor_lowering import in_openmp_region
+from numba.openmp import in_openmp_region
 
 
 GENERIC_POINTER = Type.pointer(Type.int(8))

@@ -17,7 +17,7 @@ import numba.core.entrypoints
 from numba.core.cpu_options import (ParallelOptions, FastMathOptions,
                                     InlineOptions)
 from numba.np import ufunc_db
-from numba.parfors.parfor_lowering import in_openmp_region
+from numba.openmp import in_openmp_region
 
 # Keep those structures in sync with _dynfunc.c.
 
@@ -76,7 +76,8 @@ class CPUContext(BaseContext):
 
         # Add lower_extension attribute
         self.lower_extensions = {}
-        from numba.parfors.parfor_lowering import _lower_parfor_parallel, _lower_openmp_region_start, _lower_openmp_region_end, openmp_region_start, openmp_region_end
+        from numba.openmp import _lower_openmp_region_start, _lower_openmp_region_end, openmp_region_start, openmp_region_end
+        from numba.parfors.parfor_lowering import _lower_parfor_parallel
         from numba.parfors.parfor import Parfor
         # Specify how to lower Parfor nodes using the lower_extensions
         self.lower_extensions[Parfor] = _lower_parfor_parallel

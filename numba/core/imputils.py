@@ -190,7 +190,7 @@ def user_function(fndesc, libs):
     """
 
     def imp(context, builder, sig, args):
-        from numba.parfors.parfor_lowering import in_openmp_region
+        from numba.openmp import in_openmp_region
 
         func = context.declare_function(builder.module, fndesc)
         # env=None assumes this is a nopython function

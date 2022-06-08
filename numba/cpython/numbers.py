@@ -15,7 +15,7 @@ from numba.core.imputils import (lower_builtin, lower_getattr,
 from numba.core import typing, types, utils, errors, cgutils, optional
 from numba.core.extending import intrinsic, overload_method
 from numba.cpython.unsafe.numbers import viewer
-from numba.parfors.parfor_lowering import in_openmp_region
+from numba.openmp import in_openmp_region
 
 def _int_arith_flags(rettype):
     """

@@ -21,7 +21,7 @@ class BaseLower(object):
     Lower IR to LLVM
     """
 
-    def __init__(self, context, library, fndesc, func_ir, metadata=None):
+    def __init__(self, context, library, fndesc, func_ir, state, metadata=None):
         self.library = library
         self.fndesc = fndesc
         self.blocks = utils.SortedMap(func_ir.blocks.items())
@@ -30,6 +30,7 @@ class BaseLower(object):
         self.generator_info = func_ir.generator_info
         self.metadata = metadata
         self.flags = utils.ConfigStack.top_or_none()
+        self.state = state
 
         # Initialize LLVM
         self.module = self.library.create_ir_module(self.fndesc.unique_name)
