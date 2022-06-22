@@ -378,7 +378,7 @@ class CompilerBase(object):
     """
 
     def __init__(self, typingctx, targetctx, library, args, return_type, flags,
-                 locals):
+                 locals, parent_state=None):
         # Make sure the environment is reloaded
         config.reload_config()
         typingctx.refresh()
@@ -408,6 +408,10 @@ class CompilerBase(object):
         self.state.reload_init = []
         # hold this for e.g. with_lifting, null out on exit
         self.state.pipeline = self
+
+        if parent_state is not None:
+            self.state.typemap = parent_state.typemap
+            self.state.calltypes = parent_state.calltypes
 
         # parfor diagnostics info, add to metadata
         self.state.parfor_diagnostics = ParforDiagnostics()
@@ -693,7 +697,7 @@ def compile_extra(typingctx, targetctx, func, args, return_type, flags,
 
 def compile_ir(typingctx, targetctx, func_ir, args, return_type, flags,
                locals, lifted=(), lifted_from=None, is_lifted_loop=False,
-               library=None, pipeline_class=Compiler):
+               library=None, pipeline_class=Compiler, parent_state=None):
     """
     Compile a function with the given IR.
 
@@ -721,7 +725,8 @@ def compile_ir(typingctx, targetctx, func_ir, args, return_type, flags,
 
         def compile_local(the_ir, the_flags):
             pipeline = pipeline_class(typingctx, targetctx, library,
-                                      args, return_type, the_flags, locals)
+                                      args, return_type, the_flags, locals,
+                                      parent_state=parent_state)
             return pipeline.compile_ir(func_ir=the_ir, lifted=lifted,
                                        lifted_from=lifted_from)
 
@@ -750,7 +755,8 @@ def compile_ir(typingctx, targetctx, func_ir, args, return_type, flags,
 
     else:
         pipeline = pipeline_class(typingctx, targetctx, library,
-                                  args, return_type, flags, locals)
+                                  args, return_type, flags, locals,
+                                  parent_state=parent_state)
         return pipeline.compile_ir(func_ir=func_ir, lifted=lifted,
                                    lifted_from=lifted_from)
 
