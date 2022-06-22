@@ -36,14 +36,25 @@ if config.DEBUG_ARRAY_OPT >= 3:
     ll.set_option('openmp', '-debug')
     ll.set_option('openmp', '-print-after-all')
     ll.set_option('openmp', '-print-module-scope')
+    if config.DEBUG_OPENMP >= 1:
+        ll.set_option('openmp', '-debug=intrinsics-openmp')
+
+if config.DEBUG_OPENMP >= 2:
+    ll.set_option('openmp', '-debug')
+    ll.set_option('openmp', '-print-after-all')
+    ll.set_option('openmp', '-print-module-scope')
+    ll.set_option('openmp', '-debug=intrinsics-openmp')
+
 # TODO
 # These can probably go but need to verify!
+"""
 ll.set_option('openmp', '-loopopt=0')
 ll.set_option('openmp', '-enable-lv')
 ll.set_option('openmp', '-disable-hir-generate-mkl-call')
 ll.set_option('openmp', '-vpoopt=1')
 ll.set_option('openmp', '-paropt=31')
 ll.set_option('openmp', '-intel-libirc-allowed')
+"""
 
 
 class CPUContext(BaseContext):
