@@ -1204,6 +1204,11 @@ class Block(EqualityCheckMixin):
         block.body = self.body[:]
         return block
 
+    def deepcopy(self):
+        block = Block(self.scope, self.loc)
+        block.body = copy.deepcopy(self.body)
+        return block
+
     def find_exprs(self, op=None):
         """
         Iterate over exprs of the given *op* in this block.
@@ -1453,6 +1458,19 @@ class FunctionIR(object):
         block_entry_vars = {}
         for label, block in self.blocks.items():
             new_block = block.copy()
+            blocks[label] = new_block
+            if block in self.block_entry_vars:
+                block_entry_vars[new_block] = self.block_entry_vars[block]
+        new_ir.blocks = blocks
+        new_ir.block_entry_vars = block_entry_vars
+        return new_ir
+
+    def deepcopy(self):
+        new_ir = copy.copy(self)
+        blocks = {}
+        block_entry_vars = {}
+        for label, block in self.blocks.items():
+            new_block = block.deepcopy()
             blocks[label] = new_block
             if block in self.block_entry_vars:
                 block_entry_vars[new_block] = self.block_entry_vars[block]
