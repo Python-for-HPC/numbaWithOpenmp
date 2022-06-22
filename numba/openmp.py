@@ -12,6 +12,8 @@ from numba.core.ir_utils import (
     visit_vars_extensions,
     remove_dels,
     visit_vars_inner,
+    get_name_var_table,
+    replace_var_names,
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, find_top_level_loops
 from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms
@@ -63,7 +65,8 @@ class openmp_tag(object):
         self.xarginfo = []
 
     def arg_size(self, x, lowerer):
-        print("arg_size:", x, type(x))
+        if config.DEBUG_OPENMP >= 2:
+            print("arg_size:", x, type(x))
         if isinstance(x, NameSlice):
             x = x.name
         if isinstance(x, ir.Var):
@@ -117,7 +120,8 @@ class openmp_tag(object):
         if config.DEBUG_OPENMP >= 1:
             print("arg_to_str:", x, type(x), self.load, type(self.load))
         if isinstance(x, NameSlice):
-            print("nameslice found:", x)
+            if config.DEBUG_OPENMP >= 2:
+                print("nameslice found:", x)
             x = x.name
         if isinstance(x, ir.Var):
             # Make sure the var referred to has been alloc'ed already.
@@ -181,7 +185,7 @@ class openmp_tag(object):
             return self.add_length_firstprivate(x, lowerer), None
         elif isinstance(x, str):
             xtyp = lowerer.fndesc.typemap[x]
-            if config.DEBUG_OPENMP >= 1:
+            if config.DEBUG_OPENMP >= 2:
                 print("xtyp:", xtyp, type(xtyp))
             if self.load:
                 return self.add_length_firstprivate(x, lowerer), None
@@ -196,13 +200,13 @@ class openmp_tag(object):
                     xarginfo_args = list(xarginfo.as_arguments(lowerer.builder, [xloaded]))
                     xarg_alloca_vars = []
                     for xarg in xarginfo_args:
-                        if config.DEBUG_OPENMP >= 1:
+                        if config.DEBUG_OPENMP >= 2:
                             print("xarg:", type(xarg), xarg, "agg:", xarg.aggregate, type(xarg.aggregate), "ind:", xarg.indices)
                             print(xarg.aggregate.type.elements[xarg.indices[0]])
                         alloca_name = "$alloca_" + xarg.name
                         alloca_typ = xarg.aggregate.type.elements[xarg.indices[0]]
                         alloca_res = lowerer.alloca_lltype(alloca_name, alloca_typ)
-                        if config.DEBUG_OPENMP >= 1:
+                        if config.DEBUG_OPENMP >= 2:
                             print("alloca:", alloca_name, alloca_typ, alloca_res, alloca_res.get_reference())
                         xarg_alloca_vars.append((alloca_name, alloca_typ, alloca_res))
                         lowerer.builder.store(xarg, alloca_res)
@@ -212,10 +216,11 @@ class openmp_tag(object):
                         rets.append(xarg[2])
                         if i == 4:
                             alloca_name = "$alloca_total_size_" + str(x)
-                            print("alloca_name:", alloca_name)
+                            if config.DEBUG_OPENMP >= 2:
+                                print("alloca_name:", alloca_name)
                             alloca_typ = lowerer.context.get_value_type(types.intp) #lc.Type.int(64)
                             alloca_res = lowerer.alloca_lltype(alloca_name, alloca_typ)
-                            if config.DEBUG_OPENMP >= 1:
+                            if config.DEBUG_OPENMP >= 2:
                                 print("alloca:", alloca_name, alloca_typ, alloca_res, alloca_res.get_reference())
                             mul_res = lowerer.builder.mul(lowerer.builder.load(xarg_alloca_vars[2][2]), lowerer.builder.load(xarg_alloca_vars[3][2]))
                             lowerer.builder.store(mul_res, alloca_res)
@@ -343,8 +348,11 @@ def find_target_start_end(func_ir, target_num):
 
     assert False
 
+
 class openmp_region_start(ir.Stmt):
     def __init__(self, tags, region_number, loc):
+        if config.DEBUG_OPENMP >= 2:
+            print("openmp_region_start::__init__", id(self))
         self.tags = tags
         self.region_number = region_number
         self.loc = loc
@@ -365,6 +373,25 @@ class openmp_region_start(ir.Stmt):
         self.acq_res = False
         self.acq_rel = False
         self.alloca_queue = []
+        self.end_region = None
+
+    """
+    def __new__(cls, *args, **kwargs):
+        #breakpoint()
+        instance = super(openmp_region_start, cls).__new__(cls)
+        print("openmp_region_start::__new__", id(instance))
+        return instance
+    """
+
+    def __copy__(self):
+        #breakpoint()
+        cls = self.__class__
+        result = cls.__new__(cls)
+        result.__dict__.update(self.__dict__)
+        if config.DEBUG_OPENMP >= 2:
+            print("openmp_region_start::__copy__", id(self), id(result))
+        result.end_region.start_region = result
+        return result
 
     def requires_acquire_release(self):
         self.acq_res = True
@@ -387,6 +414,8 @@ class openmp_region_start(ir.Stmt):
 
             while True:
                 last_instr = self.builder.block.instructions[cur_instr]
+                if config.DEBUG_OPENMP >= 2:
+                    print("update_tags:", last_instr)
                 if isinstance(last_instr, lir.instructions.CallInstr) and last_instr.tags is not None and len(last_instr.tags) > 0:
                     break
                 cur_instr -= 1
@@ -452,10 +481,19 @@ class openmp_region_start(ir.Stmt):
         self.builder = builder
         self.lowerer = lowerer
         if config.DEBUG_OPENMP >= 1:
-            print("lower:block", self.block, type(self.block), self.tags)
+            print("lower:block", self, self.block, type(self.block), self.tags, len(self.tags))
 
-        #for otag in self.tags:
-        #    print("otag:", otag)
+        if config.DEBUG_OPENMP >= 2:
+            for otag in self.tags:
+                print("otag:", otag, type(otag.arg))
+
+        # Remove LLVM vars that might have been added if this is an OpenMP
+        # region inside a target region.
+        count_alloca_instr = len(list(filter(lambda x: isinstance(x.arg, lir.instructions.AllocaInstr), self.tags)))
+        assert(count_alloca_instr == 0)
+        #self.tags = list(filter(lambda x: not isinstance(x.arg, lir.instructions.AllocaInstr), self.tags))
+        if config.DEBUG_OPENMP >= 1:
+            print("after LLVM tag filter", self.tags, len(self.tags))
 
         """
         tags_unpacked_arrays = []
@@ -470,16 +508,71 @@ class openmp_region_start(ir.Stmt):
         """
 
         target_num = self.has_target()
+        tgv = None
         if target_num is not None:
-            from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
+            #from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
+            from numba.core.compiler import Compiler, Flags
             #breakpoint()
             #builder.module.device_triples = "spir64"
             if config.DEBUG_OPENMP >= 1:
-                print("openmp start region lower has target")
+                print("openmp start region lower has target", type(lowerer.func_ir))
+            #func_ir = lowerer.func_ir.deepcopy()
             func_ir = lowerer.func_ir.copy()
+
+            """
+            var_table = get_name_var_table(func_ir.blocks)
+            new_var_dict = {}
+            for name, var in var_table.items():
+                new_var_dict[name] = mk_unique_var(name)
+            replace_var_names(func_ir.blocks, new_var_dict)
+            """
+
             remove_dels(func_ir.blocks)
+
+            dprint_func_ir(func_ir, "func_ir after remove_dels")
+
+            def fixup_openmp_pairs(blocks):
+                start_dict = {}
+                end_dict = {}
+                for label, block in func_ir.blocks.items():
+                    for bindex, bstmt in enumerate(block.body):
+                        if isinstance(bstmt, openmp_region_start):
+                            if config.DEBUG_OPENMP >= 2:
+                                print("found region start", id(bstmt))
+                            start_dict[id(bstmt)] = (label, bindex)
+                        elif isinstance(bstmt, openmp_region_end):
+                            if config.DEBUG_OPENMP >= 2:
+                                print("found region end", id(bstmt.start_region), id(bstmt))
+                            end_dict[id(bstmt.start_region)] = (label, bindex)
+                assert(len(start_dict) == len(end_dict))
+
+                for start_id, blockindex in start_dict.items():
+                    start_block, sbindex = blockindex
+
+                    end_block_index = end_dict[start_id]
+                    end_block, ebindex = end_block_index
+
+                    blocks[start_block].body[sbindex] = copy.copy(blocks[start_block].body[sbindex])
+                    blocks[end_block].body[ebindex] = copy.copy(blocks[end_block].body[ebindex])
+                    start_region = blocks[start_block].body[sbindex]
+                    start_region.tags = copy.deepcopy(start_region.tags)
+                    end_region = blocks[end_block].body[ebindex]
+                    assert(start_region.omp_region_var is None)
+                    assert(len(start_region.alloca_queue) == 0)
+                    end_region.start_region = start_region
+                    start_region.end_region = end_region
+
+            fixup_openmp_pairs(func_ir.blocks)
             state = lowerer.state
+            fndesc = lowerer.fndesc
+            if config.DEBUG_OPENMP >= 2:
+                print("context:", context, type(context))
+                print("targetctx:", targetctx, type(targetctx))
+                print("state:", state, dir(state))
+                print("fndesc:", fndesc, type(fndesc))
             dprint_func_ir(func_ir, "target func_ir")
+            internal_codegen = targetctx._internal_codegen
+            target_module = internal_codegen._create_empty_module("openmp.target")
 
             start_block, end_block = find_target_start_end(func_ir, target_num)
             cfg = compute_cfg_from_blocks(func_ir.blocks)
@@ -523,6 +616,10 @@ class openmp_region_start(ir.Stmt):
             if remove_openmp_nodes_from_target:
                 region_blocks[start_block].body = region_blocks[start_block].body[1:]
                 #region_blocks[end_block].body = region_blocks[end_block].body[1:]
+            region_blocks = copy.copy(region_blocks)
+            #region_blocks = copy.deepcopy(region_blocks)
+            # transfer_scope?
+            # core/untyped_passes/versioning_loop_bodies
 
             outlined_ir = func_ir.derive(blocks=region_blocks,
                                          arg_names=tuple(ins),
@@ -532,10 +629,12 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 print("outlined_ir:", outlined_ir, type(outlined_ir))
                 dprint_func_ir(outlined_ir, "outlined_ir")
+                dprint_func_ir(func_ir, "target after outline func_ir")
 
-            cuda_typingctx = cuda_descriptor.cuda_target.typing_context
-            cuda_targetctx = cuda_descriptor.cuda_target.target_context
-            flags = cuda_compiler.CUDAFlags()
+            #cuda_typingctx = cuda_descriptor.cuda_target.typing_context
+            #cuda_targetctx = cuda_descriptor.cuda_target.target_context
+            flags = Flags()
+            #flags = cuda_compiler.CUDAFlags()
             # Do not compile (generate native code), just lower (to LLVM)
             flags.no_compile = True
             flags.no_cpython_wrapper = True
@@ -543,28 +642,104 @@ class openmp_region_start(ir.Stmt):
             # What to do here?
             flags.forceinline = True
             #flags.fastmath = True
-            compiler.compile_ir(cuda_typingctx,
-                                cuda_targetctx,
-                                outlined_ir,
-                                outline_arg_typs,
-                                #state.args,
-                                types.containers.Tuple(()),
-                                #types.misc.NoneType('none'),
-                                #state.return_type,
-                                flags,
-                                {},
-                                pipeline_class=cuda_compiler.CUDACompiler,
-                                is_lifted_loop=True)
+            class OnlyLower(compiler.CompilerBase):
+                def define_pipelines(self):
+                    pms = []
+                    if not self.state.flags.force_pyobject:
+                        pms.append(compiler.DefaultPassBuilder.define_nopython_lowering_pipeline(self.state))
+                    return pms
+
+            state_copy = copy.copy(state)
+            state_copy.typemap = copy.copy(typemap)
+
+            for var_in in ins:
+                arg_name = "arg." + var_in
+                state_copy.typemap.pop(arg_name, None)
+                state_copy.typemap[arg_name] = typemap[var_in]
+
+            last_block = outlined_ir.blocks[end_block]
+            assert(isinstance(last_block.body[-1], ir.Return))
+            state_copy.typemap[last_block.body[-1].value.name] = types.containers.Tuple(())
+
+            if config.DEBUG_OPENMP >= 2:
+                print("state_copy.typemap:", state_copy.typemap)
+
+            cres = compiler.compile_ir(typingctx,
+                                       targetctx,
+                                       outlined_ir,
+                                       outline_arg_typs,
+                                       #state.args,
+                                       types.containers.Tuple(()),  # return types
+                                       #types.misc.NoneType('none'),
+                                       #state.return_type,
+                                       flags,
+                                       {},
+                                       pipeline_class=OnlyLower,
+                                       #pipeline_class=Compiler,
+                                       is_lifted_loop=True,
+                                       parent_state=state_copy)
+            if config.DEBUG_OPENMP >= 2:
+                print("cres:", type(cres))
+            cres_library = cres.library
+            if config.DEBUG_OPENMP >= 2:
+                print("cres_library:", type(cres_library))
+                sys.stdout.flush()
+            cres_library._ensure_finalized()
+            if config.DEBUG_OPENMP >= 2:
+                print("ensure_finalized:")
+                sys.stdout.flush()
+            """
+            sub = cres_library.serialize_using_bitcode()
+            if config.DEBUG_OPENMP >= 2:
+                print("sub:", type(sub))
+                sys.stdout.flush()
+            internal_codegen.unserialize_library(sub)
+            if config.DEBUG_OPENMP >= 2:
+                print("after unserialize:")
+                sys.stdout.flush()
+            target_elf = cres_library._get_compiled_object()
+            if config.DEBUG_OPENMP >= 2:
+                print("target_elf:", type(target_elf))
+                sys.stdout.flush()
+            """
+
+            todd_gv1_typ = targetctx.get_value_type(types.intp) #lc.Type.int(64)
+            tgv = cgutils.add_global_variable(target_module, todd_gv1_typ, "todd_gv1")
+            tst = targetctx.insert_const_string(target_module, "todd_string2")
+            llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 1)
+            #llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 2)
+            #llvmused_typ = lir.ArrayType(cgutils.intp_t, 2)
+            llvmused_gv = cgutils.add_global_variable(target_module, llvmused_typ, "llvm.used")
+            llvmused_syms = [lc.Constant.bitcast(tgv, cgutils.voidptr_t)]
+            #llvmused_syms = [tgv, tst]
+            llvmused_gv.initializer = lc.Constant.array(cgutils.voidptr_t, llvmused_syms)
+            #llvmused_gv.initializer = lc.Constant.array(cgutils.intp_t, llvmused_syms)
+            #llvmused_gv.initializer = lc.Constant.array(llvmused_typ, llvmused_syms)
+            llvmused_gv.linkage = "appending"
+
+            #targetctx.declare_function(target_module, )
+            library.add_ir_module(target_module)
+
+            if config.DEBUG_OPENMP >= 1:
+                dprint_func_ir(func_ir, "target after outline compiled func_ir")
 
         if config.DEBUG_OPENMP >= 1:
             print("push_alloca_callbacks")
-        push_alloca_callback(lowerer, openmp_region_alloca, self, builder)
 
         llvm_token_t = lc.Type.token()
         fnty = lir.FunctionType(llvm_token_t, [])
-        tag_str = openmp_tag_list_to_str(self.tags, lowerer, True)
-        pre_fn = builder.module.declare_intrinsic('llvm.directive.region.entry', (), fnty)
-        self.omp_region_var = builder.call(pre_fn, [], tail=False, tags=tag_str)
+        tags_to_include = self.tags
+        tags_to_include = list(filter(lambda x: x.name != "DIR.OMP.TARGET", tags_to_include))
+        self.filtered_tag_length = len(tags_to_include)
+        if config.DEBUG_OPENMP >= 1:
+            print("filtered_tag_length:", self.filtered_tag_length)
+        print("FIX FIX FIX....this works during testing but not in target is combined with other options.  We need to remove all the target related options and then if nothing is left we can skip adding this region.")
+        if len(tags_to_include) > 0:
+            push_alloca_callback(lowerer, openmp_region_alloca, self, builder)
+            tag_str = openmp_tag_list_to_str(tags_to_include, lowerer, True)
+            pre_fn = builder.module.declare_intrinsic('llvm.directive.region.entry', (), fnty)
+            self.omp_region_var = builder.call(pre_fn, [], tail=False, tags=tag_str)
+        #print("setting omp_region_var for:", id(self))
         """
         if self.omp_metadata is None and self.has_target():
             self.omp_metadata = builder.module.add_metadata([
@@ -584,7 +759,7 @@ class openmp_region_start(ir.Stmt):
         if self.acq_rel:
             builder.fence("acq_rel")
 
-        for otag in self.tags:
+        for otag in self.tags:  # should be tags_to_include?
             otag.post_entry(lowerer)
 
         if config.DEBUG_OPENMP >= 1:
@@ -595,9 +770,16 @@ class openmp_region_start(ir.Stmt):
 
 class openmp_region_end(ir.Stmt):
     def __init__(self, start_region, tags, loc):
+        #print("openmp_region_end::__init__", id(self), id(start_region))
         self.start_region = start_region
         self.tags = tags
         self.loc = loc
+        self.start_region.end_region = self
+
+    def __new__(cls, *args, **kwargs):
+        instance = super(openmp_region_end, cls).__new__(cls)
+        #print("openmp_region_end::__new__", id(instance))
+        return instance
 
     def list_vars(self):
         return list_vars_from_tags(self.tags)
@@ -610,22 +792,32 @@ class openmp_region_end(ir.Stmt):
         builder = lowerer.builder
         library = lowerer.library
 
-        assert self.start_region.omp_region_var != None
+        if config.DEBUG_OPENMP >= 2:
+            print("openmp_region_end::lower", id(self), id(self.start_region))
+            sys.stdout.flush()
 
         if self.start_region.acq_res:
             builder.fence("release")
 
         if config.DEBUG_OPENMP >= 1:
             print("pop_alloca_callbacks")
-        pop_alloca_callback(lowerer, builder)
 
-        # Process the accumulated allocas in the start region.
-        self.start_region.process_alloca_queue()
+        if config.DEBUG_OPENMP >= 2:
+            print("start_region tag length:", self.start_region.filtered_tag_length)
 
-        llvm_token_t = lc.Type.token()
-        fnty = lir.FunctionType(lc.Type.void(), [llvm_token_t])
-        pre_fn = builder.module.declare_intrinsic('llvm.directive.region.exit', (), fnty)
-        builder.call(pre_fn, [self.start_region.omp_region_var], tail=True, tags=openmp_tag_list_to_str(self.tags, lowerer, True))
+        if self.start_region.filtered_tag_length > 0:
+            llvm_token_t = lc.Type.token()
+            fnty = lir.FunctionType(lc.Type.void(), [llvm_token_t])
+            # The callback is only needed if llvm.directive.region.entry was added
+            # which only happens if tag length > 0.
+            pop_alloca_callback(lowerer, builder)
+
+            # Process the accumulated allocas in the start region.
+            self.start_region.process_alloca_queue()
+
+            assert self.start_region.omp_region_var != None
+            pre_fn = builder.module.declare_intrinsic('llvm.directive.region.exit', (), fnty)
+            builder.call(pre_fn, [self.start_region.omp_region_var], tail=True, tags=openmp_tag_list_to_str(self.tags, lowerer, True))
 
     def __str__(self):
         return "openmp_region_end " + ", ".join([str(x) for x in self.tags])
@@ -804,7 +996,8 @@ def openmp_copy(a):
 
 @overload(openmp_copy)
 def openmp_copy_overload(a):
-    print("openmp_copy:", a, type(a))
+    if config.DEBUG_OPENMP >= 1:
+        print("openmp_copy:", a, type(a))
     if isinstance(a, types.npytypes.Array):
         def cimpl(a):
             return np.copy(a)
@@ -2346,7 +2539,26 @@ ffi.cdef('void omp_set_nested(int nested);')
 ffi.cdef('void omp_set_max_active_levels(int levels);')
 ffi.cdef('int omp_get_max_active_levels(void);')
 ffi.cdef('int omp_get_max_threads(void);')
+ffi.cdef('int omp_get_num_procs(void);')
+ffi.cdef('int omp_in_parallel(void);')
+ffi.cdef('int omp_get_thread_limit(void);')
+ffi.cdef('int omp_get_supported_active_levels(void);')
+ffi.cdef('int omp_get_level(void);')
+ffi.cdef('int omp_get_active_level(void);')
+ffi.cdef('int omp_get_ancestor_thread_num(int level);')
+ffi.cdef('int omp_get_team_size(int level);')
+ffi.cdef('int omp_in_final(void);')
+ffi.cdef('int omp_get_proc_bind(void);')
+ffi.cdef('int omp_get_num_places(void);')
+ffi.cdef('int omp_get_place_num_procs(int place_num);')
+ffi.cdef('int omp_get_place_num(void);')
+ffi.cdef('int omp_set_default_device(int device_num);')
+ffi.cdef('int omp_get_default_device(void);')
+ffi.cdef('int omp_get_num_devices(void);')
+ffi.cdef('int omp_get_device_num(void);')
+ffi.cdef('int omp_get_num_teams(void);')
 ffi.cdef('int omp_is_initial_device(void);')
+ffi.cdef('int omp_get_initial_device(void);')
 
 C = ffi.dlopen(None)
 omp_set_num_threads = C.omp_set_num_threads
@@ -2358,4 +2570,23 @@ omp_set_nested = C.omp_set_nested
 omp_set_max_active_levels = C.omp_set_max_active_levels
 omp_get_max_active_levels = C.omp_get_max_active_levels
 omp_get_max_threads = C.omp_get_max_threads
+omp_get_num_procs = C.omp_get_num_procs
+omp_in_parallel = C.omp_in_parallel
+omp_get_thread_limit = C.omp_get_thread_limit
+omp_get_supported_active_levels = C.omp_get_supported_active_levels
+omp_get_level = C.omp_get_level
+omp_get_active_level = C.omp_get_active_level
+omp_get_ancestor_thread_num = C.omp_get_ancestor_thread_num
+omp_get_team_size = C.omp_get_team_size
+omp_in_final = C.omp_in_final
+omp_get_proc_bind = C.omp_get_proc_bind
+omp_get_num_places = C.omp_get_num_places
+omp_get_place_num_procs = C.omp_get_place_num_procs
+omp_get_place_num = C.omp_get_place_num
+omp_set_default_device = C.omp_set_default_device
+omp_get_default_device = C.omp_get_default_device
+omp_get_num_devices = C.omp_get_num_devices
+omp_get_device_num = C.omp_get_device_num
+omp_get_num_teams = C.omp_get_num_teams
 omp_is_initial_device = C.omp_is_initial_device
+omp_get_initial_device = C.omp_get_initial_device
