@@ -360,6 +360,7 @@ class openmp_region_start(ir.Stmt):
         self.omp_metadata = None
         self.tag_vars = set()
         self.normal_iv = None
+        self.target_copy = False
         for tag in self.tags:
             if isinstance(tag.arg, ir.Var):
                 self.tag_vars.add(tag.arg.name)
@@ -409,6 +410,8 @@ class openmp_region_start(ir.Stmt):
         return list_vars_from_tags(self.tags)
 
     def update_tags(self):
+        if config.DEBUG_OPENMP >= 2:
+            print("update_tags start:", id(self), "builder:", id(self.builder), "block:", id(self.block))
         with self.builder.goto_block(self.block):
             cur_instr = -1
 
@@ -430,6 +433,9 @@ class openmp_region_start(ir.Stmt):
         # and then process them later at the end_region marker so that the
         # variables are guaranteed to exist in their full form so that when we
         # process them then they won't lead to infinite recursion.
+        if config.DEBUG_OPENMP >= 2:
+            print("alloca callback for:", id(self), typ, alloca_instr)
+
         self.alloca_queue.append((alloca_instr, typ))
 
     def process_alloca_queue(self):
@@ -442,7 +448,7 @@ class openmp_region_start(ir.Stmt):
     def process_one_alloca(self, alloca_instr, typ):
         avar = alloca_instr.name
         if config.DEBUG_OPENMP >= 1:
-            print("openmp_region_start process_one_alloca:", alloca_instr, avar, typ, type(alloca_instr))
+            print("openmp_region_start process_one_alloca:", id(self), alloca_instr, avar, typ, type(alloca_instr))
 
         has_update = False
         if self.normal_iv is not None and avar != self.normal_iv and avar.startswith(self.normal_iv):
@@ -481,7 +487,9 @@ class openmp_region_start(ir.Stmt):
         self.builder = builder
         self.lowerer = lowerer
         if config.DEBUG_OPENMP >= 1:
-            print("lower:block", self, self.block, type(self.block), self.tags, len(self.tags))
+            print("lower:block", id(self), self, id(self.block), self.block, type(self.block), self.tags, len(self.tags), "builder_id:", id(self.builder), "block_id:", id(self.block))
+            for k,v in lowerer.func_ir.blocks.items():
+                print("block post copy:", k, id(v), id(v.body))
 
         if config.DEBUG_OPENMP >= 2:
             for otag in self.tags:
@@ -509,15 +517,16 @@ class openmp_region_start(ir.Stmt):
 
         target_num = self.has_target()
         tgv = None
-        if target_num is not None:
+        if target_num is not None and self.target_copy != True:
             #from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
             from numba.core.compiler import Compiler, Flags
-            #breakpoint()
             #builder.module.device_triples = "spir64"
             if config.DEBUG_OPENMP >= 1:
                 print("openmp start region lower has target", type(lowerer.func_ir))
             #func_ir = lowerer.func_ir.deepcopy()
             func_ir = lowerer.func_ir.copy()
+            for k,v in lowerer.func_ir.blocks.items():
+                print("block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
 
             """
             var_table = get_name_var_table(func_ir.blocks)
@@ -555,6 +564,10 @@ class openmp_region_start(ir.Stmt):
                     blocks[start_block].body[sbindex] = copy.copy(blocks[start_block].body[sbindex])
                     blocks[end_block].body[ebindex] = copy.copy(blocks[end_block].body[ebindex])
                     start_region = blocks[start_block].body[sbindex]
+                    start_region.builder = None
+                    start_region.block = None
+                    start_region.lowerer = None
+                    start_region.target_copy = True
                     start_region.tags = copy.deepcopy(start_region.tags)
                     end_region = blocks[end_block].body[ebindex]
                     assert(start_region.omp_region_var is None)
@@ -572,10 +585,15 @@ class openmp_region_start(ir.Stmt):
                 print("fndesc:", fndesc, type(fndesc))
             dprint_func_ir(func_ir, "target func_ir")
             internal_codegen = targetctx._internal_codegen
-            target_module = internal_codegen._create_empty_module("openmp.target")
+            #target_module = internal_codegen._create_empty_module("openmp.target")
 
             start_block, end_block = find_target_start_end(func_ir, target_num)
             cfg = compute_cfg_from_blocks(func_ir.blocks)
+
+            remove_openmp_nodes_from_target = False
+            if not remove_openmp_nodes_from_target:
+                end_target_node = func_ir.blocks[end_block].body[0]
+
             if config.DEBUG_OPENMP >= 1:
                 print("start_block:", start_block)
                 print("end_block:", end_block)
@@ -609,14 +627,15 @@ class openmp_region_start(ir.Stmt):
                                                      callfrom=start_block,
                                                      returnto=end_block)
 
-            region_blocks = dict((k, func_ir.blocks[k].copy()) for k in blocks_in_region)
+            region_blocks = dict((k, func_ir.blocks[k]) for k in blocks_in_region)
+            #region_blocks = dict((k, func_ir.blocks[k].copy()) for k in blocks_in_region)
             transforms._loop_lift_prepare_loop_func(region_info, region_blocks)
 
-            remove_openmp_nodes_from_target = True
             if remove_openmp_nodes_from_target:
                 region_blocks[start_block].body = region_blocks[start_block].body[1:]
                 #region_blocks[end_block].body = region_blocks[end_block].body[1:]
-            region_blocks = copy.copy(region_blocks)
+
+            #region_blocks = copy.copy(region_blocks)
             #region_blocks = copy.deepcopy(region_blocks)
             # transfer_scope?
             # core/untyped_passes/versioning_loop_bodies
@@ -625,11 +644,6 @@ class openmp_region_start(ir.Stmt):
                                          arg_names=tuple(ins),
                                          arg_count=len(ins),
                                          force_non_generator=True)
-
-            if config.DEBUG_OPENMP >= 1:
-                print("outlined_ir:", outlined_ir, type(outlined_ir))
-                dprint_func_ir(outlined_ir, "outlined_ir")
-                dprint_func_ir(func_ir, "target after outline func_ir")
 
             #cuda_typingctx = cuda_descriptor.cuda_target.typing_context
             #cuda_targetctx = cuda_descriptor.cuda_target.target_context
@@ -658,11 +672,26 @@ class openmp_region_start(ir.Stmt):
                 state_copy.typemap[arg_name] = typemap[var_in]
 
             last_block = outlined_ir.blocks[end_block]
+            if not remove_openmp_nodes_from_target:
+                print("got here")
+                last_block.body = [end_target_node] + last_block.body[:]
+
             assert(isinstance(last_block.body[-1], ir.Return))
             state_copy.typemap[last_block.body[-1].value.name] = types.containers.Tuple(())
 
-            if config.DEBUG_OPENMP >= 2:
+            if config.DEBUG_OPENMP >= 1:
+                print("outlined_ir:", outlined_ir, type(outlined_ir))
+                dprint_func_ir(outlined_ir, "outlined_ir")
+                dprint_func_ir(func_ir, "target after outline func_ir")
+                dprint_func_ir(lowerer.func_ir, "original func_ir")
                 print("state_copy.typemap:", state_copy.typemap)
+                print("===================================================================================")
+                print("===================================================================================")
+                print("===================================================================================")
+                print("===================================================================================")
+                print("===================================================================================")
+                print("===================================================================================")
+                print("===================================================================================")
 
             cres = compiler.compile_ir(typingctx,
                                        targetctx,
@@ -676,33 +705,41 @@ class openmp_region_start(ir.Stmt):
                                        {},
                                        pipeline_class=OnlyLower,
                                        #pipeline_class=Compiler,
-                                       is_lifted_loop=True,
+                                       is_lifted_loop=False,  # tried this as True since code derived from loop lifting code but it goes through the pipeline twice and messes things up
                                        parent_state=state_copy)
+
             if config.DEBUG_OPENMP >= 2:
                 print("cres:", type(cres))
             cres_library = cres.library
             if config.DEBUG_OPENMP >= 2:
                 print("cres_library:", type(cres_library))
                 sys.stdout.flush()
+            #breakpoint()
             cres_library._ensure_finalized()
             if config.DEBUG_OPENMP >= 2:
                 print("ensure_finalized:")
                 sys.stdout.flush()
+
+            if config.DEBUG_OPENMP >= 1:
+                print("===================================================================================")
+                print("===================================================================================")
+                print("===================================================================================")
+                print("===================================================================================")
+                print("===================================================================================")
+                print("===================================================================================")
+                print("===================================================================================")
+
+            for k,v in lowerer.func_ir.blocks.items():
+                print("block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
+
             """
-            sub = cres_library.serialize_using_bitcode()
-            if config.DEBUG_OPENMP >= 2:
-                print("sub:", type(sub))
-                sys.stdout.flush()
-            internal_codegen.unserialize_library(sub)
-            if config.DEBUG_OPENMP >= 2:
-                print("after unserialize:")
-                sys.stdout.flush()
             target_elf = cres_library._get_compiled_object()
             if config.DEBUG_OPENMP >= 2:
                 print("target_elf:", type(target_elf))
                 sys.stdout.flush()
             """
 
+            """
             todd_gv1_typ = targetctx.get_value_type(types.intp) #lc.Type.int(64)
             tgv = cgutils.add_global_variable(target_module, todd_gv1_typ, "todd_gv1")
             tst = targetctx.insert_const_string(target_module, "todd_string2")
@@ -719,6 +756,7 @@ class openmp_region_start(ir.Stmt):
 
             #targetctx.declare_function(target_module, )
             library.add_ir_module(target_module)
+            """
 
             if config.DEBUG_OPENMP >= 1:
                 dprint_func_ir(func_ir, "target after outline compiled func_ir")
@@ -766,7 +804,8 @@ class openmp_region_start(ir.Stmt):
             sys.stdout.flush()
 
     def __str__(self):
-        return "openmp_region_start " + ", ".join([str(x) for x in self.tags])
+        return "openmp_region_start " + ", ".join([str(x) for x in self.tags]) + " target=" + str(self.target_copy)
+
 
 class openmp_region_end(ir.Stmt):
     def __init__(self, start_region, tags, loc):
