@@ -569,6 +569,8 @@ class openmp_region_start(ir.Stmt):
                     start_region.lowerer = None
                     start_region.target_copy = True
                     start_region.tags = copy.deepcopy(start_region.tags)
+                    if start_region.has_target() == target_num:
+                        start_region.tags.append(openmp_tag("OMP.DEVICE"))
                     end_region = blocks[end_block].body[ebindex]
                     assert(start_region.omp_region_var is None)
                     assert(len(start_region.alloca_queue) == 0)
