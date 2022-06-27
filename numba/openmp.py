@@ -385,7 +385,6 @@ class openmp_region_start(ir.Stmt):
     """
 
     def __copy__(self):
-        #breakpoint()
         cls = self.__class__
         result = cls.__new__(cls)
         result.__dict__.update(self.__dict__)
@@ -410,15 +409,11 @@ class openmp_region_start(ir.Stmt):
         return list_vars_from_tags(self.tags)
 
     def update_tags(self):
-        if config.DEBUG_OPENMP >= 2:
-            print("update_tags start:", id(self), "builder:", id(self.builder), "block:", id(self.block))
         with self.builder.goto_block(self.block):
             cur_instr = -1
 
             while True:
                 last_instr = self.builder.block.instructions[cur_instr]
-                if config.DEBUG_OPENMP >= 2:
-                    print("update_tags:", last_instr)
                 if isinstance(last_instr, lir.instructions.CallInstr) and last_instr.tags is not None and len(last_instr.tags) > 0:
                     break
                 cur_instr -= 1
@@ -433,8 +428,6 @@ class openmp_region_start(ir.Stmt):
         # and then process them later at the end_region marker so that the
         # variables are guaranteed to exist in their full form so that when we
         # process them then they won't lead to infinite recursion.
-        if config.DEBUG_OPENMP >= 2:
-            print("alloca callback for:", id(self), typ, alloca_instr)
 
         self.alloca_queue.append((alloca_instr, typ))
 
