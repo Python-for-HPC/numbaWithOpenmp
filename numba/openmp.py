@@ -16,7 +16,7 @@ from numba.core.ir_utils import (
     replace_var_names,
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, find_top_level_loops
-from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms
+from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode
 from numba.core.ssa import _run_ssa
 from numba.extending import overload
 from cffi import FFI
@@ -352,7 +352,7 @@ def find_target_start_end(func_ir, target_num):
 class openmp_region_start(ir.Stmt):
     def __init__(self, tags, region_number, loc):
         if config.DEBUG_OPENMP >= 2:
-            print("openmp_region_start::__init__", id(self))
+            print("region ids openmp_region_start::__init__", id(self))
         self.tags = tags
         self.region_number = region_number
         self.loc = loc
@@ -384,14 +384,16 @@ class openmp_region_start(ir.Stmt):
         return instance
     """
 
+    """
     def __copy__(self):
         cls = self.__class__
         result = cls.__new__(cls)
         result.__dict__.update(self.__dict__)
         if config.DEBUG_OPENMP >= 2:
-            print("openmp_region_start::__copy__", id(self), id(result))
+            print("region ids openmp_region_start::__copy__", id(self), id(result))
         result.end_region.start_region = result
         return result
+    """
 
     def requires_acquire_release(self):
         self.acq_res = True
@@ -480,7 +482,7 @@ class openmp_region_start(ir.Stmt):
         self.builder = builder
         self.lowerer = lowerer
         if config.DEBUG_OPENMP >= 1:
-            print("lower:block", id(self), self, id(self.block), self.block, type(self.block), self.tags, len(self.tags), "builder_id:", id(self.builder), "block_id:", id(self.block))
+            print("region ids lower:block", id(self), self, id(self.block), self.block, type(self.block), self.tags, len(self.tags), "builder_id:", id(self.builder), "block_id:", id(self.block))
             for k,v in lowerer.func_ir.blocks.items():
                 print("block post copy:", k, id(v), id(v.body))
 
@@ -519,7 +521,7 @@ class openmp_region_start(ir.Stmt):
             #func_ir = lowerer.func_ir.deepcopy()
             func_ir = lowerer.func_ir.copy()
             for k,v in lowerer.func_ir.blocks.items():
-                print("block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
+                print("region ids block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
 
             """
             var_table = get_name_var_table(func_ir.blocks)
@@ -540,11 +542,11 @@ class openmp_region_start(ir.Stmt):
                     for bindex, bstmt in enumerate(block.body):
                         if isinstance(bstmt, openmp_region_start):
                             if config.DEBUG_OPENMP >= 2:
-                                print("found region start", id(bstmt))
+                                print("region ids found region start", id(bstmt))
                             start_dict[id(bstmt)] = (label, bindex)
                         elif isinstance(bstmt, openmp_region_end):
                             if config.DEBUG_OPENMP >= 2:
-                                print("found region end", id(bstmt.start_region), id(bstmt))
+                                print("region ids found region end", id(bstmt.start_region), id(bstmt))
                             end_dict[id(bstmt.start_region)] = (label, bindex)
                 assert(len(start_dict) == len(end_dict))
 
@@ -553,6 +555,10 @@ class openmp_region_start(ir.Stmt):
 
                     end_block_index = end_dict[start_id]
                     end_block, ebindex = end_block_index
+
+                    if config.DEBUG_OPENMP >= 2:
+                        start_pre_copy = blocks[start_block].body[sbindex]
+                        end_pre_copy = blocks[end_block].body[ebindex]
 
                     blocks[start_block].body[sbindex] = copy.copy(blocks[start_block].body[sbindex])
                     blocks[end_block].body[ebindex] = copy.copy(blocks[end_block].body[ebindex])
@@ -569,6 +575,8 @@ class openmp_region_start(ir.Stmt):
                     assert(len(start_region.alloca_queue) == 0)
                     end_region.start_region = start_region
                     start_region.end_region = end_region
+                    if config.DEBUG_OPENMP >= 2:
+                        print(f"region ids fixup start: {id(start_pre_copy)}->{id(start_region)} end: {id(end_pre_copy)}->{id(end_region)}")
 
             fixup_openmp_pairs(func_ir.blocks)
             state = lowerer.state
@@ -639,6 +647,13 @@ class openmp_region_start(ir.Stmt):
                                          arg_names=tuple(ins),
                                          arg_count=len(ins),
                                          force_non_generator=True)
+            fparts = outlined_ir.func_id.func_qualname.split('.')
+            fparts[-1] = "device" + fparts[-1]
+            outlined_ir.func_id.func_qualname = ".".join(fparts)
+            outlined_ir.func_id.func_name = fparts[-1]
+            uid = next(bytecode.FunctionIdentity._unique_ids)
+            outlined_ir.func_id.unique_name = '{}${}'.format(outlined_ir.func_id.func_qualname, uid)
+            print("outlined_ir:", type(outlined_ir), type(outlined_ir.func_id), fparts)
 
             #cuda_typingctx = cuda_descriptor.cuda_target.typing_context
             #cuda_targetctx = cuda_descriptor.cuda_target.target_context
@@ -668,7 +683,6 @@ class openmp_region_start(ir.Stmt):
 
             last_block = outlined_ir.blocks[end_block]
             if not remove_openmp_nodes_from_target:
-                print("got here")
                 last_block.body = [end_target_node] + last_block.body[:]
 
             assert(isinstance(last_block.body[-1], ir.Return))
@@ -680,6 +694,7 @@ class openmp_region_start(ir.Stmt):
                 dprint_func_ir(func_ir, "target after outline func_ir")
                 dprint_func_ir(lowerer.func_ir, "original func_ir")
                 print("state_copy.typemap:", state_copy.typemap)
+                print("region ids before compile_ir")
                 print("===================================================================================")
                 print("===================================================================================")
                 print("===================================================================================")
@@ -717,6 +732,7 @@ class openmp_region_start(ir.Stmt):
                 sys.stdout.flush()
 
             if config.DEBUG_OPENMP >= 1:
+                print("region ids compile_ir")
                 print("===================================================================================")
                 print("===================================================================================")
                 print("===================================================================================")
@@ -772,8 +788,10 @@ class openmp_region_start(ir.Stmt):
             push_alloca_callback(lowerer, openmp_region_alloca, self, builder)
             tag_str = openmp_tag_list_to_str(tags_to_include, lowerer, True)
             pre_fn = builder.module.declare_intrinsic('llvm.directive.region.entry', (), fnty)
+            assert(self.omp_region_var is None)
             self.omp_region_var = builder.call(pre_fn, [], tail=False, tags=tag_str)
-        #print("setting omp_region_var for:", id(self))
+            if config.DEBUG_OPENMP >= 2:
+                print("setting omp_region_var", self.omp_region_var._get_name())
         """
         if self.omp_metadata is None and self.has_target():
             self.omp_metadata = builder.module.add_metadata([
@@ -805,7 +823,8 @@ class openmp_region_start(ir.Stmt):
 
 class openmp_region_end(ir.Stmt):
     def __init__(self, start_region, tags, loc):
-        #print("openmp_region_end::__init__", id(self), id(start_region))
+        if config.DEBUG_OPENMP >= 1:
+            print("region ids openmp_region_end::__init__", id(self), id(start_region))
         self.start_region = start_region
         self.tags = tags
         self.loc = loc
@@ -851,6 +870,8 @@ class openmp_region_end(ir.Stmt):
             self.start_region.process_alloca_queue()
 
             assert self.start_region.omp_region_var != None
+            if config.DEBUG_OPENMP >= 2:
+                print("before adding exit", self.start_region.omp_region_var._get_name())
             pre_fn = builder.module.declare_intrinsic('llvm.directive.region.exit', (), fnty)
             builder.call(pre_fn, [self.start_region.omp_region_var], tail=True, tags=openmp_tag_list_to_str(self.tags, lowerer, True))
 
