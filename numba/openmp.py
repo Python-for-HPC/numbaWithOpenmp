@@ -959,27 +959,32 @@ class _OpenmpContextType(WithContext):
 
     def mutate_with_body(self, func_ir, blocks, blk_start, blk_end,
                          body_blocks, dispatcher_factory, extra, state=None, flags=None):
-        if config.DEBUG_OPENMP >= 1:
-            print("openmp:mutate_with_body")
-            dprint_func_ir(func_ir, "func_ir")
-            print("blocks:", blocks, type(blocks))
-            print("blk_start:", blk_start, type(blk_start))
-            print("blk_end:", blk_end, type(blk_end))
-            print("body_blocks:", body_blocks, type(body_blocks))
-            print("extra:", extra, type(extra))
-            print("flags:", flags, type(flags))
-        assert extra is not None
-        assert flags is not None
-        flags.enable_ssa = False
-        flags.release_gil = True
-        flags.noalias = True
-        _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra, state)
-        if config.DEBUG_OPENMP >= 1:
-            print("post-with-removal")
-            dump_blocks(blocks)
-        dispatcher = dispatcher_factory(func_ir)
-        dispatcher.can_cache = True
-        return dispatcher
+        if config.OPENMP_DISABLED:
+            # If OpenMP disabled, do nothing except remove the enter_with marker.
+            sblk = blocks[blk_start]
+            sblk.body = sblk.body[1:]
+        else:
+            if config.DEBUG_OPENMP >= 1:
+                print("openmp:mutate_with_body")
+                dprint_func_ir(func_ir, "func_ir")
+                print("blocks:", blocks, type(blocks))
+                print("blk_start:", blk_start, type(blk_start))
+                print("blk_end:", blk_end, type(blk_end))
+                print("body_blocks:", body_blocks, type(body_blocks))
+                print("extra:", extra, type(extra))
+                print("flags:", flags, type(flags))
+            assert extra is not None
+            assert flags is not None
+            flags.enable_ssa = False
+            flags.release_gil = True
+            flags.noalias = True
+            _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra, state)
+            if config.DEBUG_OPENMP >= 1:
+                print("post-with-removal")
+                dump_blocks(blocks)
+            dispatcher = dispatcher_factory(func_ir)
+            dispatcher.can_cache = True
+            return dispatcher
 
     def __call__(self, args):
         return PythonOpenmp(args)
