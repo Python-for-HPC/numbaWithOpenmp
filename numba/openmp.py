@@ -780,7 +780,7 @@ class openmp_region_start(ir.Stmt):
         self.filtered_tag_length = len(tags_to_include)
         if config.DEBUG_OPENMP >= 1:
             print("filtered_tag_length:", self.filtered_tag_length)
-        print("FIX FIX FIX....this works during testing but not in target is combined with other options.  We need to remove all the target related options and then if nothing is left we can skip adding this region.")
+        #print("FIX FIX FIX....this works during testing but not in target is combined with other options.  We need to remove all the target related options and then if nothing is left we can skip adding this region.")
         if len(tags_to_include) > 0:
             if config.DEBUG_OPENMP >= 1:
                 print("push_alloca_callbacks")
@@ -2571,6 +2571,7 @@ def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra
     try:
         visitor.transform(parse_res)
     except VisitError as e:
+        raise e.__context__
         if isinstance(e.__context__, UnspecifiedVarInDefaultNone):
             print(str(e.__context__))
             raise e.__context__
