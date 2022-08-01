@@ -1239,8 +1239,6 @@ class OpenmpVisitor(Transformer):
             replace_vardict[exp_priv] = ir.Var(scope, exp_priv + ".privatized." + str(get_unique()), loc)
         # Get all the blocks in this openmp region and replace the original variable with the privatized one.
         replace_vars({k: v for k, v in self.blocks.items() if k in blocks}, replace_vardict)
-#        import pdb
-#        pdb.set_trace()
         new_shared_clauses = []
         copying_ir = []
         copying_ir_before = []
@@ -1996,6 +1994,11 @@ class OpenmpVisitor(Transformer):
         clause_privates = self.get_clause_privates(clauses, def_but_live_out, scope, self.loc)
         priv_saves = []
         priv_restores = []
+        if config.DEBUG_OPENMP >= 2:
+            print("clause_privates:", clause_privates, type(clause_privates))
+            print("inputs_to_region:", inputs_to_region)
+            print("def_but_live_out:", def_but_live_out)
+            print("private_to_region:", private_to_region)
         # Numba typing is not aware of OpenMP semantics, so for private variables we save the value
         # before entering the region and then restore it afterwards but we have to restore it to the SSA
         # version of the variable at that point.
@@ -2202,7 +2205,7 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             print("visit name_slice", args, type(args))
         if len(args) == 1:
-            return args
+            return args[0]
         else:
             return NameSlice(args[0], args[1:])
 

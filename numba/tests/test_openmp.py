@@ -614,6 +614,17 @@ class TestOpenmpDataClauses(TestOpenmpBase):
             return x
         assert(test_impl() == 5)
 
+    def test_private_retain_value_1_2(self):
+        @njit
+        def test_impl():
+            x = 5
+            y = 7
+            with openmp("parallel private(x,y)"):
+                x = 13
+                y = 40
+            return x, y
+        assert(test_impl() == (5, 7))
+
     def test_private_retain_value_1_param(self):
         @njit
         def test_impl(x):
