@@ -1007,6 +1007,11 @@ class default_shared_val:
 class UnspecifiedVarInDefaultNone(Exception):
     pass
 
+class NonconstantOpenmpSpecification(Exception):
+    pass
+
+class NonStringOpenmpSpecification(Exception):
+    pass
 
 openmp_context = _OpenmpContextType()
 
@@ -2565,6 +2570,12 @@ def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra
 
     args = extra["args"]
     arg = args[0]
+    # If OpenMP argument is not a constant or not a string then raise exception
+    if not isinstance(arg, ir.Const):
+        raise NonconstantOpenmpSpecification(f"Non-constant OpenMP specification at line {arg.loc}")
+    if not isinstance(arg.value, str):
+        raise NonStringOpenmpSpecification(f"Non-string OpenMP specification at line {arg.loc}")
+
     parse_res = openmp_parser.parse(arg.value)
     if config.DEBUG_OPENMP >= 1:
         print("args:", args, type(args))
