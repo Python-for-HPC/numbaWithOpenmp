@@ -41,7 +41,9 @@ from numba.openmp import (omp_set_num_threads, omp_get_thread_num,
                     omp_get_num_threads, omp_get_wtime, omp_set_nested,
                     omp_set_max_active_levels, omp_set_dynamic,
                     omp_get_max_active_levels, omp_get_max_threads,
-                    omp_get_num_procs, UnspecifiedVarInDefaultNone)
+                    omp_get_num_procs, UnspecifiedVarInDefaultNone,
+                    NonconstantOpenmpSpecification,
+                    NonStringOpenmpSpecification)
 import cmath
 import unittest
 
@@ -314,6 +316,7 @@ class TestOpenmpParallelFor(TestOpenmpBase):
         self.check(test_impl, np.zeros(100))
 
     def test_parallel_for_nonconst_var_openmp_statement(self):
+        @njit
         def test_impl(v):
             ovar = "parallel "
             ovar += "for"
@@ -321,7 +324,22 @@ class TestOpenmpParallelFor(TestOpenmpBase):
                 for i in range(len(v)):
                     v[i] = 1.0
             return v
-        self.check(test_impl, np.zeros(100))
+
+        with self.assertRaises(NonconstantOpenmpSpecification) as raises:
+            test_impl(np.zeros(100))
+        self.assertIn("Non-constant OpenMP specification at line", str(raises.exception))
+
+    def test_parallel_for_nonstring_var_openmp_statement(self):
+        @njit
+        def test_impl(v):
+            ovar = 7
+            with openmp(ovar):
+                for i in range(len(v)):
+                    v[i] = 1.0
+            return v
+        with self.assertRaises(NonStringOpenmpSpecification) as raises:
+            test_impl(np.zeros(100))
+        self.assertIn("Non-string OpenMP specification at line", str(raises.exception))
 
     # Failed
     def test_parallel_for_string_conditional(self):
@@ -784,7 +802,7 @@ class TestOpenmpConcurrency(TestOpenmpBase):
         nt = 4
         np.testing.assert_array_equal(test_impl(nt), np.array([nt,nt,nt,nt]))
 
-    def test_nested_parallel_regions():
+    def test_nested_parallel_regions(self):
         @njit
         def test_impl():
             omp_set_nested(1)
@@ -793,23 +811,27 @@ class TestOpenmpConcurrency(TestOpenmpBase):
             omp_set_num_threads(2)
             a = np.zeros((10,3), dtype=np.int32)
             b = np.zeros((10,3), dtype=np.int32)
-            with openmp("parallel"):
+            with openmp("parallel private(tn)"):
                 omp_set_num_threads(3)
-                with openmp("parallel"):
+                with openmp("parallel private(tn)"):
                     omp_set_num_threads(4)
-                    with openmp("single"):
-                        tn = omp_get_thread_num()
+                    #with openmp("single"):  # Daniel....why single?
+                    tn = omp_get_thread_num()
+                    if tn < 10:
                         a[tn][0] = omp_get_max_active_levels()
                         a[tn][1] = omp_get_num_threads()
                         a[tn][2] = omp_get_max_threads()
                 with openmp("barrier"):
                     pass
-                with openmp("single"):
-                    tn = omp_get_thread_num()
+                #with openmp("single"): # Daniel....why single?
+                tn = omp_get_thread_num()
+                # This test will fail if this useless if is left out.
+                if tn < 10:
                     b[tn][0] = omp_get_max_active_levels()
                     b[tn][1] = omp_get_num_threads()
                     b[tn][2] = omp_get_max_threads()
             return a, b
+        print("nested test:", test_impl())
 
 
 @linux_only
