@@ -1739,7 +1739,8 @@ class OpenmpVisitor(Transformer):
                     # Remove variables the user explicitly added to a clause from the auto-determined variables.
                     # This will also treat SSA forms of vars the same as their explicit Python var clauses.
                     self.remove_explicit_from_io_vars(inputs_to_region, def_but_live_out, private_to_region, vars_in_explicit_clauses, clauses, scope, self.loc)
-                    print("post remove explicit:", private_to_region)
+                    if config.DEBUG_OPENMP >= 1:
+                        print("post remove explicit:", private_to_region)
 
                     if not default_shared and (
                         has_user_defined_var(inputs_to_region) or
