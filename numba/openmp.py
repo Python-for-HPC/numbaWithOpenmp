@@ -3,7 +3,6 @@ from lark import Lark, Transformer
 from lark.exceptions import VisitError
 from numba.core.ir_utils import (
     get_call_table,
-    mk_unique_var,
     dump_block,
     dump_blocks,
     dprint_func_ir,
@@ -527,7 +526,7 @@ class openmp_region_start(ir.Stmt):
             var_table = get_name_var_table(func_ir.blocks)
             new_var_dict = {}
             for name, var in var_table.items():
-                new_var_dict[name] = mk_unique_var(name)
+                new_var_dict[name] = var.scope.redefine(name, var.loc)
             replace_var_names(func_ir.blocks, new_var_dict)
             """
 
@@ -959,6 +958,9 @@ class _OpenmpContextType(WithContext):
 
     def mutate_with_body(self, func_ir, blocks, blk_start, blk_end,
                          body_blocks, dispatcher_factory, extra, state=None, flags=None):
+        if config.DEBUG_OPENMP >= 1:
+            print("pre-with-removal")
+            dump_blocks(blocks)
         if config.OPENMP_DISABLED:
             # If OpenMP disabled, do nothing except remove the enter_with marker.
             sblk = blocks[blk_start]
@@ -1247,18 +1249,19 @@ class OpenmpVisitor(Transformer):
         new_shared_clauses = []
         copying_ir = []
         copying_ir_before = []
+        lastprivate_copying = []
         def do_copy(orig_name, private_name):
-            g_copy_var = ir.Var(scope, mk_unique_var("$copy_g_var"), loc)
+            g_copy_var = scope.redefine("$copy_g_var", loc)
             g_copy = ir.Global("openmp_copy", openmp_copy, loc)
             #g_copy = ir.Global("numba", numba, loc)
             g_copy_assign = ir.Assign(g_copy, g_copy_var, loc)
 
             """
-            attr_var1 = ir.Var(scope, mk_unique_var("$copy_attr_var"), loc)
+            attr_var1 = scope.redefine("$copy_attr_var", loc)
             attr_getattr1 = ir.Expr.getattr(g_copy_var, 'openmp', loc)
             attr_assign1 = ir.Assign(attr_getattr1, attr_var1, loc)
 
-            attr_var2 = ir.Var(scope, mk_unique_var("$copy_attr_var"), loc)
+            attr_var2 = scope.redefine("$copy_attr_var", loc)
             attr_getattr2 = ir.Expr.getattr(g_copy_var, 'openmp_copy', loc)
             attr_assign2 = ir.Assign(attr_getattr2, attr_var2, loc)
             """
@@ -1269,8 +1272,17 @@ class OpenmpVisitor(Transformer):
             return [g_copy_assign, copy_assign]
             #return [g_copy_assign, attr_assign1, attr_assign2, copy_assign]
 
+        if config.DEBUG_OPENMP >= 1:
+            print("replace_vardict:", replace_vardict)
+            print("all_explicits:", all_explicits)
+            print("explicit_privates:", explicit_privates)
+            for c in clauses:
+                print("clauses:", c)
+
         for c in clauses:
             if isinstance(c.arg, str) and c.arg in replace_vardict:
+                if config.DEBUG_OPENMP >= 1:
+                    print("c.arg str:", c.arg, type(c.arg))
                 del all_explicits[c.arg]
                 if c.name == "QUAL.OMP.FIRSTPRIVATE":
                     new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", c.arg))
@@ -1278,14 +1290,28 @@ class OpenmpVisitor(Transformer):
                     copying_ir.extend(do_copy(ir.Var(scope, c.arg, loc), replace_vardict[c.arg]))
                     # This one doesn't really do anything except avoid a Numba decref error for arrays.
                     copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
-                c.arg = replace_vardict[c.arg]
+                elif c.name == "QUAL.OMP.LASTPRIVATE":
+                    new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", c.arg))
+                    all_explicits[c.arg] = new_shared_clauses[-1]
+                    lastprivate_copying.extend(do_copy(replace_vardict[c.arg], ir.Var(scope, c.arg, loc)))
+                    # This one doesn't really do anything except avoid a Numba decref error for arrays.
+                    #copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
+                c.arg = replace_vardict[c.arg].name
                 all_explicits[c.arg] = c
             elif isinstance(c.arg, list):
                 for i in range(len(c.arg)):
                     carg = c.arg[i]
                     if isinstance(carg, str) and carg in replace_vardict:
+                        if config.DEBUG_OPENMP >= 1:
+                            print("c.arg list of str:", c.arg, type(c.arg))
                         del all_explicits[carg]
                         if c.name == "QUAL.OMP.FIRSTPRIVATE":
+                            new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", carg))
+                            all_explicits[carg] = new_shared_clauses[-1]
+                            copying_ir.extend(do_copy(ir.Var(scope, carg, loc), replace_vardict[carg]))
+                            # This one doesn't really do anything except avoid a Numba decref error for arrays.
+                            copying_ir_before.append(ir.Assign(ir.Var(scope, carg, loc), replace_vardict[carg], loc))
+                        elif c.name == "QUAL.OMP.LASTPRIVATE":
                             new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", carg))
                             all_explicits[carg] = new_shared_clauses[-1]
                             copying_ir.extend(do_copy(ir.Var(scope, carg, loc), replace_vardict[carg]))
@@ -1294,8 +1320,18 @@ class OpenmpVisitor(Transformer):
                         newcarg = replace_vardict[carg].name
                         c.arg[i] = newcarg
                         all_explicits[newcarg] = c
+
+        if config.DEBUG_OPENMP >= 1:
+            for c in clauses:
+                print("clauses:", c)
+            for c in new_shared_clauses:
+                print("new_shared_clauses:", c)
+
         clauses.extend(new_shared_clauses)
-        return replace_vardict, copying_ir, copying_ir_before
+        if config.DEBUG_OPENMP >= 1:
+            for c in clauses:
+                print("clauses:", c)
+        return replace_vardict, copying_ir, copying_ir_before, lastprivate_copying
 
     def some_for_directive(self, args, main_start_tag, main_end_tag, first_clause, gen_shared):
         sblk = self.blocks[self.blk_start]
@@ -1334,6 +1370,7 @@ class OpenmpVisitor(Transformer):
 
         before_start = []
         after_start = []
+        before_end = []
         start_tags = [ openmp_tag(main_start_tag) ]
         end_tags   = [ openmp_tag(main_end_tag) ]
 
@@ -1375,10 +1412,31 @@ class OpenmpVisitor(Transformer):
         loop_blocks_for_io_minus_entry = loop_blocks_for_io - {entry}
         if config.DEBUG_OPENMP >= 1:
             print("loop_blocks_for_io:", loop_blocks_for_io, entry, exit)
+            print("pre-replace vars_in_explicit_clauses:", vars_in_explicit_clauses)
+            print("pre-replace explicit_privates:", explicit_privates)
+            for c in clauses:
+                print("pre-replace clauses:", c)
 
-        replace_vardict, copying_ir, copying_ir_before = self.replace_private_vars(loop_blocks_for_io_minus_entry, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc)
+        replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(loop_blocks_for_io_minus_entry, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc)
+
+        if config.DEBUG_OPENMP >= 1:
+            print("post-replace vars_in_explicit_clauses:", vars_in_explicit_clauses)
+            print("post-replace explicit_privates:", explicit_privates)
+            for c in clauses:
+                print("post-replace clauses:", c)
+            print("lastprivate_copying:", lastprivate_copying)
+            for c in lastprivate_copying:
+                print(c)
+            print("copying_ir:", copying_ir)
+            for c in copying_ir:
+                print(c)
+            print("copying_ir_before:", copying_ir_before)
+            for c in copying_ir_before:
+                print(c)
+
         before_start.extend(copying_ir_before)
         after_start.extend(copying_ir)
+        before_end.extend(lastprivate_copying)
 
         found_loop = False
         entry_block = self.blocks[entry]
@@ -1512,18 +1570,32 @@ class OpenmpVisitor(Transformer):
 
                     #assert(start == 0 or (isinstance(start, ir.Const) and start.value == 0))
 
-                    omp_lb_var = ir.Var(loop_index.scope, mk_unique_var("$omp_lb"), inst.loc)
+                    omp_lb_var = loop_index.scope.redefine("$omp_lb", inst.loc)
                     before_start.append(ir.Assign(ir.Const(0, inst.loc), omp_lb_var, inst.loc))
 
-                    omp_iv_var = ir.Var(loop_index.scope, mk_unique_var("$omp_iv"), inst.loc)
+                    omp_iv_var = loop_index.scope.redefine("$omp_iv", inst.loc)
                     #before_start.append(ir.Assign(omp_lb_var, omp_iv_var, inst.loc))
                     after_start.append(ir.Assign(omp_lb_var, omp_iv_var, inst.loc))
 
-                    omp_ub_var = ir.Var(loop_index.scope, mk_unique_var("$omp_ub"), inst.loc)
-                    omp_ub_expr = ir.Expr.itercount(getiter_inst.target, inst.loc)
+                    types_mod_var = loop_index.scope.redefine("$numba_types_mod", inst.loc)
+                    types_mod = ir.Global('types', types, inst.loc)
+                    types_mod_assign = ir.Assign(types_mod, types_mod_var, inst.loc)
+                    before_start.append(types_mod_assign)
+
+                    int64_var = loop_index.scope.redefine("$int64_var", inst.loc)
+                    int64_getattr = ir.Expr.getattr(types_mod_var, 'int64', inst.loc)
+                    int64_assign = ir.Assign(int64_getattr, int64_var, inst.loc)
+                    before_start.append(int64_assign)
+
+                    itercount_var = loop_index.scope.redefine("$itercount", inst.loc)
+                    itercount_expr = ir.Expr.itercount(getiter_inst.target, inst.loc)
+                    before_start.append(ir.Assign(itercount_expr, itercount_var, inst.loc))
+
+                    omp_ub_var = loop_index.scope.redefine("$omp_ub", inst.loc)
+                    omp_ub_expr = ir.Expr.call(int64_var, [itercount_var], (), inst.loc)
                     before_start.append(ir.Assign(omp_ub_expr, omp_ub_var, inst.loc))
 
-                    const1_var = ir.Var(loop_index.scope, mk_unique_var("$const1"), inst.loc)
+                    const1_var = loop_index.scope.redefine("$const1", inst.loc)
                     start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", const1_var))
                     const1_assign = ir.Assign(ir.Const(1, inst.loc), const1_var, inst.loc)
                     before_start.append(const1_assign)
@@ -1532,7 +1604,7 @@ class OpenmpVisitor(Transformer):
 
 #                    before_start.append(ir.Print([omp_ub_var], None, inst.loc))
 
-                    omp_start_var = ir.Var(loop_index.scope, mk_unique_var("$omp_start"), inst.loc)
+                    omp_start_var = loop_index.scope.redefine("$omp_start", inst.loc)
                     if start == 0:
                         start = ir.Const(start, inst.loc)
                     before_start.append(ir.Assign(start, omp_start_var, inst.loc))
@@ -1541,12 +1613,12 @@ class OpenmpVisitor(Transformer):
 
                     # ---------- Create latch block -------------------------------
                     if gen_ssa:
-                        latch_iv = ir.Var(loop_index.scope, mk_unique_var("$omp_iv"), inst.loc)
+                        latch_iv = loop_index.scope.redefine("$omp_iv", inst.loc)
                     else:
                         latch_iv = omp_iv_var
 
                     latch_block = ir.Block(scope, inst.loc)
-                    const1_var = ir.Var(loop_index.scope, mk_unique_var("$const1"), inst.loc)
+                    const1_var = loop_index.scope.redefine("$const1", inst.loc)
                     start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", const1_var))
                     const1_assign = ir.Assign(ir.Const(1, inst.loc), const1_var, inst.loc)
                     latch_block.body.append(const1_assign)
@@ -1571,21 +1643,21 @@ class OpenmpVisitor(Transformer):
                     # ---------- Header Manipulation ------------------------------
                     ssa_code = []
                     if gen_ssa:
-                        ssa_var = ir.Var(loop_index.scope, mk_unique_var("$omp_iv"), inst.loc)
+                        ssa_var = loop_index.scope.redefine("$omp_iv", inst.loc)
                         ssa_phi = ir.Expr.phi(inst.loc)
                         ssa_phi.incoming_values = [latch_iv, omp_iv_var]
                         ssa_phi.incoming_blocks = [latch_block_num, entry_pred_label]
                         ssa_inst = ir.Assign(ssa_phi, ssa_var, inst.loc)
                         ssa_code.append(ssa_inst)
 
-                    step_var = ir.Var(loop_index.scope, mk_unique_var("$step_var"), inst.loc)
+                    step_var = loop_index.scope.redefine("$step_var", inst.loc)
                     step_assign = ir.Assign(ir.Const(step, inst.loc), step_var, inst.loc)
-                    scale_var = ir.Var(loop_index.scope, mk_unique_var("$scale"), inst.loc)
+                    scale_var = loop_index.scope.redefine("$scale", inst.loc)
                     fake_iternext = ir.Assign(ir.Const(0, inst.loc), iternext_inst.target, inst.loc)
                     fake_second = ir.Assign(ir.Const(0, inst.loc), pair_second_inst.target, inst.loc)
                     scale_assign = ir.Assign(ir.Expr.binop(operator.mul, step_var, omp_iv_var, inst.loc), scale_var, inst.loc)
                     unnormalize_iv = ir.Assign(ir.Expr.binop(operator.add, omp_start_var, scale_var, inst.loc), loop_index, inst.loc)
-                    cmp_var = ir.Var(loop_index.scope, mk_unique_var("$cmp"), inst.loc)
+                    cmp_var = loop_index.scope.redefine("$cmp", inst.loc)
                     if gen_ssa:
                         iv_lte_ub = ir.Assign(ir.Expr.binop(operator.le, ssa_var, omp_ub_var, inst.loc), cmp_var, inst.loc)
                     else:
@@ -1596,7 +1668,7 @@ class OpenmpVisitor(Transformer):
                     first_body_block = self.blocks[body_label]
                     new_end = [iv_lte_ub, new_branch]
                     if False:
-                        str_var = ir.Var(loop_index.scope, mk_unique_var("$str_var"), inst.loc)
+                        str_var = loop_index.scope.redefine("$str_var", inst.loc)
                         str_const = ir.Const("header1:", inst.loc)
                         str_assign = ir.Assign(str_const, str_var, inst.loc)
                         new_end.append(str_assign)
@@ -1611,7 +1683,7 @@ class OpenmpVisitor(Transformer):
 
                     # -------------------------------------------------------------
 
-                    #const_start_var = ir.Var(loop_index.scope, mk_unique_var("$const_start"), inst.loc)
+                    #const_start_var = loop_index.scope.redefine("$const_start", inst.loc)
                     #before_start.append(ir.Assign(ir.Const(0, inst.loc), const_start_var, inst.loc))
                     #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", const_start_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.IV", omp_iv_var.name))
@@ -1635,13 +1707,14 @@ class OpenmpVisitor(Transformer):
                     for cp in clause_privates:
                         cpvar = ir.Var(scope, cp, self.loc)
                         cplovar = ir.Var(scope, clause_privates[cp], self.loc)
-                        save_var = ir.Var(scope, mk_unique_var("$"+cp), self.loc)
+                        save_var = scope.redefine("$"+cp, self.loc)
                         priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
                         priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
 
                     # Remove variables the user explicitly added to a clause from the auto-determined variables.
                     # This will also treat SSA forms of vars the same as their explicit Python var clauses.
                     self.remove_explicit_from_io_vars(inputs_to_region, def_but_live_out, private_to_region, vars_in_explicit_clauses, clauses, scope, self.loc)
+                    print("post remove explicit:", private_to_region)
 
                     if not default_shared and (
                         has_user_defined_var(inputs_to_region) or
@@ -1666,8 +1739,8 @@ class OpenmpVisitor(Transformer):
                     #entry_block.body = [or_start] + before_start + entry_block.body[:]
                     #entry_block.body = entry_block.body[:inst_num] + before_start + [or_start] + entry_block.body[inst_num:]
                     #exit_block.body = [or_end] + priv_restores + exit_block.body
-                    exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
-                    #exit_block.body = [or_end] + exit_block.body
+                    exit_block.body = before_end + [or_end] + priv_restores + keep_alive + exit_block.body
+                    #exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
 
                     break
 
@@ -2010,7 +2083,7 @@ class OpenmpVisitor(Transformer):
         for cp in clause_privates:
             cpvar = ir.Var(scope, cp, self.loc)
             cplovar = ir.Var(scope, clause_privates[cp], self.loc)
-            save_var = ir.Var(scope, mk_unique_var("$"+cp), self.loc)
+            save_var = scope.redefine("$"+cp, self.loc)
             priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
             priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
 
