@@ -43,7 +43,8 @@ from numba.openmp import (omp_set_num_threads, omp_get_thread_num,
                     omp_get_max_active_levels, omp_get_max_threads,
                     omp_get_num_procs, UnspecifiedVarInDefaultNone,
                     NonconstantOpenmpSpecification,
-                    NonStringOpenmpSpecification)
+                    NonStringOpenmpSpecification,
+                    ParallelForExtraCode, ParallelForWrongLoopCount)
 import cmath
 import unittest
 
@@ -401,34 +402,39 @@ class TestOpenmpConstraints(TestOpenmpBase):
                 pass
 
         # Fails if no AssertionError
-        with self.assertRaises(AssertionError) as raises:
+        with self.assertRaises(ParallelForWrongLoopCount) as raises:
             test_impl()
+        self.assertIn("OpenMP parallel for regions must contain exactly one", str(raises.exception))
 
     # Expected error
     def test_statement_before_parallel_for(self):
         @njit
         def test_impl():
+            a = np.zeros(4)
             with openmp("parallel for"):
                 x = "Fail"
                 for _ in range(4):
-                    pass
-            return x
+                    a[i] = i
+            return a
 
-        with self.assertRaises(Exception) as raises:
+        with self.assertRaises(ParallelForExtraCode) as raises:
             test_impl()
+        self.assertIn("Extra code near line", str(raises.exception))
 
     # Expected error
     def test_statement_after_parallel_for(self):
         @njit
         def test_impl():
+            a = np.zeros(4)
             with openmp("parallel for"):
-                for _ in range(4):
-                    pass
+                for i in range(4):
+                    a[i] = i
                 x = "Fail"
-            return x
+            return a
 
-        with self.assertRaises(Exception) as raises:
+        with self.assertRaises(ParallelForExtraCode) as raises:
             test_impl()
+        self.assertIn("Extra code near line", str(raises.exception))
 
     def test_parallel_for_incremented_step(self):
         @njit

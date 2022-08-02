@@ -1009,6 +1009,12 @@ class default_shared_val:
 class UnspecifiedVarInDefaultNone(Exception):
     pass
 
+class ParallelForExtraCode(Exception):
+    pass
+
+class ParallelForWrongLoopCount(Exception):
+    pass
+
 class NonconstantOpenmpSpecification(Exception):
     pass
 
@@ -1390,7 +1396,8 @@ class OpenmpVisitor(Transformer):
 
         if config.DEBUG_OPENMP >= 1:
             print("loops:", loops)
-        assert(len(loops) == 1)
+        if len(loops) != 1:
+            raise ParallelForWrongLoopCount(f"OpenMP parallel for regions must contain exactly one range based loop.  The parallel for at line {self.loc} contains {len(loops)} loops.")
 
         def _get_loop_kind(func_var, call_table):
             if func_var not in call_table:
@@ -1410,8 +1417,26 @@ class OpenmpVisitor(Transformer):
 
         loop_blocks_for_io = loop.entries.union(loop.body)
         loop_blocks_for_io_minus_entry = loop_blocks_for_io - {entry}
+        non_loop_blocks = set(self.body_blocks)
+        non_loop_blocks.difference_update(loop_blocks_for_io)
+        non_loop_blocks.difference_update({exit})
+
+        if config.DEBUG_OPENMP >= 1:
+            print("non_loop_blocks:", non_loop_blocks)
+
+        for non_loop_block in non_loop_blocks:
+            nlb = self.blocks[non_loop_block]
+            if isinstance(nlb.body[0], ir.Jump):
+                # Non-loop empty blocks are fine.
+                continue
+            if isinstance(nlb.body[-1], ir.Jump) and nlb.body[-1].target == self.blk_end:
+                # The last block that jumps out of the with region is always okay.
+                continue
+            raise ParallelForExtraCode(f"Extra code near line {self.loc} is not allowed before or after the loop in an OpenMP parallel for region.")
+
         if config.DEBUG_OPENMP >= 1:
             print("loop_blocks_for_io:", loop_blocks_for_io, entry, exit)
+            print("non_loop_blocks:", non_loop_blocks)
             print("pre-replace vars_in_explicit_clauses:", vars_in_explicit_clauses)
             print("pre-replace explicit_privates:", explicit_privates)
             for c in clauses:
