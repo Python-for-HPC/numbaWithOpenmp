@@ -16,6 +16,7 @@ from numba.core.ir_utils import (
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, find_top_level_loops
 from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode
+from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
 from numba.extending import overload
 from cffi import FFI
@@ -312,13 +313,13 @@ def openmp_region_alloca(obj, alloca_instr, typ):
     obj.alloca(alloca_instr, typ)
 
 def push_alloca_callback(lowerer, callback, data, builder):
-    cgutils.push_alloca_callbacks(callback, data)
+    #cgutils.push_alloca_callbacks(callback, data)
     if not hasattr(builder, '_lowerer_push_alloca_callbacks'):
         builder._lowerer_push_alloca_callbacks = 0
     builder._lowerer_push_alloca_callbacks += 1
 
 def pop_alloca_callback(lowerer, builder):
-    cgutils.pop_alloca_callbacks()
+    #cgutils.pop_alloca_callbacks()
     builder._lowerer_push_alloca_callbacks -= 1
 
 def in_openmp_region(builder):
@@ -429,7 +430,6 @@ class openmp_region_start(ir.Stmt):
         # and then process them later at the end_region marker so that the
         # variables are guaranteed to exist in their full form so that when we
         # process them then they won't lead to infinite recursion.
-
         self.alloca_queue.append((alloca_instr, typ))
 
     def process_alloca_queue(self):
@@ -438,6 +438,20 @@ class openmp_region_start(ir.Stmt):
             has_update = self.process_one_alloca(alloca_instr, typ) or has_update
         if has_update:
             self.update_tags()
+
+    def post_lowering_process_alloca_queue(self, enter_directive):
+        has_update = False
+        if config.DEBUG_OPENMP >= 1:
+            print("starting post_lowering_process_alloca_queue")
+        for alloca_instr, typ in self.alloca_queue:
+            has_update = self.process_one_alloca(alloca_instr, typ) or has_update
+        if has_update:
+            if config.DEBUG_OPENMP >= 1:
+                print("post_lowering_process_alloca_queue has update:", enter_directive.tags)
+            enter_directive.tags = openmp_tag_list_to_str(self.tags, self.lowerer, False)
+            enter_directive._clear_string_cache()
+            if config.DEBUG_OPENMP >= 1:
+                print("post_lowering_process_alloca_queue updated tags:", enter_directive.tags)
 
     def process_one_alloca(self, alloca_instr, typ):
         avar = alloca_instr.name
@@ -456,6 +470,8 @@ class openmp_region_start(ir.Stmt):
         if not self.needs_implicit_vars():
             return has_update
         if avar not in self.tag_vars:
+            if config.DEBUG_OPENMP >= 1:
+                print(f"LLVM variable {avar} didn't previously exist in the list of vars so adding as private.")
             self.tags.append(openmp_tag("QUAL.OMP.PRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
             #self.tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
             self.tag_vars.add(avar)
@@ -477,6 +493,7 @@ class openmp_region_start(ir.Stmt):
         context = lowerer.context
         builder = lowerer.builder
         library = lowerer.library
+        library.openmp = True
         self.block = builder.block
         self.builder = builder
         self.lowerer = lowerer
@@ -789,6 +806,10 @@ class openmp_region_start(ir.Stmt):
             pre_fn = builder.module.declare_intrinsic('llvm.directive.region.entry', (), fnty)
             assert(self.omp_region_var is None)
             self.omp_region_var = builder.call(pre_fn, [], tail=False, tags=tag_str)
+            # This is used by the post-lowering pass over LLVM to add LLVM alloca
+            # vars to the Numba IR openmp node and then when the exit of the region
+            # is detected then the tags in the enter directive are updated.
+            self.omp_region_var.save_orig_numba_openmp = self
             if config.DEBUG_OPENMP >= 2:
                 print("setting omp_region_var", self.omp_region_var._get_name())
         """
@@ -883,6 +904,129 @@ class openmp_region_end(ir.Stmt):
                 return t.arg
         return None
 
+
+def compute_cfg_from_llvm_blocks(blocks):
+    cfg = CFGraph()
+    name_to_index = {}
+    for b in blocks:
+        #print("b:", b.name, type(b.name))
+        cfg.add_node(b.name)
+
+    for bindex, b in enumerate(blocks):
+        term = b.terminator
+        #print("term:", b.name, term, type(term))
+        if isinstance(term, lir.instructions.Branch):
+            cfg.add_edge(b.name, term.operands[0].name)
+            name_to_index[b.name] = (bindex, [term.operands[0].name])
+        elif isinstance(term, lir.instructions.ConditionalBranch):
+            cfg.add_edge(b.name, term.operands[1].name)
+            cfg.add_edge(b.name, term.operands[2].name)
+            name_to_index[b.name] = (bindex, [term.operands[1].name, term.operands[2].name])
+        elif isinstance(term, lir.instructions.Ret):
+            name_to_index[b.name] = (bindex, [])
+        elif isinstance(term, lir.instructions.SwitchInstr):
+            cfg.add_edge(b.name, term.default.name)
+            for _, blk in term.cases:
+                cfg.add_edge(b.name, blk.name)
+            out_blks = [x[1].name for x in term.cases]
+            out_blks.append(term.default.name)
+            name_to_index[b.name] = (bindex, out_blks)
+        else:
+            print("Unknown term:", term, type(term))
+            assert(False) # Should never get here.
+
+    cfg.set_entry_point("entry")
+    cfg.process()
+    return cfg, name_to_index
+ 
+
+def compute_llvm_topo_order(blocks):
+    cfg, name_to_index = compute_cfg_from_llvm_blocks(blocks)
+    post_order = []
+    seen = set()
+
+    def _dfs_rec(node):
+        if node not in seen:
+            seen.add(node)
+            succs = cfg._succs[node]
+
+            # This is needed so that the inside of loops are
+            # handled first before their exits.
+            nexts = name_to_index[node][1]
+            if len(nexts) == 2:
+                succs = [nexts[1], nexts[0]]
+
+            for dest in succs:
+                if (node, dest) not in cfg._back_edges:
+                    _dfs_rec(dest)
+            post_order.append(node)
+
+    _dfs_rec(cfg.entry_point())
+    post_order.reverse()
+    return post_order, name_to_index
+
+
+class CollectUnknownLLVMVarsPrivate(lir.transforms.Visitor):
+    def __init__(self):
+        self.active_openmp_directives = []
+        self.start_num = 0
+
+    # Override the default function visitor to go in topo order
+    def visit_Function(self, func):
+        self._function = func
+        if len(func.blocks) == 0:
+            return None
+        if config.DEBUG_OPENMP >= 1:
+            print("Collect visit_Function:", func.blocks, type(func.blocks))
+        topo_order, name_to_index = compute_llvm_topo_order(func.blocks)
+        topo_order = list(topo_order)
+        if config.DEBUG_OPENMP >= 1:
+            print("topo_order:", topo_order)
+
+        for bbname in topo_order:
+            self.visit_BasicBlock(func.blocks[name_to_index[bbname][0]])
+
+        if config.DEBUG_OPENMP >= 1:
+            print("Collect visit_Function done")
+
+    def visit_Instruction(self, instr):
+        if len(self.active_openmp_directives) > 0:
+            if config.DEBUG_OPENMP >= 1:
+                print("Collect instr:", instr, type(instr))
+            for op in instr.operands:
+                if isinstance(op, lir.AllocaInstr):
+                    if config.DEBUG_OPENMP >= 1:
+                        print("Collect AllocaInstr operand:", op, op.name)
+                    for directive in self.active_openmp_directives:
+                        directive.save_orig_numba_openmp.alloca(op, None)
+                else:
+                    if config.DEBUG_OPENMP >= 2:
+                        print("non-alloca:", op, type(op))
+                    pass
+
+        if isinstance(instr, lir.CallInstr):
+            if instr.callee.name == 'llvm.directive.region.entry':
+                if config.DEBUG_OPENMP >= 1:
+                    print("Collect Found openmp region entry:", instr, type(instr), "\n", instr.tags, type(instr.tags))
+                self.active_openmp_directives.append(instr)
+                assert hasattr(instr, "save_orig_numba_openmp")
+            if instr.callee.name == 'llvm.directive.region.exit':
+                if config.DEBUG_OPENMP >= 1:
+                    print("Collect Found openmp region exit:", instr, type(instr), "\n", instr.tags, type(instr.tags))
+                enter_directive = self.active_openmp_directives.pop()
+                enter_directive.save_orig_numba_openmp.post_lowering_process_alloca_queue(enter_directive)
+
+
+def post_lowering_openmp(mod):
+    if config.DEBUG_OPENMP >= 1:
+        print("post_lowering_openmp")
+
+    # This will gather the information.
+    collect_fixup = CollectUnknownLLVMVarsPrivate()
+    collect_fixup.visit(mod)
+
+    if config.DEBUG_OPENMP >= 1:
+        print("post_lowering_openmp done")
 
 # Callback for ir_extension_usedefs
 def openmp_region_start_defs(region, use_set=None, def_set=None):

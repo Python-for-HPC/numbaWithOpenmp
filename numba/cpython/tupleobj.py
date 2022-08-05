@@ -12,6 +12,7 @@ from numba.core.imputils import (lower_builtin, lower_getattr_generic,
                                     RefType)
 from numba.core import typing, types, cgutils
 from numba.core.extending import overload_method, overload, intrinsic
+from numba.openmp import in_openmp_region
 
 
 @lower_builtin(types.NamedTupleClass, types.VarArg(types.Any))
@@ -230,9 +231,10 @@ def getitem_typed(context, builder, sig, args):
         bbend = builder.append_basic_block("typed_switch.end")
         switch = builder.switch(idx, bbelse)
 
-        with builder.goto_block(bbelse):
-            context.call_conv.return_user_exc(builder, IndexError,
-                                            errmsg_oob)
+        if not in_openmp_region(builder):
+            with builder.goto_block(bbelse):
+                context.call_conv.return_user_exc(builder, IndexError,
+                                                errmsg_oob)
 
         lrtty = context.get_value_type(sig.return_type)
         voidptrty = context.get_value_type(types.voidptr)
@@ -283,6 +285,24 @@ def getitem_typed(context, builder, sig, args):
                 phinode.add_incoming(builder.bitcast(value_slot, voidptrty),
                                      bbi)
                 builder.branch(bbend)
+            if i == 0 and in_openmp_region(builder):
+                with builder.goto_block(bbelse):
+                    value = builder.extract_value(tup, i)
+                    DOCAST = context.typing_context.unify_types(sig.args[0][i],
+                                            sig.return_type) == sig.return_type
+                    if DOCAST:
+                        value_slot = builder.alloca(lrtty,
+                                                    name="TYPED_VALUE_SLOT%s" % i)
+                        casted = context.cast(builder, value, sig.args[0][i],
+                                            sig.return_type)
+                        builder.store(casted, value_slot)
+                    else:
+                        value_slot = builder.alloca(value.type,
+                                                    name="TYPED_VALUE_SLOT%s" % i)
+                        builder.store(value, value_slot)
+                    phinode.add_incoming(builder.bitcast(value_slot, voidptrty),
+                                         bbelse)
+                    builder.branch(bbend)
 
         builder.position_at_end(bbend)
         res = builder.bitcast(phinode, lrtty.as_pointer())
@@ -318,9 +338,10 @@ def getitem_unituple(context, builder, sig, args):
         bbend = builder.append_basic_block("switch.end")
         switch = builder.switch(idx, bbelse)
 
-        with builder.goto_block(bbelse):
-            context.call_conv.return_user_exc(builder, IndexError,
-                                              errmsg_oob)
+        if not in_openmp_region(builder):
+            with builder.goto_block(bbelse):
+                context.call_conv.return_user_exc(builder, IndexError,
+                                                  errmsg_oob)
 
         lrtty = context.get_value_type(tupty.dtype)
         with builder.goto_block(bbend):
@@ -338,6 +359,11 @@ def getitem_unituple(context, builder, sig, args):
                 value = builder.extract_value(tup, i)
                 builder.branch(bbend)
                 phinode.add_incoming(value, bbi)
+            if i == 0 and in_openmp_region(builder):
+                with builder.goto_block(bbelse):
+                    value = builder.extract_value(tup, i)
+                    builder.branch(bbend)
+                    phinode.add_incoming(value, bbelse)
 
         builder.position_at_end(bbend)
         res = phinode

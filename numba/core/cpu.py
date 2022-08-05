@@ -17,7 +17,7 @@ import numba.core.entrypoints
 from numba.core.cpu_options import (ParallelOptions, FastMathOptions,
                                     InlineOptions)
 from numba.np import ufunc_db
-from numba.openmp import in_openmp_region
+from numba.openmp import in_openmp_region, post_lowering_openmp
 
 # Keep those structures in sync with _dynfunc.c.
 
@@ -194,6 +194,9 @@ class CPUContext(BaseContext):
     def post_lowering(self, mod, library):
         if self.fastmath:
             fastmathpass.rewrite_module(mod, self.fastmath)
+
+        if hasattr(library, "openmp") and library.openmp:
+            post_lowering_openmp(mod)
 
         if self.is32bit:
             # 32-bit machine needs to replace all 64-bit div/rem to avoid

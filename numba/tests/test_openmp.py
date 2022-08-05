@@ -221,6 +221,8 @@ class TestOpenmpBase(TestCase):
                     new_args.append(copy.deepcopy(x))
                 elif isinstance(x, list):
                     new_args.append(x[:])
+                elif isinstance(x, str):
+                    new_args.append(x)
                 else:
                     raise ValueError('Unsupported argument type encountered')
             return tuple(new_args)
@@ -355,7 +357,6 @@ class TestOpenmpParallelFor(TestOpenmpBase):
 
     # Failed with heterogeneous tuples or otherwise with abort from
     # Giorgis pass.
-    """
     def test_parallel_for_tuple(self):
         def test_impl(t):
             len_total = 0
@@ -364,7 +365,6 @@ class TestOpenmpParallelFor(TestOpenmpBase):
                     len_total += len(t[i])
             return len_total
         self.check(test_impl, ("32", "4", "test", "567", "re", ""))
-    """
 
     def test_range_step_2(self):
         def test_impl(N):
