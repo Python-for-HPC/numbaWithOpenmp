@@ -449,6 +449,8 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 print("post_lowering_process_alloca_queue has update:", enter_directive.tags)
             enter_directive.tags = openmp_tag_list_to_str(self.tags, self.lowerer, False)
+            # LLVM IR is doing some string caching and the following line is necessary to
+            # reset that caching so that the original tag text can be overwritten above.
             enter_directive._clear_string_cache()
             if config.DEBUG_OPENMP >= 1:
                 print("post_lowering_process_alloca_queue updated tags:", enter_directive.tags)
@@ -534,7 +536,7 @@ class openmp_region_start(ir.Stmt):
             #builder.module.device_triples = "spir64"
             if config.DEBUG_OPENMP >= 1:
                 print("openmp start region lower has target", type(lowerer.func_ir))
-            #func_ir = lowerer.func_ir.deepcopy()
+            # Make a copy of the host IR being lowered.
             func_ir = lowerer.func_ir.copy()
             for k,v in lowerer.func_ir.blocks.items():
                 print("region ids block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
@@ -552,8 +554,21 @@ class openmp_region_start(ir.Stmt):
             dprint_func_ir(func_ir, "func_ir after remove_dels")
 
             def fixup_openmp_pairs(blocks):
+                """The Numba IR nodes for the start and end of an OpenMP region
+                   contain references to each other.  When a target region is
+                   outlined that contains these pairs of IR nodes then if we
+                   simply shallow copy them then they'll point to their original
+                   matching pair in the original IR.  In this function, we go
+                   through and find what should be matching pairs in the
+                   outlined (target) IR and make those copies point to each
+                   other.
+                """
                 start_dict = {}
                 end_dict = {}
+
+                # Go through the blocks in the original IR and create a mapping
+                # between the id of the start nodes with their block label and
+                # position in the block.  Likewise, do the same for end nodes.
                 for label, block in func_ir.blocks.items():
                     for bindex, bstmt in enumerate(block.body):
                         if isinstance(bstmt, openmp_region_start):
@@ -566,6 +581,8 @@ class openmp_region_start(ir.Stmt):
                             end_dict[id(bstmt.start_region)] = (label, bindex)
                 assert(len(start_dict) == len(end_dict))
 
+                # For each start node that we found above, create a copy in the target IR
+                # and fixup the references of the copies to point at each other.
                 for start_id, blockindex in start_dict.items():
                     start_block, sbindex = blockindex
 
@@ -576,8 +593,11 @@ class openmp_region_start(ir.Stmt):
                         start_pre_copy = blocks[start_block].body[sbindex]
                         end_pre_copy = blocks[end_block].body[ebindex]
 
+                    # Create copy of the OpenMP start and end nodes in the target outlined IR.
                     blocks[start_block].body[sbindex] = copy.copy(blocks[start_block].body[sbindex])
                     blocks[end_block].body[ebindex] = copy.copy(blocks[end_block].body[ebindex])
+                    # Reset some fields in the start OpenMP region because the target IR
+                    # has not been lowered yet.
                     start_region = blocks[start_block].body[sbindex]
                     start_region.builder = None
                     start_region.block = None
@@ -589,6 +609,7 @@ class openmp_region_start(ir.Stmt):
                     end_region = blocks[end_block].body[ebindex]
                     assert(start_region.omp_region_var is None)
                     assert(len(start_region.alloca_queue) == 0)
+                    # Make start and end copies point at each other.
                     end_region.start_region = start_region
                     start_region.end_region = end_region
                     if config.DEBUG_OPENMP >= 2:
@@ -606,7 +627,9 @@ class openmp_region_start(ir.Stmt):
             internal_codegen = targetctx._internal_codegen
             #target_module = internal_codegen._create_empty_module("openmp.target")
 
+            # Find the start and end IR blocks for this offloaded region.
             start_block, end_block = find_target_start_end(func_ir, target_num)
+            # Compute the control-flow graph for our whole copy of host-side IR.
             cfg = compute_cfg_from_blocks(func_ir.blocks)
 
             remove_openmp_nodes_from_target = False
@@ -616,16 +639,29 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 print("start_block:", start_block)
                 print("end_block:", end_block)
+
+            # Compute which blocks will be in the outlined target region.  It
+            # starts with just the start_block.
             blocks_in_region = [start_block]
             def add_in_region(cfg, blk, blocks_in_region, end_block):
+                """For each successor in the CFG of the block we're currently
+                   adding to blocks_in_region, add that successor to
+                   blocks_in_region if it isn't the end_block.  Then,
+                   recursively call this routine for the added block to add
+                   its successors.
+                """
                 for out_blk, _ in cfg.successors(blk):
                     if out_blk != end_block and out_blk not in blocks_in_region:
                         blocks_in_region.append(out_blk)
                         add_in_region(cfg, out_blk, blocks_in_region, end_block)
 
+            # Calculate all the Numba IR blocks in the target region.
             add_in_region(cfg, start_block, blocks_in_region, end_block)
             if config.DEBUG_OPENMP >= 1:
                 print("blocks_in_region:", blocks_in_region)
+
+            # Find the variables that cross the boundary between the target
+            # region and the non-target host-side code.
             ins, outs = transforms.find_region_inout_vars(
                 blocks=func_ir.blocks,
                 livemap=func_ir.variable_lifetime.livemap,
@@ -633,6 +669,7 @@ class openmp_region_start(ir.Stmt):
                 returnto=end_block,
                 body_block_ids=blocks_in_region
             )
+            # Get the types of the variables live-in to the target region.
             outline_arg_typs = tuple([typemap[x] for x in ins])
             if config.DEBUG_OPENMP >= 1:
                 print("ins:", ins)
@@ -640,6 +677,8 @@ class openmp_region_start(ir.Stmt):
                 print("args:", state.args)
                 print("rettype:", state.return_type, type(state.return_type))
                 print("outline_arg_typs:", outline_arg_typs)
+            # Re-use Numba loop lifting code to extract the target region as
+            # its own function.
             region_info = transforms._loop_lift_info(loop=None,
                                                      inputs=ins,
                                                      outputs=outs,
@@ -647,7 +686,6 @@ class openmp_region_start(ir.Stmt):
                                                      returnto=end_block)
 
             region_blocks = dict((k, func_ir.blocks[k]) for k in blocks_in_region)
-            #region_blocks = dict((k, func_ir.blocks[k].copy()) for k in blocks_in_region)
             transforms._loop_lift_prepare_loop_func(region_info, region_blocks)
 
             if remove_openmp_nodes_from_target:
@@ -659,10 +697,14 @@ class openmp_region_start(ir.Stmt):
             # transfer_scope?
             # core/untyped_passes/versioning_loop_bodies
 
+            # Create the outlined IR from the blocks in the region, making the
+            # variables crossing into the regions argument.
             outlined_ir = func_ir.derive(blocks=region_blocks,
                                          arg_names=tuple(ins),
                                          arg_count=len(ins),
                                          force_non_generator=True)
+            # Change the name of the outlined function to prepend the
+            # word "device" to the function name.
             fparts = outlined_ir.func_id.func_qualname.split('.')
             fparts[-1] = "device" + fparts[-1]
             outlined_ir.func_id.func_qualname = ".".join(fparts)
@@ -682,6 +724,8 @@ class openmp_region_start(ir.Stmt):
             # What to do here?
             flags.forceinline = True
             #flags.fastmath = True
+            # Create a pipeline that only lowers the outlined target code.  No need to
+            # compile because it has already gone through those passes.
             class OnlyLower(compiler.CompilerBase):
                 def define_pipelines(self):
                     pms = []
@@ -689,9 +733,13 @@ class openmp_region_start(ir.Stmt):
                         pms.append(compiler.DefaultPassBuilder.define_nopython_lowering_pipeline(self.state))
                     return pms
 
+            # Create a copy of the state and the typemap inside of it so that changes
+            # for compiling the outlined IR don't effect the original compilation state
+            # of the host.
             state_copy = copy.copy(state)
             state_copy.typemap = copy.copy(typemap)
 
+            # Add entries in the copied typemap for the arguments to the outlined IR.
             for var_in in ins:
                 arg_name = "arg." + var_in
                 state_copy.typemap.pop(arg_name, None)
@@ -702,6 +750,7 @@ class openmp_region_start(ir.Stmt):
                 last_block.body = [end_target_node] + last_block.body[:]
 
             assert(isinstance(last_block.body[-1], ir.Return))
+            # Add typemap entry for the empty tuple return type.
             state_copy.typemap[last_block.body[-1].value.name] = types.containers.Tuple(())
 
             if config.DEBUG_OPENMP >= 1:
@@ -760,12 +809,10 @@ class openmp_region_start(ir.Stmt):
             for k,v in lowerer.func_ir.blocks.items():
                 print("block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
 
-            """
             target_elf = cres_library._get_compiled_object()
             if config.DEBUG_OPENMP >= 2:
                 print("target_elf:", type(target_elf))
                 sys.stdout.flush()
-            """
 
             """
             todd_gv1_typ = targetctx.get_value_type(types.intp) #lc.Type.int(64)
@@ -938,7 +985,7 @@ def compute_cfg_from_llvm_blocks(blocks):
     cfg.set_entry_point("entry")
     cfg.process()
     return cfg, name_to_index
- 
+
 
 def compute_llvm_topo_order(blocks):
     cfg, name_to_index = compute_cfg_from_llvm_blocks(blocks)
