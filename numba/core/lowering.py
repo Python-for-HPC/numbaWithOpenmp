@@ -230,7 +230,9 @@ class BaseLower(object):
             self.fndesc.unique_name))
 
         # Lower all blocks
-        for offset, block in sorted(self.blocks.items()):
+        topo_order = ir_utils.find_topo_order(self.blocks)
+        for offset in topo_order:
+            block = self.blocks[offset]
             bb = self.blkmap[offset]
             self.builder.position_at_end(bb)
             self.lower_block(block)
