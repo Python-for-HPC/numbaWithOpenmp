@@ -112,7 +112,6 @@ class TestOpenmpRunner(TestCase):
     def test_TestOpenmpPi(self):
         self.runner()
 
-    
 
 x86_only = unittest.skipIf(platform.machine() not in ('i386', 'x86_64'), 'x86 only test')
 
@@ -364,7 +363,7 @@ class TestOpenmpRuntimeFunctions(TestOpenmpBase):
             with openmp("parallel num_threads(1)"):
                 ia = omp_in_parallel()
             return oa, ia
-        self.assert_outputs_equal(test_impl(), (False, True))
+        self.assert_outputs_equal(test_impl(), (False, False))
 
 
 @linux_only
@@ -427,7 +426,7 @@ class TestOpenmpParallelForResults(TestOpenmpBase):
 
             return a
         self.check(test_impl, 12)
-    
+
     def test_parallel_for_range_backward_step(self):
         def test_impl(N):
             a = np.zeros(N, dtype=np.int32)
@@ -536,22 +535,23 @@ class TestOpenmpParallelClauses(TestOpenmpBase):
         assert(r[1] == a + b)
 
     def test_if_clause(self):
+        @njit
         def test_impl(s):
-            def set_arr(v):
-                for i in range(len(v)):
-                    v[i] = 1
+            omp_set_num_threads(5)
 
-            run, dont_run = 1, 0
-            ar = np.zeros(s, dtype=np.int32)
-            adr = np.zeros(s, dtype=np.int32)
+            run, dont_run = 2, 0
+            ar = np.full(s, 2, dtype=np.int32)
+            adr = np.full(s, 2, dtype=np.int32)
             with openmp("parallel for if(run)"):
-                set_arr(ar)
+                for i in range(len(ar)):
+                    ar[i] = omp_in_parallel()
             with openmp("parallel for if(dont_run)"):
-                set_arr(adr)
+                for i in range(len(adr)):
+                    adr[i] = omp_in_parallel()
             return ar, adr
         size = 20
         r = test_impl(size)
-        np.testing.assert_array_equal(r[0], np.ones(size))
+        np.testing.assert_array_equal(r[0], np.full(size, 2))
         np.testing.assert_array_equal(r[1], np.zeros(size))
 
     def test_avg_arr_prev_two_elements_base(self):
@@ -573,7 +573,7 @@ class TestOpenmpParallelClauses(TestOpenmpBase):
                     b[i] = (a[i] + a[i-1]) / 2.0
 
             return b
-        self.check(test_impl, 10, np.ones(10))        
+        self.check(test_impl, 10, np.ones(10))
 
     def test_avg_num_threads_clause_var(self):
         def test_impl(n, a):
@@ -632,7 +632,7 @@ class TestOpenmpDataClauses(TestOpenmpBase):
                     z = i
 
             return a, z
-        
+
         with self.assertRaises(UnspecifiedVarInDefaultNone) as raises:
             test_impl(100)
         self.assertIn("Variables with no data env clause", str(raises.exception))
@@ -641,12 +641,12 @@ class TestOpenmpDataClauses(TestOpenmpBase):
         @njit
         def test_impl(N, M):
             x = np.zeros(N)
+            y = np.zeros(N)
             z = 3.14
             i = 7
-            with openmp("parallel"):
+            with openmp("parallel private(i)"):
                 yn = M + 1
                 zs = z
-                y = np.zeros(N)
                 with openmp("for"):
                     for i in range(N):
                         y[i] = yn + 2*(i+1)
@@ -658,7 +658,6 @@ class TestOpenmpDataClauses(TestOpenmpBase):
             return x, y, zs, z, i
         N, M = 10, 5
         r = test_impl(N, M)
-        print("y =", r[1])
         np.testing.assert_array_equal(r[0], np.arange(M+3, M+N+3))
         np.testing.assert_array_equal(r[1], np.arange(M+3, M+2*N+2, 2))
         assert(r[2] == 3.14)
@@ -730,13 +729,13 @@ class TestOpenmpDataClauses(TestOpenmpBase):
                 print("Number of threads error: too many threads",
                         numthrds, NTHREADS)
                 nerr = nerr+1
-        
+
             if nerr > 0:
                 print(nerr, """ errors when testing parallel, private, shared,
                             firstprivate, critical  and single""")
 
             return nerr
-        
+
         assert(test_impl() == 0)
 
     def test_privates(self):
@@ -774,7 +773,7 @@ class TestOpenmpDataClauses(TestOpenmpBase):
 
     def test_private_retain_value_for(self):
         @njit
-        def test_impl():        
+        def test_impl():
             x = 5
             with openmp("parallel private(x)"):
                 with openmp("for"):
@@ -785,7 +784,7 @@ class TestOpenmpDataClauses(TestOpenmpBase):
 
     def test_private_retain_value_for_param(self):
         @njit
-        def test_impl(x):        
+        def test_impl(x):
             with openmp("parallel private(x)"):
                 with openmp("for"):
                     for i in range(10):
@@ -822,7 +821,7 @@ class TestOpenmpDataClauses(TestOpenmpBase):
                 y = 40
             return x, y
         assert(test_impl() == (5, 7))
-    
+
     def test_private_retain_array(self):
         @njit
         def test_impl(N, x):
@@ -871,6 +870,7 @@ class TestOpenmpDataClauses(TestOpenmpBase):
         @njit
         def test_impl(N):
             a = np.zeros(N)
+            si = 0
             with openmp("parallel for lastprivate(si)"):
                 for i in range(N):
                     si = i + 1
@@ -948,7 +948,6 @@ class TestOpenmpDataClauses(TestOpenmpBase):
             return b, linearj
         N = 50
         r = test_impl(N)
-        print(r[0])
         np.testing.assert_array_equal(r[0], np.arange(2, N*2-1, 4))
         assert(r[1] == N//2-1)
 
@@ -1138,7 +1137,7 @@ class TestOpenmpConcurrency(TestOpenmpBase):
             return count
         iters = 1000
         self.check(test_impl, 2, iters)
-        
+
     def test_critical_threads2(self):
         @njit
         def test_impl(N):
@@ -1159,7 +1158,6 @@ class TestOpenmpConcurrency(TestOpenmpBase):
                         else:
                             sum -= 1
                     c -= 1 + sum
-            print("c =", c)
             return np.sort(ca)
         nt = 16
         np.testing.assert_array_equal(test_impl(nt), np.arange(nt))
@@ -1265,7 +1263,6 @@ class TestOpenmpConcurrency(TestOpenmpBase):
                         pass
                     with openmp("atomic update"):
                         a[index] += b
-            print("a =", a)
             return a
         nt, N, c = 27, 8, 6
         rc = np.zeros(N)
@@ -1341,7 +1338,6 @@ class TestOpenmpConcurrency(TestOpenmpBase):
                             else:
                                 sum -= 1
                         count += 1 + sum
-            print(ta)
             return np.sort(ta), count
         nt = 5
         r = test_impl(nt)
@@ -1441,7 +1437,7 @@ class TestOpenmpTask(TestOpenmpBase):
                         with openmp("task"):
                             a[i] = omp_get_thread_num()
             return a
-        
+
         with self.assertRaises(AssertionError) as raises:
             v = test_impl(15)
             np.testing.assert_equal(v[0], v)
@@ -1454,8 +1450,6 @@ class TestOpenmpTask(TestOpenmpBase):
                 y = n1
                 with openmp("single"):
                     with openmp("task"):
-                        print("x =", x)
-                        print("y =", y)
                         xa = x == n1
                         ya = y == n1
                         x, y = n2, n2
@@ -1464,9 +1458,7 @@ class TestOpenmpTask(TestOpenmpBase):
             return (x, ysave), (xa, ya)
         n1, n2 = 1, 2
         r = test_impl(n1, n2)
-        print(r[1])
         self.assert_outputs_equal(r[1], (True, True))
-        print(r[0])
         self.assert_outputs_equal(r[0], (n2, n1))
 
     # Segmentation fault
@@ -1492,7 +1484,6 @@ class TestOpenmpTask(TestOpenmpBase):
             return sa
         ntsks = 15
         r = test_impl(ntsks)
-        print(r)
         np.testing.assert_array_equal(r, np.ones(ntsks))
 
     # Segmentation fault
@@ -1516,7 +1507,6 @@ class TestOpenmpTask(TestOpenmpBase):
         with self.assertRaises(AssertionError) as raises:
             ntsks = 15
             r = test_impl(ntsks)
-            print(r)
             np.testing.assert_array_equal(r, np.ones(ntsks))
 
     # Error with commented out code, other version never finished running
@@ -1534,7 +1524,6 @@ class TestOpenmpTask(TestOpenmpBase):
                                 with openmp("task"):
                                     a[i] = omp_get_thread_num() + 1
                     with openmp("barrier"):
-                        print(a)
                         ret = np.all(a)
             return ret
         assert(test_impl(4))
@@ -1588,7 +1577,6 @@ class TestOpenmpTask(TestOpenmpBase):
         r = test_impl(15, 10)
         np.testing.assert_array_equal(r[0], np.ones(r[0].shape))
         with self.assertRaises(AssertionError) as raises:
-            print(r[1])
             np.testing.assert_array_equal(r[1], np.ones(r[1].shape))
 
     # Tree is not iterable
@@ -1606,10 +1594,7 @@ class TestOpenmpTask(TestOpenmpBase):
                             else:
                                 sum -= 1
                         r = flag + sum
-                        print("flag =", flag)
-                        print("r =", r)
                     flag = 0
-                    print("Reached flag 0")
             return r
         assert(test_impl())
 
@@ -1639,7 +1624,6 @@ class TestOpenmpTask(TestOpenmpBase):
 
         with self.assertRaises(AssertionError) as raises:
             sids, cids = test_impl(15)
-            print(sids, cids)
             np.testing.assert_array_equal(sids, cids)
 
     # Failed
@@ -1674,7 +1658,6 @@ class TestOpenmpTask(TestOpenmpBase):
             return yielded_tasks
 
         yt = test_impl(50)
-        print(yt)
         assert(np.any(yt))
 
     # Parser error
@@ -1710,7 +1693,6 @@ class TestOpenmpTask(TestOpenmpBase):
 
         ntsks, c = 15, 5
         fns, ins, da = test_impl(ntsks, c)
-        print(fns, ins)
         np.testing.assert_array_equal(fns[c:], ins[c:])
         np.testing.assert_array_equal(da, np.ones(ntsks))
 
@@ -1754,10 +1736,9 @@ class TestOpenmpTask(TestOpenmpBase):
                             count += i + 1
                             a[i] = count
             return a
-        
+
         ntsks = 15
         r = test_impl(ntsks)
-        print(r)
         rc = np.zeros(ntsks)
         for i in range(ntsks):
             rc[i] = sum(range(i+1, ntsks+1))
@@ -1802,7 +1783,6 @@ class TestOpenmpTask(TestOpenmpBase):
                                 da[i] = 1 if done else 0
                             with openmp("task shared(x) depend(in: x)"):
                                 a[i] = x
-            print(a, da)
             return a, da
         self.check(test_impl, 15)
 
@@ -1849,7 +1829,7 @@ class TestOpenmpTaskloop(TestOpenmpBase):
                 with openmp("single"):
                     with openmp("taskloop num_tasks(ntsks)"):
                         for i in range(iters):
-                            a[i] = omp_get_thread_num()     
+                            a[i] = omp_get_thread_num()
             return a
         nt, iters, ntsks = 8, 10, 4
         assert(len(np.unique(test_impl(nt, iters, ntsks))) <= ntsks)
@@ -1863,7 +1843,7 @@ class TestOpenmpTaskloop(TestOpenmpBase):
                     iters_per_task = iters//ntsks
                     with openmp("taskloop grainsize(iters_per_task)"):
                         for i in range(iters):
-                            a[i] = omp_get_thread_num()     
+                            a[i] = omp_get_thread_num()
             return a
         nt, iters, ntsks = 8, 10, 4
         assert(len(np.unique(test_impl(nt, iters, ntsks))) <= ntsks)
@@ -1887,7 +1867,7 @@ class TestOpenmpTaskloop(TestOpenmpBase):
         r = test_impl(ntsks)
         np.testing.assert_array_equal(r[0], np.ones(ntsks))
         np.testing.assert_array_equal(r[1], np.ones(ntsks))
-        
+
     def test_taskloop_collapse(self):
         @njit
         def test_impl(ntsks, nt):
@@ -1932,13 +1912,12 @@ class TestOpenmpPi(TestOpenmpBase):
                         the_sum += 4.0 / (1.0 + x * x)
 
             pi = step * the_sum
-            print(pi)
             return pi
 
         self.check(test_impl, 100000)
 
     def test_pi_loop_combined(self):
-        def test_impl(num_steps):        
+        def test_impl(num_steps):
             step = 1.0 / num_steps
 
             the_sum = 0.0
