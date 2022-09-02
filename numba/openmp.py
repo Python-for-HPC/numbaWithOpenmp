@@ -58,6 +58,11 @@ class NameSlice:
         return "NameSlice(" + str(self.name) + "," + str(self.the_slice) + ")"
 
 
+class StringLiteral:
+    def __init__(self, x):
+        self.x = x
+
+
 class openmp_tag(object):
     def __init__(self, name, arg=None, load=False):
         self.name = name
@@ -157,6 +162,10 @@ class openmp_tag(object):
             else:
                 arg_str = lowerer.getvar(x)
                 decl = arg_str.get_decl()
+        elif isinstance(x, StringLiteral):
+            # Have to escape the special characters.
+            escaped = x.x.replace("\\\\","\\\\\\\\").replace("\"","\\22")
+            decl = f"[{len(x.x)} x i8] c\"{escaped}\""
         elif isinstance(x, int):
             decl = "i32 " + str(x)
         else:
@@ -531,6 +540,7 @@ class openmp_region_start(ir.Stmt):
             print("otag:", otag)
         """
 
+        host_side_target_tags = []
         target_num = self.has_target()
         tgv = None
         if target_num is not None and self.target_copy != True:
@@ -771,6 +781,8 @@ class openmp_region_start(ir.Stmt):
 
             if config.DEBUG_OPENMP >= 2:
                 print("cres:", type(cres))
+                print("fndesc:", cres.fndesc, cres.fndesc.mangled_name)
+                print("metadata:", cres.metadata)
             cres_library = cres.library
             if config.DEBUG_OPENMP >= 2:
                 print("cres_library:", type(cres_library))
@@ -804,14 +816,22 @@ class openmp_region_start(ir.Stmt):
             #dev_image = cgutils.add_global_variable(mod, bytes_array_typ, ".omp_offloading.device_image")
             #dev_image.initializer = lc.Constant.array(cgutils.int8_t, target_elf)
             #dev_image.initializer = lc.Constant.array(cgutils.int8_t, target_elf)
-            elftext = cgutils.make_bytearray(target_elf)
-            dev_image = targetctx.insert_unique_const(mod, ".omp_offloading.device_image", elftext)
+            add_target_globals_in_numba = int(os.environ.get("NUMBA_OPENMP_ADD_TARGET_GLOBALS", 0))
+            if add_target_globals_in_numba != 0:
+                elftext = cgutils.make_bytearray(target_elf)
+                dev_image = targetctx.insert_unique_const(mod, ".omp_offloading.device_image", elftext)
+                mangled_name = cgutils.make_bytearray(cres.fndesc.mangled_name.encode("utf-8") + b"\x00")
+                mangled_var = targetctx.insert_unique_const(mod, ".omp_offloading.entry_name", mangled_name)
 
-            llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 1)
-            llvmused_gv = cgutils.add_global_variable(mod, llvmused_typ, "llvm.used")
-            llvmused_syms = [lc.Constant.bitcast(dev_image, cgutils.voidptr_t)]
-            llvmused_gv.initializer = lc.Constant.array(cgutils.voidptr_t, llvmused_syms)
-            llvmused_gv.linkage = "appending"
+                llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 2)
+                llvmused_gv = cgutils.add_global_variable(mod, llvmused_typ, "llvm.used")
+                llvmused_syms = [lc.Constant.bitcast(dev_image, cgutils.voidptr_t),
+                                 lc.Constant.bitcast(mangled_var, cgutils.voidptr_t)]
+                llvmused_gv.initializer = lc.Constant.array(cgutils.voidptr_t, llvmused_syms)
+                llvmused_gv.linkage = "appending"
+            else:
+                host_side_target_tags.append(openmp_tag("QUAL.OMP.TARGET.DEV_FUNC", StringLiteral(cres.fndesc.mangled_name)))
+                host_side_target_tags.append(openmp_tag("QUAL.OMP.TARGET.ELF", StringLiteral(str(target_elf))))
 
             """
             llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 1)
@@ -845,7 +865,7 @@ class openmp_region_start(ir.Stmt):
 
         llvm_token_t = lc.Type.token()
         fnty = lir.FunctionType(llvm_token_t, [])
-        tags_to_include = self.tags
+        tags_to_include = self.tags + host_side_target_tags
         #tags_to_include = list(filter(lambda x: x.name != "DIR.OMP.TARGET", tags_to_include))
         self.filtered_tag_length = len(tags_to_include)
         if config.DEBUG_OPENMP >= 1:
