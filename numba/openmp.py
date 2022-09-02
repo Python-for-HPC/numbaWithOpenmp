@@ -496,6 +496,7 @@ class openmp_region_start(ir.Stmt):
         typemap = lowerer.fndesc.typemap
         context = lowerer.context
         builder = lowerer.builder
+        mod = builder.module
         library = lowerer.library
         library.openmp = True
         self.block = builder.block
@@ -640,7 +641,7 @@ class openmp_region_start(ir.Stmt):
                 print("start_block:", start_block)
                 print("end_block:", end_block)
 
-            blocks_in_region = self.get_blocks_between_start_end(func_ir.blocks, start_block, end_block)
+            blocks_in_region = get_blocks_between_start_end(func_ir.blocks, start_block, end_block)
             if config.DEBUG_OPENMP >= 1:
                 print("blocks_in_region:", blocks_in_region)
 
@@ -690,7 +691,7 @@ class openmp_region_start(ir.Stmt):
             # Change the name of the outlined function to prepend the
             # word "device" to the function name.
             fparts = outlined_ir.func_id.func_qualname.split('.')
-            fparts[-1] = "device" + fparts[-1]
+            fparts[-1] = "device" + str(target_num) + fparts[-1]
             outlined_ir.func_id.func_qualname = ".".join(fparts)
             outlined_ir.func_id.func_name = fparts[-1]
             uid = next(bytecode.FunctionIdentity._unique_ids)
@@ -794,9 +795,25 @@ class openmp_region_start(ir.Stmt):
                 print("block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
 
             target_elf = cres_library._get_compiled_object()
-            if config.DEBUG_OPENMP >= 2:
-                print("target_elf:", type(target_elf))
+            if config.DEBUG_OPENMP >= 1:
+                print("target_elf:", type(target_elf), len(target_elf))
                 sys.stdout.flush()
+
+            #bytes_array_typ = lir.ArrayType(cgutils.voidptr_t, len(target_elf))
+            #bytes_array_typ = lir.ArrayType(cgutils.int8_t, len(target_elf))
+            #dev_image = cgutils.add_global_variable(mod, bytes_array_typ, ".omp_offloading.device_image")
+            #dev_image.initializer = lc.Constant.array(cgutils.int8_t, target_elf)
+            #dev_image.initializer = lc.Constant.array(cgutils.int8_t, target_elf)
+            elftext = cgutils.make_bytearray(target_elf)
+            dev_image = targetctx.insert_unique_const(mod, ".omp_offloading.device_image", elftext)
+
+            """
+            llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 1)
+            llvmused_gv = cgutils.add_global_variable(mod, llvmused_typ, "llvm.used")
+            llvmused_syms = [lc.Constant.bitcast(dev_image, cgutils.voidptr_t)]
+            llvmused_gv.initializer = lc.Constant.array(cgutils.voidptr_t, llvmused_syms)
+            llvmused_gv.linkage = "appending"
+            """
 
             """
             todd_gv1_typ = targetctx.get_value_type(types.intp) #lc.Type.int(64)
@@ -1286,6 +1303,25 @@ def replace_ssa_vars(blocks, vardict):
             new_vardict[l] = r
     visit_vars(blocks, replace_ssa_var_callback, new_vardict)
 
+
+def get_blocks_between_start_end(blocks, start_block, end_block):
+    cfg = compute_cfg_from_blocks(blocks)
+    blocks_in_region = [start_block]
+    def add_in_region(cfg, blk, blocks_in_region, end_block):
+        """For each successor in the CFG of the block we're currently
+           adding to blocks_in_region, add that successor to
+           blocks_in_region if it isn't the end_block.  Then,
+           recursively call this routine for the added block to add
+           its successors.
+        """
+        for out_blk, _ in cfg.successors(blk):
+            if out_blk != end_block and out_blk not in blocks_in_region:
+                blocks_in_region.append(out_blk)
+                add_in_region(cfg, out_blk, blocks_in_region, end_block)
+
+    # Calculate all the Numba IR blocks in the target region.
+    add_in_region(cfg, start_block, blocks_in_region, end_block)
+    return blocks_in_region
 
 class OpenmpVisitor(Transformer):
     target_num = 0
@@ -2093,25 +2129,6 @@ class OpenmpVisitor(Transformer):
 
         return None
 
-    def get_blocks_between_start_end(self, blocks, start_block, end_block):
-        cfg = compute_cfg_from_blocks(blocks)
-        blocks_in_region = [start_block]
-        def add_in_region(cfg, blk, blocks_in_region, end_block):
-            """For each successor in the CFG of the block we're currently
-               adding to blocks_in_region, add that successor to
-               blocks_in_region if it isn't the end_block.  Then,
-               recursively call this routine for the added block to add
-               its successors.
-            """
-            for out_blk, _ in cfg.successors(blk):
-                if out_blk != end_block and out_blk not in blocks_in_region:
-                    blocks_in_region.append(out_blk)
-                    add_in_region(cfg, out_blk, blocks_in_region, end_block)
-
-        # Calculate all the Numba IR blocks in the target region.
-        add_in_region(cfg, start_block, blocks_in_region, end_block)
-        return blocks_in_region
-
     # --------- Parser functions ------------------------
 
     def barrier_directive(self, args):
@@ -2478,7 +2495,7 @@ class OpenmpVisitor(Transformer):
             print("post get_explicit_vars:", explicit_privates)
             for k,v in vars_in_explicit_clauses.items():
                 print("vars_in_explicit post:", k, v)
-        blocks_in_region = self.get_blocks_between_start_end(self.blocks, self.blk_start, self.blk_end)
+        blocks_in_region = get_blocks_between_start_end(self.blocks, self.blk_start, self.blk_end)
         if config.DEBUG_OPENMP >= 1:
             print(1, "blocks_in_region:", blocks_in_region)
         replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc)
