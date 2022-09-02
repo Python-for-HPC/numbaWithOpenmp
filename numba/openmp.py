@@ -2153,6 +2153,80 @@ class OpenmpVisitor(Transformer):
         or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TASKWAIT")], self.loc)
         sblk.body = [or_start] + [or_end] + sblk.body[:]
 
+    def taskyield_directive(self, args):
+        raise NotImplementedError("Taskyield currently unsupported.")
+
+    # Don't need a rule for BARRIER.
+    # Don't need a rule for TASKWAIT.
+    # Don't need a rule for TASKYIELD.
+
+    def taskgroup_directive(self, args):
+        raise NotImplementedError("Taskgroup currently unsupported.")
+
+    # Don't need a rule for taskgroup_construct.
+    # Don't need a rule for TASKGROUP.
+
+    # Don't need a rule for openmp_construct.
+
+    def teams_distribute_parallel_for_simd_clause(self, args):
+        raise NotImplementedError("""Simd clause for target teams
+                                 distribute parallel loop currently unsupported.""")
+        if config.DEBUG_OPENMP >= 1:
+            print("visit device_clause", args, type(args))
+
+    # Don't need a rule for for_simd_construct.
+
+    def for_simd_directive(self, args):
+        raise NotImplementedError("For simd currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit for_simd_directive", args, type(args))
+
+    def for_simd_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit for_simd_clause",
+                  args, type(args), args[0])
+        return args[0]
+
+    # Don't need a rule for parallel_for_simd_construct.
+
+    def parallel_for_simd_directive(self, args):
+        raise NotImplementedError("Parallel for simd currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit parallel_for_simd_directive", args, type(args))
+
+    def parallel_for_simd_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit parallel_for_simd_clause", args, type(args), args[0])
+        return args[0]
+
+    # Don't need a rule for target_data_construct.
+
+    def target_data_directive(self, args):
+        raise NotImplementedError("Target data directive currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_data_directive", args, type(args))
+
+    # Don't need a rule for DATA.
+
+    def target_data_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_data_clause", args, type(args), args[0])
+        return args[0]
+
+    def device_clause(self, args):
+        raise NotImplementedError("Device clause currently unsupported.")
+        if config.DEBUG_OPENMP >= 1:
+            print("visit device_clause", args, type(args))
+
     def map_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit map_clause", args, type(args), args[0])
@@ -2171,6 +2245,77 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             print("visit map_type", args, type(args), args[0])
         return str(args[0])
+
+    # Don't need a rule for TO.
+    # Don't need a rule for FROM.
+    # Don't need a rule for ALLOC.
+    # Don't need a rule for TOFROM.
+    # Don't need a rule for parallel_sections_construct.
+
+    def parallel_sections_directive(self, args):
+        raise NotImplementedError("Parallel sections currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit parallel_sections_directive", args, type(args))
+
+    def parallel_sections_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit parallel_sections_clause", args, type(args), args[0])
+        return args[0]
+
+    # Don't need a rule for sections_construct.
+
+    def sections_directive(self, args):
+        raise NotImplementedError("Sections directive currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit sections_directive", args, type(args))
+
+    # Don't need a rule for SECTIONS.
+
+    def sections_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit sections_clause", args, type(args), args[0])
+        return args[0]
+
+    # Don't need a rule for section_construct.
+
+    def section_directive(self, args):
+        raise NotImplementedError("Section directive currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit section_directive", args, type(args))
+
+    # Don't need a rule for SECTION.
+    # Don't need a rule for atomic_construct.
+
+    def atomic_directive(self, args):
+        raise NotImplementedError("Atomic currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit atomic_directive", args, type(args))
+
+    # Don't need a rule for ATOMIC.
+
+    def atomic_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit atomic_clause", args, type(args), args[0])
+        return args[0]
+
+    # Don't need a rule for READ.
+    # Don't need a rule for WRITE.
+    # Don't need a rule for UPDATE.
+    # Don't need a rule for CAPTURE.
+    # Don't need a rule for seq_cst_clause.
+    # Don't need a rule for critical_construct.
 
     def critical_directive(self, args):
         sblk = self.blocks[self.blk_start]
@@ -2200,6 +2345,9 @@ class OpenmpVisitor(Transformer):
         sblk.body = [or_start] + sblk.body[:]
         eblk.body = reset + [or_end] + eblk.body[:]
 
+    # Don't need a rule for CRITICAL.
+    # Don't need arule for target_construct.
+
     def target_directive(self, args):
         clauses = args[1:]
         tag_clauses = self.flatten(clauses)
@@ -2221,6 +2369,26 @@ class OpenmpVisitor(Transformer):
             print("visit target_clause", args, type(args), args[0])
         return args[0]
 
+    # Don't need a rule for target_update_construct.
+
+    def target_update_directive(self, args):
+        raise NotImplementedError("Target update currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_update_directive", args, type(args))
+
+    def target_update_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_update_clause", args, type(args), args[0])
+        return args[0]
+
+    def motion_clause(self, args):
+        raise NotImplementedError("Motion clause currently unsupported.")
+        if config.DEBUG_OPENMP >= 1:
+            print("visit motion_clause", args, type(args))
+
     def variable_array_section_list(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit variable_array_section_list", args, type(args))
@@ -2229,6 +2397,19 @@ class OpenmpVisitor(Transformer):
         else:
             args[0].append(args[1])
             return args[0]
+
+    def array_section(self, args):
+        raise NotImplementedError("No implementation for array sections.")
+        if config.DEBUG_OPENMP >= 1:
+            print("visit array_section", args, type(args))
+
+    def array_section_subscript(self, args):
+        raise NotImplementedError("No implementation for array section subscript.")
+        if config.DEBUG_OPENMP >= 1:
+            print("visit array_section_subscript", args, type(args))
+
+    # Don't need a rule for TARGET.
+    # Don't need a rule for single_construct.
 
     def single_directive(self, args):
         sblk = self.blocks[self.blk_start]
@@ -2242,9 +2423,91 @@ class OpenmpVisitor(Transformer):
         sblk.body = [or_start] + sblk.body[:]
         eblk.body = [or_end]   + eblk.body[:]
 
-    def NOWAIT(self, args):
-        return "nowait"
+    def single_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit single_clause", args, type(args), args[0])
+        return args[0]
 
+    # Don't need a rule for unique_single_clause.
+    #def NOWAIT(self, args):
+    #    return "nowait"
+    # Don't need a rule for NOWAIT.
+    # Don't need a rule for master_construct.
+
+    def master_directive(self, args):
+        raise NotImplementedError("Master directive currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit master_directive", args, type(args))
+
+    # Don't need a rule for simd_construct.
+
+    def simd_directive(self, args):
+        raise NotImplementedError("Simd directive currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit simd_directive", args, type(args))
+
+    # Don't need a rule for SIMD.
+
+    def simd_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit simd_clause", args, type(args), args[0])
+        return args[0]
+
+    def aligned_clause(self, args):
+        raise NotImplementedError("Aligned clause currently unsupported.")
+        if config.DEBUG_OPENMP >= 1:
+            print("visit aligned_clause", args, type(args))
+
+    # Don't need a rule for declare_simd_construct.
+
+    def declare_simd_directive_seq(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit declare_simd_directive_seq", args, type(args), args[0])
+        return args[0]
+
+    def declare_simd_directive(self, args):
+        raise NotImplementedError("Declare simd directive currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit declare_simd_directive", args, type(args))
+
+    def declare_simd_clause(self, args):
+        raise NotImplementedError("Declare simd clauses currently unsupported.")
+        if config.DEBUG_OPENMP >= 1:
+            print("visit declare_simd_clause", args, type(args))
+
+    # Don't need a rule for ALIGNED.
+
+    def inbranch_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit inbranch_clause", args, type(args), args[0])
+        return args[0]
+
+    # Don't need a rule for INBRANCH.
+    # Don't need a rule for NOTINBRANCH.
+
+    def uniform_clause(self, args):
+        raise NotImplementedError("Uniform clause currently unsupported.")
+        if config.DEBUG_OPENMP >= 1:
+            print("visit uniform_clause", args, type(args))
+
+    # Don't need a rule for UNIFORM.
+
+    def collapse_expr(self, args):
+        raise NotImplementedError("Collapse currently unsupported.")
+        if config.DEBUG_OPENMP >= 1:
+            print("visit collapse_expr", args, type(args))
+
+    # Don't need a rule for COLLAPSE.
+    # Don't need a rule for task_construct.    
     # Don't need a rule for TASK.
 
     def task_directive(self, args):
@@ -2290,6 +2553,25 @@ class OpenmpVisitor(Transformer):
             print("visit task_clause", args, type(args), args[0])
         return args[0]
 
+    def unique_task_clause(self, args):
+        raise NotImplementedError("Task-related clauses currently unsupported.")
+        if config.DEBUG_OPENMP >= 1:
+            print("visit unique_task_clause", args, type(args))
+
+    # Don't need a rule for DEPEND.
+    # Don't need a rule for FINAL.
+    # Don't need a rule for UNTIED.
+    # Don't need a rule for MERGEABLE.
+
+    def dependence_type(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit dependence_type", args, type(args), args[0])
+        return args[0]
+
+    # Don't need a rule for IN.
+    # Don't need a rule for OUT.
+    # Don't need a rule for INOUT.
+
     def data_default_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit data_default_clause", args, type(args), args[0])
@@ -2332,6 +2614,8 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for PRIVATE.
 
     def copyprivate_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit copyprivate_clause", args, type(args), args[0])
         (_, var_list) = args
         ret = []
         for var in var_list:
@@ -2363,6 +2647,8 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for LASTPRIVATE.
 
     def shared_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit shared_clause", args, type(args), args[0])
         (_, var_list) = args
         ret = []
         for var in var_list:
@@ -2372,6 +2658,8 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for SHARED.
 
     def copyin_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit copyin_clause", args, type(args), args[0])
         (_, var_list) = args
         ret = []
         for var in var_list:
@@ -2379,7 +2667,6 @@ class OpenmpVisitor(Transformer):
         return ret
 
     # Don't need a rule for COPYIN.
-
     # Don't need a rule for REDUCTION.
 
     def data_reduction_clause(self, args):
@@ -2407,7 +2694,7 @@ class OpenmpVisitor(Transformer):
             print("visit const_num_or_var", args, type(args))
         return args[0]
 
-    # Don't need a rule for PARALLEL_CONSTRUCT.
+    # Don't need a rule for parallel_construct.
 
     def parallel_directive(self, args):
         sblk = self.blocks[self.blk_start]
@@ -2539,13 +2826,13 @@ class OpenmpVisitor(Transformer):
     def parallel_clause(self, args):
         (val,) = args
         if config.DEBUG_OPENMP >= 1:
-            print("visit parallel_clause", args, type(args))
+            print("visit parallel_clause", args, type(args), args[0])
         return val
 
     def unique_parallel_clause(self, args):
         (val,) = args
         if config.DEBUG_OPENMP >= 1:
-            print("visit unique_parallel_clause", args, type(args))
+            print("visit unique_parallel_clause", args, type(args), args[0])
         assert(isinstance(val, openmp_tag))
         return val
 
@@ -2603,16 +2890,28 @@ class OpenmpVisitor(Transformer):
         elif val == 'ordered':
             return openmp_tag("QUAL.OMP.ORDERED", 0)
 
+    # Don't need a rule for LINEAR.
+
+    def linear_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit linear_clause", args, type(args), args[0])
+        return args[0]
+
+    """
+    Linear_expr not in grammar
     def linear_expr(self, args):
         (_, var, step) = args
         if config.DEBUG_OPENMP >= 1:
             print("visit linear_expr", args, type(args))
         return openmp_tag("QUAL.OMP.LINEAR", [var, step])
+    """
 
+    """
     def ORDERED(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit ordered", args, type(args))
         return "ordered"
+    """
 
     def sched_no_expr(self, args):
         (_, kind) = args
@@ -2651,6 +2950,12 @@ class OpenmpVisitor(Transformer):
             print("visit schedule_kind", args, type(args))
         return kind
 
+    # Don't need a rule for STATIC.
+    # Don't need a rule for DYNAMIC.
+    # Don't need a rule for GUIDED.
+    # Don't need a rule for RUNTIME.
+
+    """
     def STATIC(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit STATIC", args, type(args))
@@ -2669,7 +2974,8 @@ class OpenmpVisitor(Transformer):
     def RUNTIME(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit RUNTIME", args, type(args))
-        return "RUNTIME"
+        return "runtime"
+    """
 
     def COLON(self, args):
         if config.DEBUG_OPENMP >= 1:
@@ -2730,6 +3036,51 @@ class OpenmpVisitor(Transformer):
             return "ADD"
         assert(0)
 
+    def threadprivate_directive(self, args):
+        raise NotImplementedError("Threadprivate currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit threadprivate_directive", args, type(args))
+
+    def cancellation_point_directive(self, args):
+        raise NotImplementedError("""Explicit cancellation points
+                                 currently unsupported.""")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit cancellation_point_directive", args, type(args))
+
+    def construct_type_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit construct_type_clause", args, type(args), args[0])
+        return args[0]
+    
+    def cancel_directive(self, args):
+        raise NotImplementedError("Cancel directive currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit cancel_directive", args, type(args))
+
+    # Don't need a rule for ORDERED.
+
+    def flush_directive(self, args):
+        raise NotImplementedError("Flush directive currently unsupported.")
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit flush_directive", args, type(args))
+
+    def region_phrase(self, args):
+        raise NotImplementedError("No implementation for region phrase.")
+        if config.DEBUG_OPENMP >= 1:
+            print("visit region_phrase", args, type(args))
+
     def PYTHON_NAME(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit PYTHON_NAME", args, type(args), str(args))
@@ -2756,6 +3107,7 @@ openmp_grammar = r"""
     TASKYIELD: "taskyield"
     taskgroup_directive: TASKGROUP
     taskgroup_construct: taskgroup_directive
+    TASKGROUP: "taskgroup"
     openmp_construct: parallel_construct
                     | parallel_for_construct
                     | for_construct
@@ -2863,6 +3215,8 @@ openmp_grammar = r"""
                  | NOWAIT
     unique_single_clause: copyprivate_clause
     NOWAIT: "nowait"
+    master_construct: master_directive
+    master_directive: "master"
     simd_construct: simd_directive
     simd_directive: SIMD [simd_clause*]
     SIMD: "simd"
@@ -2908,7 +3262,13 @@ openmp_grammar = r"""
     DEPEND: "depend"
     FINAL: "final"
     UNTIED: "untied"
-    MERGEABLE: "MERGEABLE"
+    MERGEABLE: "mergeable"
+    dependence_type: IN
+                   | OUT
+                   | INOUT
+    IN: "in"
+    OUT: "out"
+    INOUT: "inout"
     data_default_clause: default_shared_clause
                        | default_none_clause
     data_sharing_clause: shared_clause
@@ -2975,7 +3335,6 @@ openmp_grammar = r"""
     LINEAR: "linear"
     linear_clause: LINEAR "(" var_list ":" const_num_or_var ")"
                  | LINEAR "(" var_list ")"
-    ORDERED: "ordered"
     sched_no_expr: SCHEDULE "(" schedule_kind ")"
     sched_expr: SCHEDULE "(" schedule_kind "," const_num_or_var ")"
     SCHEDULE: "schedule"
@@ -2998,22 +3357,13 @@ openmp_grammar = r"""
                          | SECTIONS
                          | FOR
                          | TASKGROUP
-    TASKGROUP: "taskgroup"
     cancel_directive: "cancel" construct_type_clause [if_clause]
     ordered_directive: ORDERED
     ordered_construct: ordered_directive
-    flush_vars: "(" var_list ")"
-    flush_directive: "flush" [flush_vars]
+    ORDERED: "ordered"
+    flush_directive: "flush" "(" var_list ")"
+    
     region_phrase: "(" PYTHON_NAME ")"
-    master_construct: master_directive
-    master_directive: "master"
-    dependence_type: IN
-                   | OUT
-                   | INOUT
-    IN: "in"
-    OUT: "out"
-    INOUT: "inout"
-
     PYTHON_NAME: /[a-zA-Z_]\w*/
 
     %import common.NUMBER
@@ -3140,6 +3490,7 @@ ffi.cdef('int omp_set_default_device(int device_num);')
 ffi.cdef('int omp_get_default_device(void);')
 ffi.cdef('int omp_get_num_devices(void);')
 ffi.cdef('int omp_get_device_num(void);')
+ffi.cdef('int omp_get_team_num(void);')
 ffi.cdef('int omp_get_num_teams(void);')
 ffi.cdef('int omp_is_initial_device(void);')
 ffi.cdef('int omp_get_initial_device(void);')
@@ -3171,6 +3522,7 @@ omp_set_default_device = C.omp_set_default_device
 omp_get_default_device = C.omp_get_default_device
 omp_get_num_devices = C.omp_get_num_devices
 omp_get_device_num = C.omp_get_device_num
+omp_get_team_num = C.omp_get_team_num
 omp_get_num_teams = C.omp_get_num_teams
 omp_is_initial_device = C.omp_is_initial_device
 omp_get_initial_device = C.omp_get_initial_device
