@@ -807,6 +807,12 @@ class openmp_region_start(ir.Stmt):
             elftext = cgutils.make_bytearray(target_elf)
             dev_image = targetctx.insert_unique_const(mod, ".omp_offloading.device_image", elftext)
 
+            llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 1)
+            llvmused_gv = cgutils.add_global_variable(mod, llvmused_typ, "llvm.used")
+            llvmused_syms = [lc.Constant.bitcast(dev_image, cgutils.voidptr_t)]
+            llvmused_gv.initializer = lc.Constant.array(cgutils.voidptr_t, llvmused_syms)
+            llvmused_gv.linkage = "appending"
+
             """
             llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 1)
             llvmused_gv = cgutils.add_global_variable(mod, llvmused_typ, "llvm.used")
