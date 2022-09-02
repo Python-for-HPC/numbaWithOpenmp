@@ -45,6 +45,9 @@ if config.DEBUG_OPENMP >= 2:
     ll.set_option('openmp', '-print-module-scope')
     ll.set_option('openmp', '-debug=intrinsics-openmp')
 
+if config.DEBUG_OPENMP_LLVM_PASS >= 1:
+    ll.set_option('openmp', '-debug-only=intrinsics-openmp')
+
 # TODO
 # These can probably go but need to verify!
 """
