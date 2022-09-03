@@ -899,14 +899,9 @@ class TestOpenmpParallelClauses(TestOpenmpBase):
 
     def test_if_clause(self):
         @njit
-        def set_arrs(s, v1, v2):
-            for i in range(s):
-                v1[omp_get_thread_num()] = 1
-                v2[i] = omp_in_parallel()
-
-        @njit
         def test_impl(s):
-            rp, drp = 1, 0  # Should also work with anything non-zero
+            rp = 2 # Should also work with anything non-zero
+            drp = 0
             ar = np.zeros(s, dtype=np.int32)
             adr = np.zeros(s, dtype=np.int32)
             par = np.full(s, 2, dtype=np.int32)
@@ -915,12 +910,10 @@ class TestOpenmpParallelClauses(TestOpenmpBase):
             omp_set_num_threads(s)
             omp_set_dynamic(0)
             with openmp("parallel for if(rp)"):
-                #set_arrs(s, ar, par)
                 for i in range(s):
                     ar[omp_get_thread_num()] = 1
                     par[i] = omp_in_parallel()
             with openmp("parallel for if(drp)"):
-                #set_arrs(s, adr, padr)
                 for i in range(s):
                     adr[omp_get_thread_num()] = 1
                     padr[i] = omp_in_parallel()
