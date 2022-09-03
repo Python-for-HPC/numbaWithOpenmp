@@ -163,9 +163,7 @@ class openmp_tag(object):
                 arg_str = lowerer.getvar(x)
                 decl = arg_str.get_decl()
         elif isinstance(x, StringLiteral):
-            # Have to escape the special characters.
-            escaped = x.x.replace("\\\\","\\\\\\\\").replace("\"","\\22")
-            decl = f"[{len(x.x)} x i8] c\"{escaped}\""
+            decl = str(cgutils.make_bytearray(x.x))
         elif isinstance(x, int):
             decl = "i32 " + str(x)
         else:
@@ -830,8 +828,8 @@ class openmp_region_start(ir.Stmt):
                 llvmused_gv.initializer = lc.Constant.array(cgutils.voidptr_t, llvmused_syms)
                 llvmused_gv.linkage = "appending"
             else:
-                host_side_target_tags.append(openmp_tag("QUAL.OMP.TARGET.DEV_FUNC", StringLiteral(cres.fndesc.mangled_name)))
-                host_side_target_tags.append(openmp_tag("QUAL.OMP.TARGET.ELF", StringLiteral(str(target_elf))))
+                host_side_target_tags.append(openmp_tag("QUAL.OMP.TARGET.DEV_FUNC", StringLiteral(cres.fndesc.mangled_name.encode("utf-8") + b"\x00")))
+                host_side_target_tags.append(openmp_tag("QUAL.OMP.TARGET.ELF", StringLiteral(target_elf)))
 
             """
             llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 1)
