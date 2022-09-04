@@ -286,8 +286,11 @@ class openmp_tag(object):
             self.arg = replace_vars_inner(self.arg, var_dict)
 
     def add_to_use_set(self, use_set):
-        if isinstance(self.arg, ir.Var):
-            use_set.add(self.arg.name)
+        if not is_dsa(self.name):
+            if isinstance(self.arg, ir.Var):
+                use_set.add(self.arg.name)
+            if isinstance(self.arg, str):
+                use_set.add(self.arg)
 
     def __str__(self):
         return "openmp_tag(" + str(self.name) + "," + str(self.arg) + ")"
@@ -1106,8 +1109,8 @@ def openmp_region_start_defs(region, use_set=None, def_set=None):
         use_set = set()
     if def_set is None:
         def_set = set()
-#    for tag in region.tags:
-#        tag.add_to_use_set(use_set)
+    for tag in region.tags:
+        tag.add_to_use_set(use_set)
     return _use_defs_result(usemap=use_set, defmap=def_set)
 
 def openmp_region_end_defs(region, use_set=None, def_set=None):
@@ -1115,8 +1118,8 @@ def openmp_region_end_defs(region, use_set=None, def_set=None):
         use_set = set()
     if def_set is None:
         def_set = set()
-#    for tag in region.tags:
-#        tag.add_to_use_set(use_set)
+    for tag in region.tags:
+        tag.add_to_use_set(use_set)
     return _use_defs_result(usemap=use_set, defmap=def_set)
 
 # Extend usedef analysis to support openmp_region_start/end nodes.
@@ -2531,7 +2534,7 @@ class OpenmpVisitor(Transformer):
             print("visit collapse_expr", args, type(args))
 
     # Don't need a rule for COLLAPSE.
-    # Don't need a rule for task_construct.    
+    # Don't need a rule for task_construct.
     # Don't need a rule for TASK.
 
     def task_directive(self, args):
@@ -3081,7 +3084,7 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             print("visit construct_type_clause", args, type(args), args[0])
         return args[0]
-    
+
     def cancel_directive(self, args):
         raise NotImplementedError("Cancel directive currently unsupported.")
         sblk = self.blocks[self.blk_start]
@@ -3386,7 +3389,7 @@ openmp_grammar = r"""
     ordered_construct: ordered_directive
     ORDERED: "ordered"
     flush_directive: "flush" "(" var_list ")"
-    
+
     region_phrase: "(" PYTHON_NAME ")"
     PYTHON_NAME: /[a-zA-Z_]\w*/
 
