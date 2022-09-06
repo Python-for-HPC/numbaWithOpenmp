@@ -32,6 +32,8 @@ import os
 import ctypes.util
 import numpy as np
 from numba.core.analysis import compute_use_defs, compute_live_map, compute_cfg_from_blocks, ir_extension_usedefs, _use_defs_result
+import subprocess
+import tempfile
 
 library_missing = False
 
@@ -46,6 +48,16 @@ else:
     if config.DEBUG_OPENMP >= 1:
         print("Found OpenMP runtime library at", iomplib)
     ll.load_library_permanently(iomplib)
+
+omptargetlib = os.getenv('NUMBA_OMPTARGET_LIB', None)
+if omptargetlib is None:
+    omptargetlib = ctypes.util.find_library("libomptarget.so")
+if omptargetlib is None:
+    library_missing = True
+else:
+    if config.DEBUG_OPENMP >= 1:
+        print("Found OpenMP target runtime library at", omptargetlib)
+    ll.load_library_permanently(omptargetlib)
 
 #----------------------------------------------------------------------------------------------
 
@@ -839,9 +851,22 @@ class openmp_region_start(ir.Stmt):
                 llvmused_gv.initializer = lc.Constant.array(cgutils.voidptr_t, llvmused_syms)
                 llvmused_gv.linkage = "appending"
             else:
-                host_side_target_tags.append(openmp_tag("QUAL.OMP.TARGET.DEV_FUNC", StringLiteral(cres.fndesc.mangled_name.encode("utf-8") + b"\x00")))
+                host_side_target_tags.append(openmp_tag("QUAL.OMP.TARGET.DEV_FUNC", StringLiteral(cres.fndesc.mangled_name.encode("utf-8"))))
+                fd_o, filename_o = tempfile.mkstemp('.o')
+                with open(filename_o, 'wb') as f:
+                    f.write(target_elf)
+                fd_so, filename_so = tempfile.mkstemp('.so')
+                subprocess.run(['clang', '-shared', filename_o, '-o', filename_so])
+                with open(filename_so, 'rb') as f:
+                    target_elf = f.read()
                 host_side_target_tags.append(openmp_tag("QUAL.OMP.TARGET.ELF", StringLiteral(target_elf)))
+                print('filename_o', filename_o, 'filename_so', filename_so)
+                #input('key...')
 
+                os.close(fd_o)
+                os.remove(filename_o)
+                os.close(fd_so)
+                os.remove(filename_so)
             """
             llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 1)
             llvmused_gv = cgutils.add_global_variable(mod, llvmused_typ, "llvm.used")
@@ -3454,6 +3479,13 @@ def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra
             print("Make sure that libomp.so or libiomp5.so is in your library path or")
             print("specify the location of the OpenMP runtime library with the")
             print("NUMBA_OMP_LIB environment variables.")
+            sys.exit(-1)
+
+        if omptargetlib is None:
+            print("OpenMP target runtime library could not be found.")
+            print("Make sure that libomptarget.so or")
+            print("specify the location of the OpenMP runtime library with the")
+            print("NUMBA_OMPTARGET_LIB environment variables.")
             sys.exit(-1)
 
     sblk = blocks[blk_start]

@@ -1017,6 +1017,7 @@ class JITCodeLibrary(CPUCodeLibrary):
         self._codegen._scan_and_fix_unresolved_refs(self._final_module)
         with self._recorded_timings.record("Finalize object"):
             self._codegen._engine.finalize_object()
+        self._codegen._engine.run_static_constructors()
 
 
 class RuntimeLinker(object):
@@ -1131,6 +1132,7 @@ class JitEngine(object):
     #
     set_object_cache = _proxy(ll.ExecutionEngine.set_object_cache)
     finalize_object = _proxy(ll.ExecutionEngine.finalize_object)
+    run_static_constructors = _proxy(ll.ExecutionEngine.run_static_constructors)
     get_function_address = _proxy(ll.ExecutionEngine.get_function_address)
     get_global_value_address = _proxy(
         ll.ExecutionEngine.get_global_value_address
