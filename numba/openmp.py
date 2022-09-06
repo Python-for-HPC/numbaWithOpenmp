@@ -720,6 +720,8 @@ class openmp_region_start(ir.Stmt):
             # What to do here?
             flags.forceinline = True
             #flags.fastmath = True
+            flags.release_gil = True
+            flags.inline = "always"
             # Create a pipeline that only lowers the outlined target code.  No need to
             # compile because it has already gone through those passes.
             class OnlyLower(compiler.CompilerBase):
@@ -765,6 +767,10 @@ class openmp_region_start(ir.Stmt):
                 print("===================================================================================")
 
 #            breakpoint()
+            # Turn off the Numba runtime (incref and decref mostly) for the
+            # target compilation.
+            old_nrt = targetctx.enable_nrt
+            targetctx.enable_nrt = False
             cres = compiler.compile_ir(typingctx,
                                        targetctx,
                                        outlined_ir,
@@ -779,6 +785,8 @@ class openmp_region_start(ir.Stmt):
                                        #pipeline_class=Compiler,
                                        is_lifted_loop=False,  # tried this as True since code derived from loop lifting code but it goes through the pipeline twice and messes things up
                                        parent_state=state_copy)
+            # Restore enable_nrt to the original value.
+            targetctx.enable_nrt = old_nrt
 
             if config.DEBUG_OPENMP >= 2:
                 print("cres:", type(cres))
