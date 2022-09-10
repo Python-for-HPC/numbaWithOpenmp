@@ -17,7 +17,7 @@ from numba.core.ir_utils import (
     build_definitions
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, find_top_level_loops
-from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes
+from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils
 from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
 from numba.extending import overload
@@ -713,10 +713,20 @@ class openmp_region_start(ir.Stmt):
             # transfer_scope?
             # core/untyped_passes/versioning_loop_bodies
 
+            target_args = []
+            for tag in self.tags:
+                if config.DEBUG_OPENMP >= 1:
+                    print(1, "target_arg?", tag)
+                if is_target_arg(tag.name):
+                    target_args.append(tag.arg)
+                    if config.DEBUG_OPENMP >= 1:
+                        print(1, "found target_arg", tag)
+
             # Create the outlined IR from the blocks in the region, making the
             # variables crossing into the regions argument.
             outlined_ir = func_ir.derive(blocks=region_blocks,
-                                         arg_names=tuple(ins),
+                                         arg_names=tuple(target_args),
+                                         #arg_names=tuple(ins),
                                          arg_count=len(ins),
                                          force_non_generator=True)
             # Change the name of the outlined function to prepend the
@@ -728,6 +738,7 @@ class openmp_region_start(ir.Stmt):
             uid = next(bytecode.FunctionIdentity._unique_ids)
             outlined_ir.func_id.unique_name = '{}${}'.format(outlined_ir.func_id.func_qualname, uid)
             print("outlined_ir:", type(outlined_ir), type(outlined_ir.func_id), fparts)
+            dprint_func_ir(outlined_ir, "outlined_ir")
 
             #cuda_typingctx = cuda_descriptor.cuda_target.typing_context
             #cuda_targetctx = cuda_descriptor.cuda_target.target_context
@@ -759,7 +770,8 @@ class openmp_region_start(ir.Stmt):
             state_copy.typemap = copy.copy(typemap)
 
             # Add entries in the copied typemap for the arguments to the outlined IR.
-            for var_in in ins:
+            for var_in in target_args:
+            #for var_in in ins:
                 arg_name = "arg." + var_in
                 state_copy.typemap.pop(arg_name, None)
                 state_copy.typemap[arg_name] = typemap[var_in]
@@ -787,13 +799,20 @@ class openmp_region_start(ir.Stmt):
                 print("===================================================================================")
                 print("===================================================================================")
 
-#            breakpoint()
+            subtarget = targetctx.subtarget()
             # Turn off the Numba runtime (incref and decref mostly) for the
             # target compilation.
-            old_nrt = targetctx.enable_nrt
-            targetctx.enable_nrt = False
+            subtarget.enable_nrt = False
+            printreg = imputils.Registry()
+            @printreg.lower(print, types.VarArg(types.Any))
+            def print_varargs(context, builder, sig, args):
+                print("target print_varargs lowerer")
+                return context.get_dummy_value()
+
+            subtarget.install_registry(printreg)
+
             cres = compiler.compile_ir(typingctx,
-                                       targetctx,
+                                       subtarget,
                                        outlined_ir,
                                        outline_arg_typs,
                                        #state.args,
@@ -806,8 +825,6 @@ class openmp_region_start(ir.Stmt):
                                        #pipeline_class=Compiler,
                                        is_lifted_loop=False,  # tried this as True since code derived from loop lifting code but it goes through the pipeline twice and messes things up
                                        parent_state=state_copy)
-            # Restore enable_nrt to the original value.
-            targetctx.enable_nrt = old_nrt
 
             if config.DEBUG_OPENMP >= 2:
                 print("cres:", type(cres))
@@ -1290,6 +1307,10 @@ openmp_context = _OpenmpContextType()
 
 def is_dsa(name):
     return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.PRIVATE", "QUAL.OMP.SHARED", "QUAL.OMP.LASTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.REDUCTION")
+
+
+def is_target_arg(name):
+    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
 
 
 def is_internal_var(var):
@@ -2514,12 +2535,17 @@ class OpenmpVisitor(Transformer):
         priv_restores = []
         # Returns a dict of private clause variables and their potentially SSA form at the end of the region.
         clause_privates = self.get_clause_privates(clauses, live_out_copy, scope, self.loc)
+        for k,v in replace_vardict.items():
+            priv_saves.append(ir.Assign(ir.Var(scope, k, self.loc), v, self.loc))
+
         if config.DEBUG_OPENMP >= 1:
+            print("replace_vardict:", replace_vardict)
             print("clause_privates:", clause_privates, type(clause_privates))
             print("inputs_to_region:", inputs_to_region)
             print("def_but_live_out:", def_but_live_out)
             print("live_out_copy:", live_out_copy)
             print("private_to_region:", private_to_region)
+            print("priv_saves:", priv_saves)
 
         # Numba typing is not aware of OpenMP semantics, so for private variables we save the value
         # before entering the region and then restore it afterwards but we have to restore it to the SSA
@@ -2538,9 +2564,16 @@ class OpenmpVisitor(Transformer):
 
         #or_start = openmp_region_start([openmp_tag("DIR.OMP.TARGET", target_num)] + tag_clauses, 0, self.loc)
         #or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TARGET", target_num)], self.loc)
+        new_target_block_num = max(self.blocks.keys()) + 1
+
         or_start = openmp_region_start(start_tags, 0, self.loc)
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
-        sblk.body = priv_saves + before_start + [or_start] + after_start + sblk.body[:]
+        target_block = ir.Block(scope, self.loc)
+        target_block.body = [or_start] + after_start + sblk.body[:]
+        self.blocks[new_target_block_num] = target_block
+
+        sblk.body = priv_saves + before_start + [ir.Jump(new_target_block_num, self.loc)]
+        #sblk.body = priv_saves + before_start + [or_start] + after_start + sblk.body[:]
         eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
 
     def target_clause(self, args):
