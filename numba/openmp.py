@@ -737,8 +737,9 @@ class openmp_region_start(ir.Stmt):
             outlined_ir.func_id.func_name = fparts[-1]
             uid = next(bytecode.FunctionIdentity._unique_ids)
             outlined_ir.func_id.unique_name = '{}${}'.format(outlined_ir.func_id.func_qualname, uid)
-            print("outlined_ir:", type(outlined_ir), type(outlined_ir.func_id), fparts)
-            dprint_func_ir(outlined_ir, "outlined_ir")
+            if config.DEBUG_OPENMP >= 1:
+                print("outlined_ir:", type(outlined_ir), type(outlined_ir.func_id), fparts, outlined_ir.arg_names)
+                dprint_func_ir(outlined_ir, "outlined_ir")
 
             #cuda_typingctx = cuda_descriptor.cuda_target.typing_context
             #cuda_targetctx = cuda_descriptor.cuda_target.target_context
@@ -769,12 +770,19 @@ class openmp_region_start(ir.Stmt):
             state_copy = copy.copy(state)
             state_copy.typemap = copy.copy(typemap)
 
+            entry_block_num = min(outlined_ir.blocks.keys())
+            entry_block = outlined_ir.blocks[entry_block_num]
+            if config.DEBUG_OPENMP >= 1:
+                print("entry_block:", entry_block)
+            arg_assigns = []
             # Add entries in the copied typemap for the arguments to the outlined IR.
-            for var_in in target_args:
+            for idx, var_in in enumerate(target_args):
             #for var_in in ins:
                 arg_name = "arg." + var_in
                 state_copy.typemap.pop(arg_name, None)
                 state_copy.typemap[arg_name] = typemap[var_in]
+                arg_assigns.append(ir.Assign(ir.Arg(var_in, idx, self.loc), ir.Var(None, var_in, self.loc), self.loc))
+            entry_block.body = entry_block.body[:-1] + arg_assigns + entry_block.body[-1:]
 
             last_block = outlined_ir.blocks[end_block]
             if not remove_openmp_nodes_from_target:
@@ -806,7 +814,7 @@ class openmp_region_start(ir.Stmt):
             printreg = imputils.Registry()
             @printreg.lower(print, types.VarArg(types.Any))
             def print_varargs(context, builder, sig, args):
-                print("target print_varargs lowerer")
+                #print("target print_varargs lowerer")
                 return context.get_dummy_value()
 
             subtarget.install_registry(printreg)
@@ -850,8 +858,8 @@ class openmp_region_start(ir.Stmt):
                 print("===================================================================================")
                 print("===================================================================================")
 
-            for k,v in lowerer.func_ir.blocks.items():
-                print("block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
+                for k,v in lowerer.func_ir.blocks.items():
+                    print("block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
 
             target_elf = cres_library._get_compiled_object()
             if config.DEBUG_OPENMP >= 1:
