@@ -641,7 +641,7 @@ class openmp_region_start(ir.Stmt):
                     if start_region.has_target() == target_num:
                         start_region.tags.append(openmp_tag("OMP.DEVICE"))
                     end_region = blocks[end_block].body[ebindex]
-                    assert(start_region.omp_region_var is None)
+                    #assert(start_region.omp_region_var is None)
                     assert(len(start_region.alloca_queue) == 0)
                     # Make start and end copies point at each other.
                     end_region.start_region = start_region
@@ -807,7 +807,7 @@ class openmp_region_start(ir.Stmt):
                 print("===================================================================================")
                 print("===================================================================================")
 
-            subtarget = targetctx.subtarget()
+            subtarget = targetctx.subtarget(_registries=dict())
             # Turn off the Numba runtime (incref and decref mostly) for the
             # target compilation.
             subtarget.enable_nrt = False
@@ -819,6 +819,8 @@ class openmp_region_start(ir.Stmt):
 
             subtarget.install_registry(printreg)
 
+            #from numba.core.registry import cpu_target
+            #with cpu_target.nested_context(typingctx, subtarget):
             cres = compiler.compile_ir(typingctx,
                                        subtarget,
                                        outlined_ir,
@@ -1314,7 +1316,7 @@ openmp_context = _OpenmpContextType()
 
 
 def is_dsa(name):
-    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.PRIVATE", "QUAL.OMP.SHARED", "QUAL.OMP.LASTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.REDUCTION")
+    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.PRIVATE", "QUAL.OMP.SHARED", "QUAL.OMP.LASTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.REDUCTION") or name.startswith("QUAL.OMP.MAP")
 
 
 def is_target_arg(name):
@@ -1525,6 +1527,8 @@ class OpenmpVisitor(Transformer):
                     carglist = [c.arg]
                 #carglist = c.arg if isinstance(c.arg, list) else [c.arg]
                 for carg in carglist:
+                    if config.DEBUG_OPENMP >= 1:
+                        print("carg:", carg, type(carg), user_defined_var(carg), is_dsa(c.name))
                     if isinstance(carg, str) and user_defined_var(carg) and is_dsa(c.name):
                         ret[carg] = c
                         if is_private(c.name):
@@ -2355,7 +2359,8 @@ class OpenmpVisitor(Transformer):
             print("visit map_clause", args, type(args), args[0])
         if args[0] in ["to", "from", "alloc", "tofrom"]:
             map_type = args[0].upper()
-            var_list = args[1:]
+            var_list = args[1]
+            assert(len(args) == 2)
         else:
             map_type = "TOFROM"  # is this default right?  FIX ME
             var_list = args
@@ -2476,6 +2481,9 @@ class OpenmpVisitor(Transformer):
             print("visit target_directive", args, type(args))
 
         #clauses = args[1:]
+        if config.DEBUG_OPENMP >= 1:
+            for clause in args[1:]:
+                print("pre clause:", clause)
         clauses = [remove_indirections(x) for x in args[1:]]
         tag_clauses = self.flatten(clauses)
         clauses = tag_clauses
@@ -2587,6 +2595,8 @@ class OpenmpVisitor(Transformer):
     def target_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit target_clause", args, type(args), args[0])
+            if isinstance(args[0], list):
+                print(args[0][0])
         return args[0]
 
     # Don't need a rule for target_update_construct.
@@ -2805,6 +2815,8 @@ class OpenmpVisitor(Transformer):
     def data_privatization_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit data_privatization_clause", args, type(args), args[0])
+            if isinstance(args[0], list):
+                print(args[0][0])
         return args[0]
 
     def data_privatization_in_clause(self, args):
@@ -3363,7 +3375,7 @@ openmp_grammar = r"""
                       | map_clause
                       | if_clause
     device_clause: "device" "(" const_num_or_var ")"
-    map_clause: "map" "(" [map_type ":"] variable_array_section_list ")"
+    map_clause: "map" "(" [map_type ":"] var_list ")"
     map_type: ALLOC | TO | FROM | TOFROM
     TO: "to"
     FROM: "from"
