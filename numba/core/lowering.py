@@ -401,6 +401,12 @@ class Lower(BaseLower):
             val = self.lower_assign(ty, inst)
             self.storevar(val, inst.target.name)
 
+        elif isinstance(inst, ir.RevArgAssign):
+            ty = self.typeof(inst.target.name)
+            val = self.lower_assign(ty, inst)
+            arg_target = self.fnargs[inst.target.index]
+            self.builder.store(val, arg_target)
+
         elif isinstance(inst, ir.Branch):
             cond = self.loadvar(inst.cond.name)
             tr = self.blkmap[inst.truebr]
@@ -599,7 +605,13 @@ class Lower(BaseLower):
                 res = self.context.cast(self.builder, const, valty, ty)
             else:
                 val = self.fnargs[value.index]
-                res = self.context.cast(self.builder, val, argty, ty)
+                if value.openmp_ptr:
+                    assert(isinstance(argty, types.CPointer))
+                    assert not value.reverse
+                    deref_arg = self.builder.load(val)
+                    res = self.context.cast(self.builder, deref_arg, argty.dtype, ty)
+                else:
+                    res = self.context.cast(self.builder, val, argty, ty)
             self.incref(ty, res)
             return res
 

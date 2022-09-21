@@ -870,6 +870,23 @@ class Assign(Stmt):
         return '%s = %s' % (self.target, self.value)
 
 
+class RevArgAssign(Stmt):
+    """
+    Assign to a variable.
+    """
+    def __init__(self, value, target, loc):
+        assert isinstance(value, AbstractRHS)
+        assert isinstance(target, Arg)
+        assert target.reverse
+        assert isinstance(loc, Loc)
+        self.value = value
+        self.target = target
+        self.loc = loc
+
+    def __str__(self):
+        return '%s = %s' % (self.target, self.value)
+
+
 class Print(Stmt):
     """
     Print some values.
@@ -931,16 +948,24 @@ class EnterWith(Stmt):
 
 
 class Arg(EqualityCheckMixin, AbstractRHS):
-    def __init__(self, name, index, loc):
+    def __init__(self, name, index, loc, openmp_ptr=False, reverse=False):
         assert isinstance(name, str)
         assert isinstance(index, int)
         assert isinstance(loc, Loc)
         self.name = name
         self.index = index
         self.loc = loc
+        self.openmp_ptr = openmp_ptr
+        self.reverse = reverse
 
     def __repr__(self):
-        return 'arg(%d, name=%s)' % (self.index, self.name)
+        if self.openmp_ptr:
+            if self.reverse:
+                return 'openmp_ptr.reverse_arg(%d, name=%s)' % (self.index, self.name)
+            else:
+                return 'openmp_ptr.arg(%d, name=%s)' % (self.index, self.name)
+        else:
+            return 'arg(%d, name=%s)' % (self.index, self.name)
 
     def infer_constant(self):
         raise ConstantInferenceError('%s' % self, loc=self.loc)

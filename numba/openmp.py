@@ -14,7 +14,8 @@ from numba.core.ir_utils import (
     visit_vars,
     get_name_var_table,
     replace_var_names,
-    build_definitions
+    build_definitions,
+    dead_code_elimination
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, find_top_level_loops
 from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils
@@ -410,7 +411,6 @@ class openmp_region_start(ir.Stmt):
 
     """
     def __new__(cls, *args, **kwargs):
-        #breakpoint()
         instance = super(openmp_region_start, cls).__new__(cls)
         print("openmp_region_start::__new__", id(instance))
         return instance
@@ -652,11 +652,12 @@ class openmp_region_start(ir.Stmt):
             fixup_openmp_pairs(func_ir.blocks)
             state = lowerer.state
             fndesc = lowerer.fndesc
-            if config.DEBUG_OPENMP >= 2:
+            if config.DEBUG_OPENMP >= 1:
                 print("context:", context, type(context))
                 print("targetctx:", targetctx, type(targetctx))
                 print("state:", state, dir(state))
                 print("fndesc:", fndesc, type(fndesc))
+                print("func_ir type:", type(func_ir))
             dprint_func_ir(func_ir, "target func_ir")
             internal_codegen = targetctx._internal_codegen
             #target_module = internal_codegen._create_empty_module("openmp.target")
@@ -686,13 +687,11 @@ class openmp_region_start(ir.Stmt):
                 body_block_ids=blocks_in_region
             )
             # Get the types of the variables live-in to the target region.
-            outline_arg_typs = tuple([typemap[x] for x in ins])
             if config.DEBUG_OPENMP >= 1:
                 print("ins:", ins)
                 print("outs:", outs)
                 print("args:", state.args)
                 print("rettype:", state.return_type, type(state.return_type))
-                print("outline_arg_typs:", outline_arg_typs)
             # Re-use Numba loop lifting code to extract the target region as
             # its own function.
             region_info = transforms._loop_lift_info(loop=None,
@@ -714,20 +713,30 @@ class openmp_region_start(ir.Stmt):
             # core/untyped_passes/versioning_loop_bodies
 
             target_args = []
+            outline_arg_typs = []
             for tag in self.tags:
                 if config.DEBUG_OPENMP >= 1:
                     print(1, "target_arg?", tag)
                 if is_target_arg(tag.name):
                     target_args.append(tag.arg)
+                    atyp = typemap[tag.arg]
+                    if isinstance(atyp, types.npytypes.Array):
+                        outline_arg_typs.append(atyp)
+                    else:
+                        outline_arg_typs.append(types.CPointer(atyp))
                     if config.DEBUG_OPENMP >= 1:
                         print(1, "found target_arg", tag)
+
+            #outline_arg_typs = tuple([typemap[x] for x in target_args])
+            if config.DEBUG_OPENMP >= 1:
+                print("target_args:", target_args)
+                print("outline_arg_typs:", outline_arg_typs)
 
             # Create the outlined IR from the blocks in the region, making the
             # variables crossing into the regions argument.
             outlined_ir = func_ir.derive(blocks=region_blocks,
                                          arg_names=tuple(target_args),
-                                         #arg_names=tuple(ins),
-                                         arg_count=len(ins),
+                                         arg_count=len(target_args),
                                          force_non_generator=True)
             # Change the name of the outlined function to prepend the
             # word "device" to the function name.
@@ -775,25 +784,29 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 print("entry_block:", entry_block)
             arg_assigns = []
+            rev_arg_assigns = []
             # Add entries in the copied typemap for the arguments to the outlined IR.
-            for idx, var_in in enumerate(target_args):
+            for idx, zipvar in enumerate(zip(target_args, outline_arg_typs)):
             #for var_in in ins:
+                var_in, vtyp = zipvar
                 arg_name = "arg." + var_in
                 state_copy.typemap.pop(arg_name, None)
-                state_copy.typemap[arg_name] = typemap[var_in]
-                arg_assigns.append(ir.Assign(ir.Arg(var_in, idx, self.loc), ir.Var(None, var_in, self.loc), self.loc))
+                state_copy.typemap[arg_name] = vtyp
+                #state_copy.typemap[arg_name] = typemap[var_in]
+                arg_assigns.append(ir.Assign(ir.Arg(var_in, idx, self.loc, openmp_ptr=True), ir.Var(None, var_in, self.loc), self.loc))
+                rev_arg_assigns.append(ir.RevArgAssign(ir.Var(None, var_in, self.loc), ir.Arg(var_in, idx, self.loc, openmp_ptr=True, reverse=True), self.loc))
             entry_block.body = entry_block.body[:-1] + arg_assigns + entry_block.body[-1:]
 
             last_block = outlined_ir.blocks[end_block]
             if not remove_openmp_nodes_from_target:
-                last_block.body = [end_target_node] + last_block.body[:]
+                last_block.body = [end_target_node] + last_block.body[:-1] + rev_arg_assigns + last_block.body[-1:]
 
             assert(isinstance(last_block.body[-1], ir.Return))
             # Add typemap entry for the empty tuple return type.
             state_copy.typemap[last_block.body[-1].value.name] = types.containers.Tuple(())
 
             if config.DEBUG_OPENMP >= 1:
-                print("outlined_ir:", outlined_ir, type(outlined_ir))
+                print("outlined_ir:", outlined_ir, type(outlined_ir), outlined_ir.arg_names)
                 dprint_func_ir(outlined_ir, "outlined_ir")
                 dprint_func_ir(func_ir, "target after outline func_ir")
                 dprint_func_ir(lowerer.func_ir, "original func_ir")
@@ -844,7 +857,6 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 2:
                 print("cres_library:", type(cres_library))
                 sys.stdout.flush()
-            #breakpoint()
             cres_library._ensure_finalized()
             if config.DEBUG_OPENMP >= 2:
                 print("ensure_finalized:")
@@ -1247,6 +1259,7 @@ class _OpenmpContextType(WithContext):
     def mutate_with_body(self, func_ir, blocks, blk_start, blk_end,
                          body_blocks, dispatcher_factory, extra, state=None, flags=None):
         if not config.OPENMP_DISABLED and not hasattr(func_ir, "has_openmp_region"):
+            dead_code_elimination(func_ir)
             remove_ssa_from_func_ir(func_ir)
             func_ir.has_openmp_region = True
         if config.DEBUG_OPENMP >= 1:
@@ -1665,7 +1678,7 @@ class OpenmpVisitor(Transformer):
                 assert(0)
         return clauses
 
-    def replace_private_vars(self, blocks, all_explicits, explicit_privates, clauses, scope, loc):
+    def replace_private_vars(self, blocks, all_explicits, explicit_privates, clauses, scope, loc, orig_inputs_to_region):
         replace_vardict = {}
         # Generate a new Numba privatized variable for each openmp private variable.
         for exp_priv in explicit_privates:
@@ -1695,6 +1708,7 @@ class OpenmpVisitor(Transformer):
 
             #copy_call = ir.Expr.call(attr_var2, [orig_name], (), loc)
             copy_call = ir.Expr.call(g_copy_var, [orig_name], (), loc)
+            #copy_assign = ir.Assign(orig_name, private_name, loc)
             copy_assign = ir.Assign(copy_call, private_name, loc)
             return [g_copy_assign, copy_assign]
             #return [g_copy_assign, attr_assign1, attr_assign2, copy_assign]
@@ -1706,46 +1720,83 @@ class OpenmpVisitor(Transformer):
             for c in clauses:
                 print("clauses:", c)
 
+        def handle_firstprivate(carg, new_shared_clauses, all_explicits, copying_ir, replace_vardict, clause):
+            new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", carg))
+            all_explicits[c.arg] = new_shared_clauses[-1]
+            copying_ir.extend(do_copy(ir.Var(scope, carg, loc), replace_vardict[carg]))
+            # This one doesn't really do anything except avoid a Numba decref error for arrays.
+            #copying_ir_before.append(ir.Assign(ir.Var(scope, carg, loc), replace_vardict[carg], loc))
+
+        def handle_lastprivate(carg, new_shared_clauses, all_explicits, lastprivate_copying, replace_vardict, clause):
+            new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", carg))
+            all_explicits[carg] = new_shared_clauses[-1]
+            lastprivate_copying.extend(do_copy(replace_vardict[c.arg], ir.Var(scope, c.arg, loc)))
+            # This one doesn't really do anything except avoid a Numba decref error for arrays.
+            #copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
+
         for c in clauses:
             if isinstance(c.arg, str) and c.arg in replace_vardict:
                 if config.DEBUG_OPENMP >= 1:
                     print("c.arg str:", c.arg, type(c.arg))
                 del all_explicits[c.arg]
-                if c.name == "QUAL.OMP.FIRSTPRIVATE":
+                if c.name == "QUAL.OMP.PRIVATE":
+                    # For typing.
+                    if c.arg in orig_inputs_to_region:
+                        copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
+                elif c.name == "QUAL.OMP.FIRSTPRIVATE":
+                    handle_firstprivate(c.arg, new_shared_clauses, all_explicits, copying_ir, replace_vardict, c)
+                    c.name = "QUAL.OMP.PRIVATE"
+                    """
                     new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", c.arg))
                     all_explicits[c.arg] = new_shared_clauses[-1]
                     copying_ir.extend(do_copy(ir.Var(scope, c.arg, loc), replace_vardict[c.arg]))
                     # This one doesn't really do anything except avoid a Numba decref error for arrays.
                     copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
                     c.name = "QUAL.OMP.PRIVATE"
+                    """
                 elif c.name == "QUAL.OMP.LASTPRIVATE":
+                    handle_firstprivate(c.arg, new_shared_clauses, all_explicits, lastprivate_copying, replace_vardict, c)
+                    c.name = "QUAL.OMP.PRIVATE"
+                    """
                     new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", c.arg))
                     all_explicits[c.arg] = new_shared_clauses[-1]
                     lastprivate_copying.extend(do_copy(replace_vardict[c.arg], ir.Var(scope, c.arg, loc)))
                     # This one doesn't really do anything except avoid a Numba decref error for arrays.
                     #copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
                     c.name = "QUAL.OMP.PRIVATE"
+                    """
                 c.arg = replace_vardict[c.arg].name
                 all_explicits[c.arg] = c
             elif isinstance(c.arg, list):
                 for i in range(len(c.arg)):
                     carg = c.arg[i]
                     if isinstance(carg, str) and carg in replace_vardict:
+                        # If there is a list and some vars are replace and others
+                        # not then we need to split the list here so that the
+                        # ones that are private can change their clause name
+                        # to private.
+                        assert(False)
                         if config.DEBUG_OPENMP >= 1:
                             print("c.arg list of str:", c.arg, type(c.arg))
                         del all_explicits[carg]
                         if c.name == "QUAL.OMP.FIRSTPRIVATE":
+                            handle_firstprivate(carg, new_shared_clauses, all_explicits, copying_ir, replace_vardict, c)
+                            """
                             new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", carg))
                             all_explicits[carg] = new_shared_clauses[-1]
                             copying_ir.extend(do_copy(ir.Var(scope, carg, loc), replace_vardict[carg]))
                             # This one doesn't really do anything except avoid a Numba decref error for arrays.
                             copying_ir_before.append(ir.Assign(ir.Var(scope, carg, loc), replace_vardict[carg], loc))
+                            """
                         elif c.name == "QUAL.OMP.LASTPRIVATE":
+                            handle_firstprivate(carg, new_shared_clauses, all_explicits, lastprivate_copying, replace_vardict, c)
+                            """
                             new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", carg))
                             all_explicits[carg] = new_shared_clauses[-1]
                             copying_ir.extend(do_copy(ir.Var(scope, carg, loc), replace_vardict[carg]))
                             # This one doesn't really do anything except avoid a Numba decref error for arrays.
                             copying_ir_before.append(ir.Assign(ir.Var(scope, carg, loc), replace_vardict[carg], loc))
+                            """
                         newcarg = replace_vardict[carg].name
                         c.arg[i] = newcarg
                         all_explicits[newcarg] = c
@@ -2129,6 +2180,7 @@ class OpenmpVisitor(Transformer):
                     keep_alive = []
                     # Do an analysis to get variable use information coming into and out of the region.
                     inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(loop_blocks_for_io)
+                    orig_inputs_to_region = copy.copy(inputs_to_region)
                     live_out_copy = copy.copy(def_but_live_out)
 
                     priv_saves = []
@@ -2167,7 +2219,7 @@ class OpenmpVisitor(Transformer):
                     self.make_implicit_explicit(scope, vars_in_explicit_clauses, clauses, gen_shared, inputs_to_region, def_but_live_out, private_to_region)
                     #self.add_variables_to_start(scope, vars_in_explicit_clauses, clauses, gen_shared, start_tags, keep_alive, inputs_to_region, def_but_live_out, private_to_region)
 
-                    replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(loop_blocks_for_io_minus_entry, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc)
+                    replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(loop_blocks_for_io_minus_entry, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region)
                     before_start.extend(copying_ir_before)
                     after_start.extend(copying_ir)
 
@@ -2509,6 +2561,7 @@ class OpenmpVisitor(Transformer):
 
         # Do an analysis to get variable use information coming into and out of the region.
         inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
+        orig_inputs_to_region = copy.copy(inputs_to_region)
         live_out_copy = copy.copy(def_but_live_out)
 
         if config.DEBUG_OPENMP >= 1:
@@ -2542,7 +2595,7 @@ class OpenmpVisitor(Transformer):
         blocks_in_region = get_blocks_between_start_end(self.blocks, self.blk_start, self.blk_end)
         if config.DEBUG_OPENMP >= 1:
             print(1, "blocks_in_region:", blocks_in_region)
-        replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc)
+        replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region)
         assert(len(lastprivate_copying) == 0)
         before_start.extend(copying_ir_before)
         after_start.extend(copying_ir)
@@ -2971,6 +3024,7 @@ class OpenmpVisitor(Transformer):
 
         # Do an analysis to get variable use information coming into and out of the region.
         inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
+        orig_inputs_to_region = copy.copy(inputs_to_region)
         live_out_copy = copy.copy(def_but_live_out)
 
         if config.DEBUG_OPENMP >= 1:
@@ -3017,7 +3071,7 @@ class OpenmpVisitor(Transformer):
         blocks_in_region = get_blocks_between_start_end(self.blocks, self.blk_start, self.blk_end)
         if config.DEBUG_OPENMP >= 1:
             print(1, "blocks_in_region:", blocks_in_region)
-        replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc)
+        replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region)
         assert(len(lastprivate_copying) == 0)
         before_start.extend(copying_ir_before)
         after_start.extend(copying_ir)
@@ -3053,7 +3107,8 @@ class OpenmpVisitor(Transformer):
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
         sblk.body = priv_saves + before_start + [or_start] + after_start + sblk.body[:]
         #eblk.body = [or_end]   + eblk.body[:]
-        eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
+        eblk.body = [or_end] + priv_restores + eblk.body[:]
+        #eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
 
     def parallel_clause(self, args):
         (val,) = args
