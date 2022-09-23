@@ -537,7 +537,7 @@ class openmp_region_start(ir.Stmt):
             for k,v in lowerer.func_ir.blocks.items():
                 print("block post copy:", k, id(v), id(v.body))
 
-        if config.DEBUG_OPENMP >= 2:
+        if config.DEBUG_OPENMP >= 1:
             for otag in self.tags:
                 print("otag:", otag, type(otag.arg))
 
@@ -548,6 +548,8 @@ class openmp_region_start(ir.Stmt):
         #self.tags = list(filter(lambda x: not isinstance(x.arg, lir.instructions.AllocaInstr), self.tags))
         if config.DEBUG_OPENMP >= 1:
             print("after LLVM tag filter", self.tags, len(self.tags))
+            for otag in self.tags:
+                print("otag:", otag, type(otag.arg))
 
         """
         tags_unpacked_arrays = []
@@ -572,8 +574,9 @@ class openmp_region_start(ir.Stmt):
                 print("openmp start region lower has target", type(lowerer.func_ir))
             # Make a copy of the host IR being lowered.
             func_ir = lowerer.func_ir.copy()
-            for k,v in lowerer.func_ir.blocks.items():
-                print("region ids block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
+            if config.DEBUG_OPENMP >= 1:
+                for k,v in lowerer.func_ir.blocks.items():
+                    print("region ids block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
 
             """
             var_table = get_name_var_table(func_ir.blocks)
@@ -720,10 +723,10 @@ class openmp_region_start(ir.Stmt):
                 if is_target_arg(tag.name):
                     target_args.append(tag.arg)
                     atyp = typemap[tag.arg]
-                    if isinstance(atyp, types.npytypes.Array):
-                        outline_arg_typs.append(atyp)
-                    else:
+                    if is_pointer_target_arg(tag.name, atyp):
                         outline_arg_typs.append(types.CPointer(atyp))
+                    else:
+                        outline_arg_typs.append(atyp)
                     if config.DEBUG_OPENMP >= 1:
                         print(1, "found target_arg", tag)
 
@@ -783,19 +786,33 @@ class openmp_region_start(ir.Stmt):
             entry_block = outlined_ir.blocks[entry_block_num]
             if config.DEBUG_OPENMP >= 1:
                 print("entry_block:", entry_block)
+                for x in entry_block.body:
+                    print(x)
             arg_assigns = []
             rev_arg_assigns = []
+            cpointer_args = []
             # Add entries in the copied typemap for the arguments to the outlined IR.
             for idx, zipvar in enumerate(zip(target_args, outline_arg_typs)):
-            #for var_in in ins:
                 var_in, vtyp = zipvar
                 arg_name = "arg." + var_in
                 state_copy.typemap.pop(arg_name, None)
                 state_copy.typemap[arg_name] = vtyp
+                #atyp = typemap[tag.arg]
                 #state_copy.typemap[arg_name] = typemap[var_in]
-                arg_assigns.append(ir.Assign(ir.Arg(var_in, idx, self.loc, openmp_ptr=True), ir.Var(None, var_in, self.loc), self.loc))
-                rev_arg_assigns.append(ir.RevArgAssign(ir.Var(None, var_in, self.loc), ir.Arg(var_in, idx, self.loc, openmp_ptr=True, reverse=True), self.loc))
-            entry_block.body = entry_block.body[:-1] + arg_assigns + entry_block.body[-1:]
+                if isinstance(vtyp, types.CPointer):
+                    cpointer_args.append(var_in)
+                    arg_assigns.append(ir.Assign(ir.Arg(var_in, idx, self.loc, openmp_ptr=True), ir.Var(None, var_in, self.loc), self.loc))
+                    rev_arg_assigns.append(ir.RevArgAssign(ir.Var(None, var_in, self.loc), ir.Arg(var_in, idx, self.loc, openmp_ptr=True, reverse=True), self.loc))
+
+            non_cpointer = []
+            # If we are adding a cpointer arg to the entry block then we need to remove
+            # any ir.Arg for that variable that the outlining process may have already added.
+            for x in entry_block.body[:-1]:
+                if isinstance(x, ir.Assign) and isinstance(x.value, ir.Arg):
+                    if x.value.name in cpointer_args:
+                        continue
+                non_cpointer.append(x)
+            entry_block.body = non_cpointer + arg_assigns + entry_block.body[-1:]
 
             last_block = outlined_ir.blocks[end_block]
             if not remove_openmp_nodes_from_target:
@@ -908,7 +925,8 @@ class openmp_region_start(ir.Stmt):
                 with open(filename_so, 'rb') as f:
                     target_elf = f.read()
                 host_side_target_tags.append(openmp_tag("QUAL.OMP.TARGET.ELF", StringLiteral(target_elf)))
-                print('filename_o', filename_o, 'filename_so', filename_so)
+                if config.DEBUG_OPENMP >= 1:
+                    print('filename_o', filename_o, 'filename_so', filename_so)
                 #input('key...')
 
                 os.close(fd_o)
@@ -1336,6 +1354,19 @@ def is_target_arg(name):
     return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
 
 
+def is_pointer_target_arg(name, typ):
+    if name.startswith("QUAL.OMP.MAP"):
+        return True
+    if name in ["QUAL.OMP.FIRSTPRIVATE"]:
+        return False
+    if name in ["QUAL.OMP.TARGET.IMPLICIT"]:
+        if isinstance(typ, types.npytypes.Array):
+            return True
+        else:
+            return False
+    assert False
+
+
 def is_internal_var(var):
     # Determine if a var is a Python var or an internal Numba var.
     if var.is_temp:
@@ -1678,7 +1709,7 @@ class OpenmpVisitor(Transformer):
                 assert(0)
         return clauses
 
-    def replace_private_vars(self, blocks, all_explicits, explicit_privates, clauses, scope, loc, orig_inputs_to_region):
+    def replace_private_vars(self, blocks, all_explicits, explicit_privates, clauses, scope, loc, orig_inputs_to_region, for_target=False):
         replace_vardict = {}
         # Generate a new Numba privatized variable for each openmp private variable.
         for exp_priv in explicit_privates:
@@ -1739,32 +1770,48 @@ class OpenmpVisitor(Transformer):
                 if config.DEBUG_OPENMP >= 1:
                     print("c.arg str:", c.arg, type(c.arg))
                 del all_explicits[c.arg]
-                if c.name == "QUAL.OMP.PRIVATE":
-                    # For typing.
-                    if c.arg in orig_inputs_to_region:
+                if for_target:
+                    if c.name == "QUAL.OMP.PRIVATE":
+                        # For typing.
+                        if c.arg in orig_inputs_to_region:
+                            copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
+                    elif c.name == "QUAL.OMP.FIRSTPRIVATE":
+                        pass
+                        """
+                        new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", c.arg))
+                        all_explicits[c.arg] = new_shared_clauses[-1]
+                        copying_ir.extend(do_copy(ir.Var(scope, c.arg, loc), replace_vardict[c.arg]))
+                        # This one doesn't really do anything except avoid a Numba decref error for arrays.
                         copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
-                elif c.name == "QUAL.OMP.FIRSTPRIVATE":
-                    handle_firstprivate(c.arg, new_shared_clauses, all_explicits, copying_ir, replace_vardict, c)
-                    c.name = "QUAL.OMP.PRIVATE"
-                    """
-                    new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", c.arg))
-                    all_explicits[c.arg] = new_shared_clauses[-1]
-                    copying_ir.extend(do_copy(ir.Var(scope, c.arg, loc), replace_vardict[c.arg]))
-                    # This one doesn't really do anything except avoid a Numba decref error for arrays.
-                    copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
-                    c.name = "QUAL.OMP.PRIVATE"
-                    """
-                elif c.name == "QUAL.OMP.LASTPRIVATE":
-                    handle_firstprivate(c.arg, new_shared_clauses, all_explicits, lastprivate_copying, replace_vardict, c)
-                    c.name = "QUAL.OMP.PRIVATE"
-                    """
-                    new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", c.arg))
-                    all_explicits[c.arg] = new_shared_clauses[-1]
-                    lastprivate_copying.extend(do_copy(replace_vardict[c.arg], ir.Var(scope, c.arg, loc)))
-                    # This one doesn't really do anything except avoid a Numba decref error for arrays.
-                    #copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
-                    c.name = "QUAL.OMP.PRIVATE"
-                    """
+                        c.name = "QUAL.OMP.PRIVATE"
+                        """
+                else:
+                    if c.name == "QUAL.OMP.PRIVATE":
+                        # For typing.
+                        if c.arg in orig_inputs_to_region:
+                            copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
+                    elif c.name == "QUAL.OMP.FIRSTPRIVATE":
+                        handle_firstprivate(c.arg, new_shared_clauses, all_explicits, copying_ir, replace_vardict, c)
+                        c.name = "QUAL.OMP.PRIVATE"
+                        """
+                        new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", c.arg))
+                        all_explicits[c.arg] = new_shared_clauses[-1]
+                        copying_ir.extend(do_copy(ir.Var(scope, c.arg, loc), replace_vardict[c.arg]))
+                        # This one doesn't really do anything except avoid a Numba decref error for arrays.
+                        copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
+                        c.name = "QUAL.OMP.PRIVATE"
+                        """
+                    elif c.name == "QUAL.OMP.LASTPRIVATE":
+                        handle_firstprivate(c.arg, new_shared_clauses, all_explicits, lastprivate_copying, replace_vardict, c)
+                        c.name = "QUAL.OMP.PRIVATE"
+                        """
+                        new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", c.arg))
+                        all_explicits[c.arg] = new_shared_clauses[-1]
+                        lastprivate_copying.extend(do_copy(replace_vardict[c.arg], ir.Var(scope, c.arg, loc)))
+                        # This one doesn't really do anything except avoid a Numba decref error for arrays.
+                        #copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
+                        c.name = "QUAL.OMP.PRIVATE"
+                        """
                 c.arg = replace_vardict[c.arg].name
                 all_explicits[c.arg] = c
             elif isinstance(c.arg, list):
@@ -2595,7 +2642,7 @@ class OpenmpVisitor(Transformer):
         blocks_in_region = get_blocks_between_start_end(self.blocks, self.blk_start, self.blk_end)
         if config.DEBUG_OPENMP >= 1:
             print(1, "blocks_in_region:", blocks_in_region)
-        replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region)
+        replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region, for_target=True)
         assert(len(lastprivate_copying) == 0)
         before_start.extend(copying_ir_before)
         after_start.extend(copying_ir)
@@ -3476,6 +3523,8 @@ openmp_grammar = r"""
     target_clause: device_clause
                  | map_clause
                  | if_clause
+                 | data_privatization_clause
+                 | data_privatization_in_clause
     target_update_construct: target_update_directive
     target_update_directive: TARGET UPDATE target_update_clause*
     target_update_clause: motion_clause
