@@ -18,7 +18,7 @@ from numba.core.ir_utils import (
     dead_code_elimination
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, find_top_level_loops
-from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils
+from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils, typing
 from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
 from numba.extending import overload
@@ -77,12 +77,14 @@ class StringLiteral:
 
 
 class openmp_tag(object):
-    def __init__(self, name, arg=None, load=False):
+    def __init__(self, name, arg=None, load=False, non_arg=False, omp_slice=None):
         self.name = name
         self.arg = arg
         self.load = load
         self.loaded_arg = None
         self.xarginfo = []
+        self.non_arg = non_arg
+        self.omp_slice = omp_slice
 
     def arg_size(self, x, lowerer):
         if config.DEBUG_OPENMP >= 2:
@@ -160,7 +162,9 @@ class openmp_tag(object):
         elif isinstance(x, lir.instructions.AllocaInstr):
             decl = x.get_decl()
         elif isinstance(x, str):
-            xtyp = lowerer.fndesc.typemap[x]
+            xsplit = x.split("*")
+            #xtyp = get_dotted_type(x, lowerer.fndesc.typemap, lowerer)
+            xtyp = lowerer.fndesc.typemap[xsplit[0]]
             if config.DEBUG_OPENMP >= 1:
                 print("xtyp:", xtyp, type(xtyp))
             lowerer._alloca_var(x, xtyp)
@@ -172,15 +176,30 @@ class openmp_tag(object):
                 pointee = loptype.pointee
                 ref = self.loaded_arg._get_reference()
                 decl = str(pointee) + " " + ref
+                assert len(xsplit) == 1
             else:
-                arg_str = lowerer.getvar(x)
+                arg_str = lowerer.getvar(xsplit[0])
+                #arg_str = lowerer.getvar(x)
                 decl = arg_str.get_decl()
+                if len(xsplit) > 1:
+                    cur_typ = xtyp
+                    field_indices = []
+                    for field in xsplit[1:]:
+                        dm = lowerer.context.data_model_manager.lookup(cur_typ)
+                        findex = dm._fields.index(field)
+                        field_indices.append(str(findex))
+                        cur_typ = dm._members[findex]
+                    fi_str = ",".join(field_indices)
+                    decl = f"SCOPE({decl}, {fi_str})"
         elif isinstance(x, StringLiteral):
             decl = str(cgutils.make_bytearray(x.x))
         elif isinstance(x, int):
             decl = "i32 " + str(x)
         else:
             print("unknown arg type:", x, type(x))
+
+        if self.omp_slice is not None:
+            decl = f"SLICE({decl}, {self.omp_slice[0]}, {self.omp_slice[1]})"
 
         return decl
 
@@ -293,6 +312,7 @@ class openmp_tag(object):
         decl = ",".join([self.arg_to_str(x, lowerer) for x in arg_list])
 
         if self.name == "QUAL.OMP.TARGET.IMPLICIT":
+            assert False # shouldn't get here anymore
             typemap = lowerer.fndesc.typemap
             if isinstance(typemap[self.arg], types.npytypes.Array):
                 non_implicit_name = "QUAL.OMP.MAP.TOFROM"
@@ -528,6 +548,7 @@ class openmp_region_start(ir.Stmt):
         typingctx = lowerer.context.typing_context
         targetctx = lowerer.context
         typemap = lowerer.fndesc.typemap
+        calltypes = lowerer.fndesc.calltypes
         context = lowerer.context
         builder = lowerer.builder
         mod = builder.module
@@ -540,6 +561,15 @@ class openmp_region_start(ir.Stmt):
             print("region ids lower:block", id(self), self, id(self.block), self.block, type(self.block), self.tags, len(self.tags), "builder_id:", id(self.builder), "block_id:", id(self.block))
             for k,v in lowerer.func_ir.blocks.items():
                 print("block post copy:", k, id(v), id(v.body))
+
+        # Convert implicit tags to explicit form now that we have typing info.
+        for i in range(len(self.tags)):
+            cur_tag = self.tags[i]
+            if cur_tag.name == "QUAL.OMP.TARGET.IMPLICIT":
+                if isinstance(typemap[cur_tag.arg], types.npytypes.Array):
+                    cur_tag.name = "QUAL.OMP.MAP.TOFROM"
+                else:
+                    cur_tag.name = "QUAL.OMP.FIRSTPRIVATE"
 
         if config.DEBUG_OPENMP >= 1:
             for otag in self.tags:
@@ -571,6 +601,57 @@ class openmp_region_start(ir.Stmt):
         target_num = self.has_target()
         tgv = None
         if target_num is not None and self.target_copy != True:
+            var_table = get_name_var_table(lowerer.func_ir.blocks)
+            struct_tags = []
+            for i in range(len(self.tags)):
+                cur_tag = self.tags[i]
+                if cur_tag.name in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.MAP.TO", "QUAL.OMP.MAP.FROM"]:
+                    assert isinstance(cur_tag.arg, str)
+                    cur_tag_typ = typemap[cur_tag.arg]
+                    if isinstance(cur_tag_typ, types.npytypes.Array):
+                        cur_tag_ndim = cur_tag_typ.ndim
+                        stride_typ = lowerer.context.get_value_type(types.intp) #lc.Type.int(64)
+                        stride_abi_size = context.get_abi_sizeof(stride_typ)
+                        array_var = var_table[cur_tag.arg]
+                        if config.DEBUG_OPENMP >= 1:
+                            print("Found array mapped:", cur_tag.name, cur_tag.arg, cur_tag_typ, type(cur_tag_typ), stride_typ, type(stride_typ), stride_abi_size, array_var, type(array_var))
+                        size_var = ir.Var(None, cur_tag.arg + "_size_var", array_var.loc)
+                        #size_var = array_var.scope.redefine("size_var", array_var.loc)
+                        size_getattr = ir.Expr.getattr(array_var, "size", array_var.loc)
+                        size_assign = ir.Assign(size_getattr, size_var, array_var.loc)
+                        typemap[size_var.name] = types.int64
+                        lowerer._alloca_var(size_var.name, typemap[size_var.name])
+                        lowerer.lower_inst(size_assign)
+
+                        #--------
+
+                        """
+                        itemsize_var = ir.Var(None, cur_tag.arg + "_itemsize_var", array_var.loc)
+                        itemsize_getattr = ir.Expr.getattr(array_var, "itemsize", array_var.loc)
+                        itemsize_assign = ir.Assign(itemsize_getattr, itemsize_var, array_var.loc)
+                        typemap[itemsize_var.name] = types.int64
+                        lowerer.lower_inst(itemsize_assign)
+                        #--------
+
+                        totalsize_var = ir.Var(None, cur_tag.arg + "_totalsize_var", array_var.loc)
+                        totalsize_binop = ir.Expr.binop(operator.mul, size_var, itemsize_var, array_var.loc)
+                        totalsize_assign = ir.Assign(totalsize_binop, totalsize_var, array_var.loc)
+                        calltypes[totalsize_binop] = typing.signature(types.int64, types.int64, types.int64)
+                        typemap[totalsize_var.name] = types.int64
+                        lowerer.lower_inst(totalsize_assign)
+                        #--------
+                        """
+
+                        # see core/datamodel/models.py
+                        struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*data", non_arg=True, omp_slice=(0,lowerer.loadvar(size_var.name))))
+                        struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*shape", non_arg=True, omp_slice=(0,stride_abi_size * cur_tag_ndim)))
+                        struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*strides", non_arg=True, omp_slice=(0,stride_abi_size * cur_tag_ndim)))
+                        cur_tag.name = "QUAL.OMP.MAP.TOFROM"
+            self.tags.extend(struct_tags)
+            if config.DEBUG_OPENMP >= 1:
+                for otag in self.tags:
+                    print("tag in target:", otag, type(otag.arg))
+
             #from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
             from numba.core.compiler import Compiler, Flags
             #builder.module.device_triples = "spir64"
@@ -724,9 +805,10 @@ class openmp_region_start(ir.Stmt):
             for tag in self.tags:
                 if config.DEBUG_OPENMP >= 1:
                     print(1, "target_arg?", tag)
-                if is_target_arg(tag.name):
+                if not tag.non_arg and is_target_arg(tag.name):
                     target_args.append(tag.arg)
-                    atyp = typemap[tag.arg]
+                    atyp = get_dotted_type(tag.arg, typemap, lowerer)
+                    #atyp = typemap[tag.arg]
                     if is_pointer_target_arg(tag.name, atyp):
                         outline_arg_typs.append(types.CPointer(atyp))
                     else:
@@ -1354,6 +1436,18 @@ def is_dsa(name):
     return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.PRIVATE", "QUAL.OMP.SHARED", "QUAL.OMP.LASTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.REDUCTION") or name.startswith("QUAL.OMP.MAP")
 
 
+def get_dotted_type(x, typemap, lowerer):
+    xsplit = x.split("*")
+    cur_typ = typemap[xsplit[0]]
+    #print("xsplit:", xsplit, cur_typ, type(cur_typ))
+    for field in xsplit[1:]:
+        dm = lowerer.context.data_model_manager.lookup(cur_typ)
+        findex = dm._fields.index(field)
+        cur_typ = dm._members[findex]
+        #print("dm:", dm, type(dm), dm._members, type(dm._members), dm._fields, type(dm._fields), findex, cur_typ, type(cur_typ))
+    return cur_typ
+
+
 def is_target_arg(name):
     return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
 
@@ -1587,8 +1681,8 @@ class OpenmpVisitor(Transformer):
     def remove_privatized(cls, x):
         if isinstance(x, ir.Var):
             x = x.name
-        if x.endswith(".privatized"):
-            return x[:len(x) - len(".privatized")]
+        if x.endswith("%privatized"):
+            return x[:len(x) - len("%privatized")]
         else:
             return x
 
@@ -1643,25 +1737,25 @@ class OpenmpVisitor(Transformer):
         #unversioned_privates = set() # we get rid of SSA on the first openmp region so no SSA forms should be here
         if gen_shared:
             for var_name in inputs_to_region:
-                explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT", var_name))
+                explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
                 vars_in_explicit[var_name] = explicit_clauses[-1]
             for var_name in def_but_live_out:
-                explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT", var_name))
+                explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
                 vars_in_explicit[var_name] = explicit_clauses[-1]
             for var_name in private_to_region:
                 temp_var = ir.Var(scope, var_name, self.loc)
                 if not is_internal_var(temp_var):
                     if config.OPENMP_SHARED_PRIVATE_REGION == 0:
-                        explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT", var_name))
+                        explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
                         vars_in_explicit[var_name] = explicit_clauses[-1]
                     else:
-                        explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT", var_name))
+                        explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
                         vars_in_explicit[var_name] = explicit_clauses[-1]
 
         for var_name in private_to_region:
             temp_var = ir.Var(scope, var_name, self.loc)
             if is_internal_var(temp_var):
-                explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT", var_name))
+                explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
                 vars_in_explicit[var_name] = explicit_clauses[-1]
 
     def add_variables_to_start(self, scope, vars_in_explicit, explicit_clauses, gen_shared, start_tags, keep_alive, inputs_to_region, def_but_live_out, private_to_region):
@@ -1717,8 +1811,8 @@ class OpenmpVisitor(Transformer):
         replace_vardict = {}
         # Generate a new Numba privatized variable for each openmp private variable.
         for exp_priv in explicit_privates:
-            replace_vardict[exp_priv] = ir.Var(scope, exp_priv + ".privatized", loc)
-            #replace_vardict[exp_priv] = ir.Var(scope, exp_priv + ".privatized." + str(get_unique()), loc)
+            replace_vardict[exp_priv] = ir.Var(scope, exp_priv + "%privatized", loc)
+            #replace_vardict[exp_priv] = ir.Var(scope, exp_priv + "%privatized." + str(get_unique()), loc)
         # Get all the blocks in this openmp region and replace the original variable with the privatized one.
         replace_ssa_vars({k: v for k, v in self.blocks.items() if k in blocks}, replace_vardict)
         new_shared_clauses = []
@@ -2616,6 +2710,9 @@ class OpenmpVisitor(Transformer):
         live_out_copy = copy.copy(def_but_live_out)
 
         if config.DEBUG_OPENMP >= 1:
+            print("inputs_to_region:", inputs_to_region)
+            print("def_but_live_out:", def_but_live_out)
+            print("private_to_region:", private_to_region)
             for v in clauses:
                 print("clause after find_io_vars:", v)
 
@@ -2650,13 +2747,19 @@ class OpenmpVisitor(Transformer):
         assert(len(lastprivate_copying) == 0)
         before_start.extend(copying_ir_before)
         after_start.extend(copying_ir)
+        if config.DEBUG_OPENMP >= 1:
+            for ci in copying_ir_before:
+                print("copying_ir_before:", ci)
+            for ci in copying_ir:
+                print("copying_ir:", ci)
 
         priv_saves = []
         priv_restores = []
         # Returns a dict of private clause variables and their potentially SSA form at the end of the region.
         clause_privates = self.get_clause_privates(clauses, live_out_copy, scope, self.loc)
         for k,v in replace_vardict.items():
-            priv_saves.append(ir.Assign(ir.Var(scope, k, self.loc), v, self.loc))
+            if k in orig_inputs_to_region:
+                priv_saves.append(ir.Assign(ir.Var(scope, k, self.loc), v, self.loc))
 
         if config.DEBUG_OPENMP >= 1:
             print("replace_vardict:", replace_vardict)
@@ -2665,7 +2768,8 @@ class OpenmpVisitor(Transformer):
             print("def_but_live_out:", def_but_live_out)
             print("live_out_copy:", live_out_copy)
             print("private_to_region:", private_to_region)
-            print("priv_saves:", priv_saves)
+            for ps in priv_saves:
+                print("priv_saves:", ps)
 
         # Numba typing is not aware of OpenMP semantics, so for private variables we save the value
         # before entering the region and then restore it afterwards but we have to restore it to the SSA
