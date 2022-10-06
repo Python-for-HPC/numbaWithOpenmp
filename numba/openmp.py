@@ -138,16 +138,22 @@ class openmp_tag(object):
             print("unknown arg type:", x, type(x))
             assert(False)
 
-    def arg_to_str(self, x, lowerer):
+    def arg_to_str(self, x, lowerer, struct_lower=False, var_table=None):
         if config.DEBUG_OPENMP >= 1:
             print("arg_to_str:", x, type(x), self.load, type(self.load))
+        if struct_lower:
+            assert isinstance(x, str)
+            assert var_table is not None
+
+        typemap = lowerer.fndesc.typemap
+
         if isinstance(x, NameSlice):
             if config.DEBUG_OPENMP >= 2:
                 print("nameslice found:", x)
             x = x.name
         if isinstance(x, ir.Var):
             # Make sure the var referred to has been alloc'ed already.
-            lowerer._alloca_var(x.name, lowerer.fndesc.typemap[x.name])
+            lowerer._alloca_var(x.name, typemap[x.name])
             if self.load:
                 if not self.loaded_arg:
                     self.loaded_arg = lowerer.loadvar(x.name)
@@ -162,35 +168,82 @@ class openmp_tag(object):
         elif isinstance(x, lir.instructions.AllocaInstr):
             decl = x.get_decl()
         elif isinstance(x, str):
-            xsplit = x.split("*")
-            #xtyp = get_dotted_type(x, lowerer.fndesc.typemap, lowerer)
-            xtyp = lowerer.fndesc.typemap[xsplit[0]]
-            if config.DEBUG_OPENMP >= 1:
-                print("xtyp:", xtyp, type(xtyp))
-            lowerer._alloca_var(x, xtyp)
-            if self.load:
-                if not self.loaded_arg:
-                    self.loaded_arg = lowerer.loadvar(x)
-                lop = self.loaded_arg.operands[0]
-                loptype = lop.type
-                pointee = loptype.pointee
-                ref = self.loaded_arg._get_reference()
-                decl = str(pointee) + " " + ref
-                assert len(xsplit) == 1
+            if "*" in x:
+                assert False
+                xsplit = x.split("*")
+                #xtyp = get_dotted_type(x, typemap, lowerer)
+                xtyp = typemap[xsplit[0]]
+                if config.DEBUG_OPENMP >= 1:
+                    print("xtyp:", xtyp, type(xtyp))
+                lowerer._alloca_var(x, xtyp)
+                if self.load:
+                    if not self.loaded_arg:
+                        self.loaded_arg = lowerer.loadvar(x)
+                    lop = self.loaded_arg.operands[0]
+                    loptype = lop.type
+                    pointee = loptype.pointee
+                    ref = self.loaded_arg._get_reference()
+                    decl = str(pointee) + " " + ref
+                    assert len(xsplit) == 1
+                else:
+                    arg_str = lowerer.getvar(xsplit[0])
+                    #arg_str = lowerer.getvar(x)
+                    decl = arg_str.get_decl()
+                    if len(xsplit) > 1:
+                        cur_typ = xtyp
+                        field_indices = []
+                        for field in xsplit[1:]:
+                            dm = lowerer.context.data_model_manager.lookup(cur_typ)
+                            findex = dm._fields.index(field)
+                            field_indices.append(str(findex))
+                            cur_typ = dm._members[findex]
+                        fi_str = ",".join(field_indices)
+                        decl = f"SCOPE({decl}, {fi_str})"
             else:
-                arg_str = lowerer.getvar(xsplit[0])
-                #arg_str = lowerer.getvar(x)
-                decl = arg_str.get_decl()
-                if len(xsplit) > 1:
-                    cur_typ = xtyp
-                    field_indices = []
-                    for field in xsplit[1:]:
-                        dm = lowerer.context.data_model_manager.lookup(cur_typ)
-                        findex = dm._fields.index(field)
-                        field_indices.append(str(findex))
-                        cur_typ = dm._members[findex]
-                    fi_str = ",".join(field_indices)
-                    decl = f"SCOPE({decl}, {fi_str})"
+                xtyp = typemap[x]
+                if config.DEBUG_OPENMP >= 1:
+                    print("xtyp:", xtyp, type(xtyp))
+                lowerer._alloca_var(x, xtyp)
+                if self.load:
+                    if not self.loaded_arg:
+                        self.loaded_arg = lowerer.loadvar(x)
+                    lop = self.loaded_arg.operands[0]
+                    loptype = lop.type
+                    pointee = loptype.pointee
+                    ref = self.loaded_arg._get_reference()
+                    decl = str(pointee) + " " + ref
+                else:
+                    arg_str = lowerer.getvar(x)
+                    decl = arg_str.get_decl()
+
+                if struct_lower and isinstance(xtyp, types.npytypes.Array):
+                    dm = lowerer.context.data_model_manager.lookup(xtyp)
+                    cur_tag_ndim = xtyp.ndim
+                    stride_typ = lowerer.context.get_value_type(types.intp) #lc.Type.int(64)
+                    stride_abi_size = lowerer.context.get_abi_sizeof(stride_typ)
+                    array_var = var_table[self.arg]
+                    if config.DEBUG_OPENMP >= 1:
+                        print("Found array mapped:", self.name, self.arg, xtyp, type(xtyp), stride_typ, type(stride_typ), stride_abi_size, array_var, type(array_var))
+                    size_var = ir.Var(None, self.arg + "_size_var", array_var.loc)
+                    #size_var = array_var.scope.redefine("size_var", array_var.loc)
+                    size_getattr = ir.Expr.getattr(array_var, "size", array_var.loc)
+                    size_assign = ir.Assign(size_getattr, size_var, array_var.loc)
+                    typemap[size_var.name] = types.int64
+                    lowerer._alloca_var(size_var.name, typemap[size_var.name])
+                    lowerer.lower_inst(size_assign)
+                    data_field = dm._fields.index("data")
+                    shape_field = dm._fields.index("shape")
+                    strides_field = dm._fields.index("strides")
+                    size_lowered = lowerer.getvar(size_var.name).get_decl()
+                    fixed_size = stride_abi_size * cur_tag_ndim
+                    decl += f", (({data_field}), 0, {size_lowered})"
+                    decl += f", (({shape_field}), 0, {fixed_size})"
+                    decl += f", (({strides_field}), 0, {fixed_size})"
+
+                    # see core/datamodel/models.py
+                    #struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*data", non_arg=True, omp_slice=(0,lowerer.loadvar(size_var.name))))
+                    #struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*shape", non_arg=True, omp_slice=(0,stride_abi_size * cur_tag_ndim)))
+                    #struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*strides", non_arg=True, omp_slice=(0,stride_abi_size * cur_tag_ndim)))
         elif isinstance(x, StringLiteral):
             decl = str(cgutils.make_bytearray(x.x))
         elif isinstance(x, int):
@@ -308,19 +361,27 @@ class openmp_tag(object):
             arg_list = [self.arg]
         else:
             arg_list = []
-
-        decl = ",".join([self.arg_to_str(x, lowerer) for x in arg_list])
+        typemap = lowerer.fndesc.typemap
 
         if self.name == "QUAL.OMP.TARGET.IMPLICIT":
             assert False # shouldn't get here anymore
-            typemap = lowerer.fndesc.typemap
             if isinstance(typemap[self.arg], types.npytypes.Array):
-                non_implicit_name = "QUAL.OMP.MAP.TOFROM"
+                name_to_use = "QUAL.OMP.MAP.TOFROM"
             else:
-                non_implicit_name = "QUAL.OMP.FIRSTPRIVATE"
-            return '"' + non_implicit_name + '"(' + decl + ')'
+                name_to_use = "QUAL.OMP.FIRSTPRIVATE"
         else:
-            return '"' + self.name + '"(' + decl + ')'
+            name_to_use = self.name
+
+        is_array = self.arg in typemap and isinstance(typemap[self.arg], types.npytypes.Array)
+
+        if name_to_use in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.MAP.TO", "QUAL.OMP.MAP.FROM"] and is_array:
+            name_to_use += ".STRUCT"
+            var_table = get_name_var_table(lowerer.func_ir.blocks)
+            decl = ",".join([self.arg_to_str(x, lowerer, struct_lower=True, var_table=var_table) for x in arg_list])
+        else:
+            decl = ",".join([self.arg_to_str(x, lowerer, struct_lower=False) for x in arg_list])
+
+        return '"' + name_to_use + '"(' + decl + ')'
 
     def replace_vars_inner(self, var_dict):
         if isinstance(self.arg, ir.Var):
@@ -602,6 +663,7 @@ class openmp_region_start(ir.Stmt):
         tgv = None
         if target_num is not None and self.target_copy != True:
             var_table = get_name_var_table(lowerer.func_ir.blocks)
+            """
             struct_tags = []
             for i in range(len(self.tags)):
                 cur_tag = self.tags[i]
@@ -625,7 +687,6 @@ class openmp_region_start(ir.Stmt):
 
                         #--------
 
-                        """
                         itemsize_var = ir.Var(None, cur_tag.arg + "_itemsize_var", array_var.loc)
                         itemsize_getattr = ir.Expr.getattr(array_var, "itemsize", array_var.loc)
                         itemsize_assign = ir.Assign(itemsize_getattr, itemsize_var, array_var.loc)
@@ -640,7 +701,6 @@ class openmp_region_start(ir.Stmt):
                         typemap[totalsize_var.name] = types.int64
                         lowerer.lower_inst(totalsize_assign)
                         #--------
-                        """
 
                         # see core/datamodel/models.py
                         struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*data", non_arg=True, omp_slice=(0,lowerer.loadvar(size_var.name))))
@@ -651,6 +711,7 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 for otag in self.tags:
                     print("tag in target:", otag, type(otag.arg))
+            """
 
             #from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
             from numba.core.compiler import Compiler, Flags
@@ -1362,8 +1423,18 @@ class _OpenmpContextType(WithContext):
 
     def mutate_with_body(self, func_ir, blocks, blk_start, blk_end,
                          body_blocks, dispatcher_factory, extra, state=None, flags=None):
+        if config.DEBUG_OPENMP >= 1:
+            print("pre-dead-code")
+            dump_blocks(blocks)
         if not config.OPENMP_DISABLED and not hasattr(func_ir, "has_openmp_region"):
-            dead_code_elimination(func_ir)
+            # We can't do dead code elimination at this point because if an argument
+            # is used only in an openmp clause then it is detected as dead and is
+            # eliminated.  We'd have to run through the IR and find all the
+            # openmp regions and extract the vars used there and then modify the
+            # IR with something fake just to take the var alive.  The other approach
+            # would be to modify dead code elimination to find the vars referenced
+            # in openmp context strings.
+            #dead_code_elimination(func_ir)
             remove_ssa_from_func_ir(func_ir)
             func_ir.has_openmp_region = True
         if config.DEBUG_OPENMP >= 1:
@@ -1479,6 +1550,8 @@ def remove_ssa(var_name, scope, loc):
 
 
 def user_defined_var(var):
+    if not isinstance(var, str):
+        return False
     return not var.startswith("$")
 
 
@@ -1564,6 +1637,23 @@ def get_blocks_between_start_end(blocks, start_block, end_block):
     # Calculate all the Numba IR blocks in the target region.
     add_in_region(cfg, start_block, blocks_in_region, end_block)
     return blocks_in_region
+
+class VarCollector(Transformer):
+    def __init__(self, func_ir, blocks, blk_start, blk_end, body_blocks, loc, state):
+        self.func_ir = func_ir
+        self.blocks = blocks
+        self.blk_start = blk_start
+        self.blk_end = blk_end
+        self.body_blocks = body_blocks
+        self.loc = loc
+        self.state = state
+        super(OpenmpVisitor, self).__init__()
+
+    def PYTHON_NAME(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit VarCollector PYTHON_NAME", args, type(args), str(args))
+        return str(args)
+
 
 class OpenmpVisitor(Transformer):
     target_num = 0
