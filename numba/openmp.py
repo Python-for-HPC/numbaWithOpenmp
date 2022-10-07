@@ -1497,6 +1497,7 @@ class _OpenmpContextType(WithContext):
             flags.release_gil = True
             flags.noalias = True
             _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra, state)
+            func_ir._definitions = build_definitions(func_ir.blocks)
             if config.DEBUG_OPENMP >= 1:
                 print("post-with-removal")
                 dump_blocks(blocks)
@@ -1678,6 +1679,9 @@ def get_blocks_between_start_end(blocks, start_block, end_block):
 class VarName(str):
     pass
 
+class OnlyClauseVar(VarName):
+    pass
+
 # This Transformer visitor class just finds the referenced python names
 # and puts them in a list of VarName.  The default visitor function
 # looks for list of VarNames in the args to that tree node and then
@@ -1690,11 +1694,20 @@ class VarCollector(Transformer):
     def PYTHON_NAME(self, args):
         return [VarName(args)]
 
+    def const_num_or_var(self, args):
+        return args[0]
+
+    def num_threads_clause(self, args):
+        (_, num_threads) = args
+        assert isinstance(num_threads, list)
+        assert len(num_threads) == 1
+        return [OnlyClauseVar(num_threads[0])]
+
     def __default__(self, data, children, meta):
         ret = []
         for c in children:
             if isinstance(c, list) and len(c) > 0:
-                if isinstance(c[0], VarName):
+                if isinstance(c[0], OnlyClauseVar):
                     ret.extend(c)
         return ret
 
