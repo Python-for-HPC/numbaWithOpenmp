@@ -1699,9 +1699,11 @@ class VarCollector(Transformer):
 
     def num_threads_clause(self, args):
         (_, num_threads) = args
-        assert isinstance(num_threads, list)
-        assert len(num_threads) == 1
-        return [OnlyClauseVar(num_threads[0])]
+        if isinstance(num_threads, list):
+            assert len(num_threads) == 1
+            return [OnlyClauseVar(num_threads[0])]
+        else:
+            return None
 
     def __default__(self, data, children, meta):
         ret = []
