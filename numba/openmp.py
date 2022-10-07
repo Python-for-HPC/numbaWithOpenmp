@@ -14,6 +14,7 @@ from numba.core.ir_utils import (
     visit_vars,
     get_name_var_table,
     replace_var_names,
+    get_definition,
     build_definitions,
     dead_code_elimination
 )
@@ -1418,6 +1419,41 @@ class PythonOpenmp:
         pass
 
 
+def extract_args_from_openmp(func_ir):
+    """ Find all the openmp context calls in the function and then
+        use the VarCollector transformer to find all the Python variables
+        referenced in the openmp clauses.  We then add those variables as
+        regular arguments to the openmp context call just so Numba's
+        usedef analysis is able to keep variables alive that are only
+        referenced in openmp clauses.
+    """
+    func_ir._definitions = build_definitions(func_ir.blocks)
+    var_table = get_name_var_table(func_ir.blocks)
+    for block in func_ir.blocks.values():
+        for inst in block.body:
+            if isinstance(inst, ir.Assign) and isinstance(inst.value, ir.Expr) and inst.value.op == "call":
+                func_def = get_definition(func_ir, inst.value.func)
+                if isinstance(func_def, ir.Global) and isinstance(func_def.value, _OpenmpContextType):
+                    str_def = get_definition(func_ir, inst.value.args[0])
+                    assert isinstance(str_def, ir.Const) and isinstance(str_def.value, str)
+                    parse_res = var_collector_parser.parse(str_def.value)
+                    visitor = VarCollector()
+                    try:
+                        visit_res = visitor.transform(parse_res)
+                        inst.value.args.extend([var_table[x] for x in visit_res])
+                    except Exception as f:
+                        print("generic transform exception")
+                        exc_type, exc_obj, exc_tb = sys.exc_info()
+                        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+                        print(exc_type, fname, exc_tb.tb_lineno)
+                        #print("Internal error for OpenMp pragma '{}'".format(arg.value))
+                        sys.exit(-2)
+                    except:
+                        print("fallthrough exception")
+                        #print("Internal error for OpenMp pragma '{}'".format(arg.value))
+                        sys.exit(-3)
+
+
 class _OpenmpContextType(WithContext):
     is_callable = True
 
@@ -1434,7 +1470,8 @@ class _OpenmpContextType(WithContext):
             # IR with something fake just to take the var alive.  The other approach
             # would be to modify dead code elimination to find the vars referenced
             # in openmp context strings.
-            #dead_code_elimination(func_ir)
+            extract_args_from_openmp(func_ir)
+            dead_code_elimination(func_ir)
             remove_ssa_from_func_ir(func_ir)
             func_ir.has_openmp_region = True
         if config.DEBUG_OPENMP >= 1:
@@ -1638,21 +1675,28 @@ def get_blocks_between_start_end(blocks, start_block, end_block):
     add_in_region(cfg, start_block, blocks_in_region, end_block)
     return blocks_in_region
 
+class VarName(str):
+    pass
+
+# This Transformer visitor class just finds the referenced python names
+# and puts them in a list of VarName.  The default visitor function
+# looks for list of VarNames in the args to that tree node and then
+# concatenates them all together.  The final return value is a list of
+# VarName that are variables used in the openmp clauses.
 class VarCollector(Transformer):
-    def __init__(self, func_ir, blocks, blk_start, blk_end, body_blocks, loc, state):
-        self.func_ir = func_ir
-        self.blocks = blocks
-        self.blk_start = blk_start
-        self.blk_end = blk_end
-        self.body_blocks = body_blocks
-        self.loc = loc
-        self.state = state
-        super(OpenmpVisitor, self).__init__()
+    def __init__(self):
+        super(VarCollector, self).__init__()
 
     def PYTHON_NAME(self, args):
-        if config.DEBUG_OPENMP >= 1:
-            print("visit VarCollector PYTHON_NAME", args, type(args), str(args))
-        return str(args)
+        return [VarName(args)]
+
+    def __default__(self, data, children, meta):
+        ret = []
+        for c in children:
+            if isinstance(c, list) and len(c) > 0:
+                if isinstance(c[0], VarName):
+                    ret.extend(c)
+        return ret
 
 
 class OpenmpVisitor(Transformer):
@@ -3925,6 +3969,7 @@ openmp_grammar = r"""
 """
 
 openmp_parser = Lark(openmp_grammar, start='openmp_statement')
+var_collector_parser = Lark(openmp_grammar, start='openmp_statement')
 
 def remove_ssa_callback(var, unused):
     assert isinstance(var, ir.Var)
