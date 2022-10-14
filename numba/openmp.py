@@ -237,9 +237,9 @@ class openmp_tag(object):
                     strides_field = dm._fields.index("strides")
                     size_lowered = lowerer.getvar(size_var.name).get_decl()
                     fixed_size = stride_abi_size * cur_tag_ndim
-                    decl += f", (({data_field}), 0, {size_lowered})"
-                    decl += f", (({shape_field}), 0, {fixed_size})"
-                    decl += f", (({strides_field}), 0, {fixed_size})"
+                    decl += f", i32 {data_field}, i64 0, {size_lowered}"
+                    decl += f", i32 {shape_field}, i64 0, i64 {fixed_size}"
+                    decl += f", i32 {strides_field}, i64 0, i64 {fixed_size}"
 
                     # see core/datamodel/models.py
                     #struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*data", non_arg=True, omp_slice=(0,lowerer.loadvar(size_var.name))))
@@ -1435,6 +1435,9 @@ def extract_args_from_openmp(func_ir):
                 func_def = get_definition(func_ir, inst.value.func)
                 if isinstance(func_def, ir.Global) and isinstance(func_def.value, _OpenmpContextType):
                     str_def = get_definition(func_ir, inst.value.args[0])
+                    if not isinstance(str_def, ir.Const) or not isinstance(str_def.value, str):
+                        # The non-const openmp string error is handled later.
+                        continue
                     assert isinstance(str_def, ir.Const) and isinstance(str_def.value, str)
                     parse_res = var_collector_parser.parse(str_def.value)
                     visitor = VarCollector()
@@ -1536,6 +1539,9 @@ class NonconstantOpenmpSpecification(Exception):
     pass
 
 class NonStringOpenmpSpecification(Exception):
+    pass
+
+class MultipleNumThreadsClauses(Exception):
     pass
 
 openmp_context = _OpenmpContextType()
@@ -1826,6 +1832,25 @@ class OpenmpVisitor(Transformer):
                             privates.append(carg)
         return ret, privates
 
+    def filter_unused_vars(self, clauses, used_vars):
+        new_clauses = []
+        for c in clauses:
+            if config.DEBUG_OPENMP >= 1:
+                print("filter_unused_vars:", c, type(c))
+            if isinstance(c, openmp_tag):
+                if config.DEBUG_OPENMP >= 1:
+                    print("arg:", c.arg, type(c.arg))
+                assert not isinstance(c.arg, list)
+                if config.DEBUG_OPENMP >= 1:
+                    print("c.arg:", c.arg, type(c.arg), user_defined_var(c.arg), is_dsa(c.name))
+                    
+                if isinstance(c.arg, str) and user_defined_var(c.arg) and is_dsa(c.name):
+                    if c.arg in used_vars:
+                        new_clauses.append(c)
+                else:
+                    new_clauses.append(c)
+        return new_clauses
+
     @classmethod
     def remove_privatized(cls, x):
         if isinstance(x, ir.Var):
@@ -1943,8 +1968,12 @@ class OpenmpVisitor(Transformer):
                 evar = ir.Var(scope, var, self.loc)
                 keep_alive.append(ir.Assign(evar, evar, self.loc))
 
-    def flatten(self, incoming_clauses):
+    def flatten(self, all_clauses, start_block):
+        if config.DEBUG_OPENMP >= 1:
+            print("flatten", id(start_block))
+        incoming_clauses = [remove_indirections(x) for x in all_clauses]
         clauses = []
+        default_shared = True
         for clause in incoming_clauses:
             if config.DEBUG_OPENMP >= 1:
                 print("clause:", clause, type(clause))
@@ -1952,9 +1981,30 @@ class OpenmpVisitor(Transformer):
                 clauses.append(clause)
             elif isinstance(clause, list):
                 clauses.extend(remove_indirections(clause))
+            elif isinstance(clause, default_shared_val):
+                default_shared = clause.val
+                if config.DEBUG_OPENMP >= 1:
+                    print("got new default_shared:", clause.val)
             else:
+                if config.DEBUG_OPENMP >= 1:
+                    print("Unknown clause type in incoming_clauses", clause, type(clause))
                 assert(0)
-        return clauses
+
+        if hasattr(start_block, "openmp_replace_vardict"):
+            for clause in clauses:
+                #print("flatten out clause:", clause, clause.arg, type(clause.arg))
+                for vardict in start_block.openmp_replace_vardict:
+                    if clause.arg in vardict:
+                        #print("clause.arg in vardict:", clause.arg, type(clause.arg), vardict[clause.arg], type(vardict[clause.arg]))
+                        clause.arg = vardict[clause.arg].name
+
+        return clauses, default_shared
+
+    def add_replacement(self, blocks, replace_vardict):
+        for b in blocks.values():
+            if not hasattr(b, "openmp_replace_vardict"):
+                b.openmp_replace_vardict = []
+            b.openmp_replace_vardict.append(replace_vardict)
 
     def replace_private_vars(self, blocks, all_explicits, explicit_privates, clauses, scope, loc, orig_inputs_to_region, for_target=False):
         replace_vardict = {}
@@ -1963,7 +2013,10 @@ class OpenmpVisitor(Transformer):
             replace_vardict[exp_priv] = ir.Var(scope, exp_priv + "%privatized", loc)
             #replace_vardict[exp_priv] = ir.Var(scope, exp_priv + "%privatized." + str(get_unique()), loc)
         # Get all the blocks in this openmp region and replace the original variable with the privatized one.
-        replace_ssa_vars({k: v for k, v in self.blocks.items() if k in blocks}, replace_vardict)
+        block_dict = {k: v for k, v in self.blocks.items() if k in blocks}
+        replace_ssa_vars(block_dict, replace_vardict)
+        self.add_replacement(block_dict, replace_vardict)
+     
         new_shared_clauses = []
         copying_ir = []
         copying_ir_before = []
@@ -2112,10 +2165,13 @@ class OpenmpVisitor(Transformer):
         scope = sblk.scope
         eblk = self.blocks[self.blk_end]
 
-        clauses = []
-        default_shared = True
+        #clauses = []
+        #default_shared = True
         if config.DEBUG_OPENMP >= 1:
             print("some_for_directive", self.body_blocks)
+        clauses, default_shared = self.flatten(args[first_clause:], sblk)
+
+        """
         incoming_clauses = [remove_indirections(x) for x in args[first_clause:]]
         # Process all the incoming clauses which can be in singular or list form
         # and flatten them to a list of openmp_tags.
@@ -2132,10 +2188,15 @@ class OpenmpVisitor(Transformer):
                     print("got new default_shared:", clause.val)
             else:
                 assert(0)
+        """
+
         if config.DEBUG_OPENMP >= 1:
             print("visit", main_start_tag, args, type(args), default_shared)
             for clause in clauses:
                 print("post-process clauses:", clause)
+
+        if len(list(filter(lambda x: x.name == "QUAL.OMP.NUM_THREADS", clauses))) > 1:
+            raise MultipleNumThreadsClauses(f"Multiple num_threads clauses near line {self.loc} is not allowed in an OpenMP parallel region.")
 
         # Get a dict mapping variables explicitly mentioned in the data clauses above to their openmp_tag.
         vars_in_explicit_clauses, explicit_privates = self.get_explicit_vars(clauses)
@@ -2186,10 +2247,14 @@ class OpenmpVisitor(Transformer):
         loop_blocks_for_io_minus_entry = loop_blocks_for_io - {entry}
         non_loop_blocks = set(self.body_blocks)
         non_loop_blocks.difference_update(loop_blocks_for_io)
-        non_loop_blocks.difference_update({exit})
+        #non_loop_blocks.difference_update({exit})
 
         if config.DEBUG_OPENMP >= 1:
-            print("non_loop_blocks:", non_loop_blocks)
+            print("non_loop_blocks:", non_loop_blocks, "entry:", entry, self.body_blocks)
+
+        first_stmt = self.blocks[entry].body[0]
+        if not isinstance(first_stmt, ir.Assign) or not isinstance(first_stmt.value, ir.Global) or first_stmt.value.name != "range":
+            raise ParallelForExtraCode(f"Extra code near line {self.loc} is not allowed before or after the loop in an OpenMP parallel for region.")
 
         for non_loop_block in non_loop_blocks:
             nlb = self.blocks[non_loop_block]
@@ -2826,20 +2891,22 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             print("visit target_directive", args, type(args))
 
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+        scope = sblk.scope
+
         #clauses = args[1:]
         if config.DEBUG_OPENMP >= 1:
             for clause in args[1:]:
                 print("pre clause:", clause)
-        clauses = [remove_indirections(x) for x in args[1:]]
-        tag_clauses = self.flatten(clauses)
-        clauses = tag_clauses
+        #clauses = [remove_indirections(x) for x in args[1:]]
+        #tag_clauses = self.flatten(clauses)
+        #clauses = tag_clauses
+        clauses, _ = self.flatten(args[1:], sblk)
         if config.DEBUG_OPENMP >= 1:
             for clause in clauses:
                 print("final clause:", clause)
 
-        sblk = self.blocks[self.blk_start]
-        eblk = self.blocks[self.blk_end]
-        scope = sblk.scope
         before_start = []
         after_start = []
 
@@ -3098,14 +3165,15 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for TASK.
 
     def task_directive(self, args):
-        clauses = args[1:]
-        tag_clauses = []
-        for clause in clauses:
-            tag_clauses.extend(clause)
+        #clauses = args[1:]
+        #tag_clauses = []
+        #for clause in clauses:
+        #    tag_clauses.extend(clause)
 
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
         scope = sblk.scope
+        tag_clauses, _ = self.flatten(args[1:], sblk)
 
         start_tags = [openmp_tag("DIR.OMP.TASK")] + tag_clauses
         end_tags   = [openmp_tag("DIR.OMP.END.TASK")]
@@ -3292,10 +3360,13 @@ class OpenmpVisitor(Transformer):
 
         before_start = []
         after_start = []
-        clauses = []
-        default_shared = True
+        #clauses = []
+        #default_shared = True
         if config.DEBUG_OPENMP >= 1:
             print("visit parallel_directive", args, type(args))
+        clauses, default_shared = self.flatten(args[1:], sblk)
+
+        """
         incoming_clauses = [remove_indirections(x) for x in args[1:]]
         # Process all the incoming clauses which can be in singular or list form
         # and flatten them to a list of openmp_tags.
@@ -3314,10 +3385,18 @@ class OpenmpVisitor(Transformer):
                 if config.DEBUG_OPENMP >= 1:
                     print("Unknown clause type in incoming_clauses", clause, type(clause))
                 assert(0)
+        """
+
+        if len(list(filter(lambda x: x.name == "QUAL.OMP.NUM_THREADS", clauses))) > 1:
+            raise MultipleNumThreadsClauses(f"Multiple num_threads clauses near line {self.loc} is not allowed in an OpenMP parallel region.")
 
         if config.DEBUG_OPENMP >= 1:
             for clause in clauses:
                 print("final clause:", clause)
+
+        inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
+        used_in_region = inputs_to_region | def_but_live_out | private_to_region
+        clauses = self.filter_unused_vars(clauses, used_in_region)
 
         # Get a dict mapping variables explicitly mentioned in the data clauses above to their openmp_tag.
         vars_in_explicit_clauses, explicit_privates = self.get_explicit_vars(clauses)
@@ -3327,7 +3406,6 @@ class OpenmpVisitor(Transformer):
                 print("vars_in_explicit clauses first:", v)
 
         # Do an analysis to get variable use information coming into and out of the region.
-        inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
         orig_inputs_to_region = copy.copy(inputs_to_region)
         live_out_copy = copy.copy(def_but_live_out)
 
@@ -3411,8 +3489,8 @@ class OpenmpVisitor(Transformer):
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
         sblk.body = priv_saves + before_start + [or_start] + after_start + sblk.body[:]
         #eblk.body = [or_end]   + eblk.body[:]
-        eblk.body = [or_end] + priv_restores + eblk.body[:]
-        #eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
+        #eblk.body = [or_end] + priv_restores + eblk.body[:]
+        eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
 
     def parallel_clause(self, args):
         (val,) = args
