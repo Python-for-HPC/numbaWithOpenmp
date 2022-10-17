@@ -201,6 +201,8 @@ class openmp_tag(object):
                         fi_str = ",".join(field_indices)
                         decl = f"SCOPE({decl}, {fi_str})"
             else:
+                if x not in typemap:
+                    return ""
                 xtyp = typemap[x]
                 if config.DEBUG_OPENMP >= 1:
                     print("xtyp:", xtyp, type(xtyp))
@@ -236,7 +238,8 @@ class openmp_tag(object):
                     shape_field = dm._fields.index("shape")
                     strides_field = dm._fields.index("strides")
                     size_lowered = lowerer.getvar(size_var.name).get_decl()
-                    fixed_size = stride_abi_size * cur_tag_ndim
+                    fixed_size = cur_tag_ndim
+                    #fixed_size = stride_abi_size * cur_tag_ndim
                     decl += f", i32 {data_field}, i64 0, {size_lowered}"
                     decl += f", i32 {shape_field}, i64 0, i64 {fixed_size}"
                     decl += f", i32 {strides_field}, i64 0, i64 {fixed_size}"
@@ -363,6 +366,7 @@ class openmp_tag(object):
         else:
             arg_list = []
         typemap = lowerer.fndesc.typemap
+        assert len(arg_list) <= 1
 
         if self.name == "QUAL.OMP.TARGET.IMPLICIT":
             assert False # shouldn't get here anymore
@@ -1474,7 +1478,7 @@ class _OpenmpContextType(WithContext):
             # would be to modify dead code elimination to find the vars referenced
             # in openmp context strings.
             extract_args_from_openmp(func_ir)
-            dead_code_elimination(func_ir)
+            #dead_code_elimination(func_ir)
             remove_ssa_from_func_ir(func_ir)
             func_ir.has_openmp_region = True
         if config.DEBUG_OPENMP >= 1:
@@ -1966,7 +1970,9 @@ class OpenmpVisitor(Transformer):
         for var in vars_in_explicit:
             if not is_private(vars_in_explicit[var].name):
                 evar = ir.Var(scope, var, self.loc)
-                keep_alive.append(ir.Assign(evar, evar, self.loc))
+                evar_copy = scope.redefine("evar_copy", self.loc)
+                keep_alive.append(ir.Assign(evar, evar_copy, self.loc))
+                #keep_alive.append(ir.Assign(evar, evar, self.loc))
 
     def flatten(self, all_clauses, start_block):
         if config.DEBUG_OPENMP >= 1:
@@ -2102,7 +2108,7 @@ class OpenmpVisitor(Transformer):
                         c.name = "QUAL.OMP.PRIVATE"
                         """
                     elif c.name == "QUAL.OMP.LASTPRIVATE":
-                        handle_firstprivate(c.arg, new_shared_clauses, all_explicits, lastprivate_copying, replace_vardict, c)
+                        handle_lastprivate(c.arg, new_shared_clauses, all_explicits, lastprivate_copying, replace_vardict, c)
                         c.name = "QUAL.OMP.PRIVATE"
                         """
                         new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", c.arg))
@@ -2136,7 +2142,7 @@ class OpenmpVisitor(Transformer):
                             copying_ir_before.append(ir.Assign(ir.Var(scope, carg, loc), replace_vardict[carg], loc))
                             """
                         elif c.name == "QUAL.OMP.LASTPRIVATE":
-                            handle_firstprivate(carg, new_shared_clauses, all_explicits, lastprivate_copying, replace_vardict, c)
+                            handle_lastprivate(carg, new_shared_clauses, all_explicits, lastprivate_copying, replace_vardict, c)
                             """
                             new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", carg))
                             all_explicits[carg] = new_shared_clauses[-1]
@@ -2378,9 +2384,19 @@ class OpenmpVisitor(Transformer):
                                 break
                     if config.DEBUG_OPENMP >= 1:
                         print("latest_index:", latest_index, type(latest_index))
-                    new_index_clause = openmp_tag("QUAL.OMP.PRIVATE", ir.Var(loop_index.scope, latest_index.name, inst.loc))
-                    clauses.append(new_index_clause)
-                    vars_in_explicit_clauses[latest_index.name] = new_index_clause
+
+                    if latest_index.name not in vars_in_explicit_clauses:
+                        new_index_clause = openmp_tag("QUAL.OMP.PRIVATE", ir.Var(loop_index.scope, latest_index.name, inst.loc))
+                        clauses.append(new_index_clause)
+                        vars_in_explicit_clauses[latest_index.name] = new_index_clause
+                    else:
+                        if vars_in_explicit_clauses[latest_index.name].name != "QUAL.OMP.PRIVATE":
+                            pass
+                            # throw error?  FIX ME
+
+                    if config.DEBUG_OPENMP >= 1:
+                        for clause in clauses:
+                            print("post-latest_index clauses:", clause)
 
                     start = 0
                     step = 1
@@ -2628,7 +2644,11 @@ class OpenmpVisitor(Transformer):
                         lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.sub, size_var, step_var, inst.loc), size_minus_step, inst.loc))
 
                         cmp_var = scope.redefine("$lastiter_cmp_var", inst.loc)
-                        lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ge, latest_index, size_minus_step, inst.loc), cmp_var, inst.loc))
+                        if latest_index.name in replace_vardict:
+                            li_privatized = replace_vardict[latest_index.name]
+                            lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ge, li_privatized, size_minus_step, inst.loc), cmp_var, inst.loc))
+                        else:
+                            lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ge, latest_index, size_minus_step, inst.loc), cmp_var, inst.loc))
 
                         zero_var = loop_index.scope.redefine("$zero_var", inst.loc)
                         zero_assign = ir.Assign(ir.Const(0, inst.loc), zero_var, inst.loc)
