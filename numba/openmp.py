@@ -87,6 +87,17 @@ class openmp_tag(object):
         self.non_arg = non_arg
         self.omp_slice = omp_slice
 
+    def var_in(self, var):
+        assert isinstance(var, str)
+
+        if isinstance(self.arg, ir.Var):
+            return self.arg.name == var
+
+        if isinstance(self.arg, str):
+            return self.arg == var
+
+        return False
+
     def arg_size(self, x, lowerer):
         if config.DEBUG_OPENMP >= 2:
             print("arg_size:", x, type(x))
@@ -512,6 +523,13 @@ class openmp_region_start(ir.Stmt):
         result.end_region.start_region = result
         return result
     """
+
+    def get_var_dsa(self, var):
+        assert isinstance(var, str)
+        for tag in self.tags:
+            if is_dsa(tag.name) and tag.var_in(var):
+                return tag.name
+        return None
 
     def requires_acquire_release(self):
         self.acq_res = True
@@ -1722,6 +1740,24 @@ class VarCollector(Transformer):
                 if isinstance(c[0], OnlyClauseVar):
                     ret.extend(c)
         return ret
+
+
+def add_enclosing_region(func_ir, blocks, openmp_node):
+    if not hasattr(func_ir, "openmp_enclosing"):
+        func_ir.openmp_enclosing = {}
+    for b in blocks:
+        if b not in func_ir.openmp_enclosing:
+            func_ir.openmp_enclosing[b] = []
+        func_ir.openmp_enclosing[b].append(openmp_node)
+
+
+def get_enclosing_region(func_ir, cur_block):
+    if not hasattr(func_ir, "openmp_enclosing"):
+        func_ir.openmp_enclosing = {}
+    if cur_block in func_ir.openmp_enclosing:
+        return func_ir.openmp_enclosing[cur_block]
+    else:
+        return None
 
 
 class OpenmpVisitor(Transformer):
@@ -3195,21 +3231,39 @@ class OpenmpVisitor(Transformer):
         scope = sblk.scope
         tag_clauses, _ = self.flatten(args[1:], sblk)
 
+        def get_var_from_enclosing(enclosing_regions, var):
+            if len(enclosing_regions) == 0:
+                return None
+            return enclosing_regions[-1].get_var_dsa(var)
+
+        enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
+        if config.DEBUG_OPENMP >= 1:
+            print("enclosing_regions:", enclosing_regions)
+
         start_tags = [openmp_tag("DIR.OMP.TASK")] + tag_clauses
         end_tags   = [openmp_tag("DIR.OMP.END.TASK")]
         keep_alive = []
 
         inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
         for itr in inputs_to_region:
+            enclosing_dsa = get_var_from_enclosing(enclosing_regions, itr)
             if config.DEBUG_OPENMP >= 1:
-                print("input_to_region:", itr)
-            start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", ir.Var(scope, itr, self.loc)))
+                print("input_to_region:", itr, enclosing_dsa)
+            if enclosing_dsa == "QUAL.OMP.SHARED":
+                start_tags.append(openmp_tag("QUAL.OMP.SHARED", ir.Var(scope, itr, self.loc)))
+            else:
+                start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", ir.Var(scope, itr, self.loc)))
         for itr in def_but_live_out:
+            enclosing_dsa = get_var_from_enclosing(enclosing_regions, itr)
             if config.DEBUG_OPENMP >= 1:
-                print("def_but_live_out:", itr)
+                print("def_but_live_out:", itr, enclosing_dsa)
             itr_var = ir.Var(scope, itr, self.loc)
-            start_tags.append(openmp_tag("QUAL.OMP.SHARED", itr_var))
-            keep_alive.append(ir.Assign(itr_var, itr_var, self.loc))
+            if enclosing_dsa == "QUAL.OMP.SHARED":
+                start_tags.append(openmp_tag("QUAL.OMP.SHARED", itr_var))
+                keep_alive.append(ir.Assign(itr_var, itr_var, self.loc))
+            else:
+                start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", itr_var))
+
         for ptr in private_to_region:
             if config.DEBUG_OPENMP >= 1:
                 print("private_to_region:", ptr)
@@ -3511,6 +3565,8 @@ class OpenmpVisitor(Transformer):
         #eblk.body = [or_end]   + eblk.body[:]
         #eblk.body = [or_end] + priv_restores + eblk.body[:]
         eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
+
+        add_enclosing_region(self.func_ir, self.body_blocks, or_start)
 
     def parallel_clause(self, args):
         (val,) = args
