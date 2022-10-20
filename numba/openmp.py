@@ -181,8 +181,8 @@ class openmp_tag(object):
             decl = x.get_decl()
         elif isinstance(x, str):
             if "*" in x:
-                assert False
                 xsplit = x.split("*")
+                assert len(xsplit) == 2
                 #xtyp = get_dotted_type(x, typemap, lowerer)
                 xtyp = typemap[xsplit[0]]
                 if config.DEBUG_OPENMP >= 1:
@@ -207,10 +207,11 @@ class openmp_tag(object):
                         for field in xsplit[1:]:
                             dm = lowerer.context.data_model_manager.lookup(cur_typ)
                             findex = dm._fields.index(field)
-                            field_indices.append(str(findex))
+                            field_indices.append("i32 " + str(findex))
                             cur_typ = dm._members[findex]
                         fi_str = ",".join(field_indices)
-                        decl = f"SCOPE({decl}, {fi_str})"
+                        decl += f", {fi_str}"
+                        #decl = f"SCOPE({decl}, {fi_str})"
             else:
                 if x not in typemap:
                     return ""
@@ -267,7 +268,19 @@ class openmp_tag(object):
             print("unknown arg type:", x, type(x))
 
         if self.omp_slice is not None:
-            decl = f"SLICE({decl}, {self.omp_slice[0]}, {self.omp_slice[1]})"
+            def handle_var(x):
+                if isinstance(x, ir.Var):
+                    loaded_size = lowerer.loadvar(x.name)
+                    loaded_op = loaded_size.operands[0]
+                    loaded_pointee = loaded_op.type.pointee
+                    ret = str(loaded_pointee) + " " + loaded_size._get_reference()
+                else:
+                    ret = "i64 " + str(x)
+                return ret
+            start_slice = handle_var(self.omp_slice[0])
+            end_slice = handle_var(self.omp_slice[1])
+            decl += f", {start_slice}, {end_slice}"
+            #decl = f"SLICE({decl}, {self.omp_slice[0]}, {self.omp_slice[1]})"
 
         return decl
 
@@ -391,9 +404,10 @@ class openmp_tag(object):
         is_array = self.arg in typemap and isinstance(typemap[self.arg], types.npytypes.Array)
 
         if name_to_use in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.MAP.TO", "QUAL.OMP.MAP.FROM"] and is_array:
-            name_to_use += ".STRUCT"
-            var_table = get_name_var_table(lowerer.func_ir.blocks)
-            decl = ",".join([self.arg_to_str(x, lowerer, struct_lower=True, var_table=var_table) for x in arg_list])
+            #name_to_use += ".STRUCT"
+            #var_table = get_name_var_table(lowerer.func_ir.blocks)
+            #decl = ",".join([self.arg_to_str(x, lowerer, struct_lower=True, var_table=var_table) for x in arg_list])
+            decl = ",".join([self.arg_to_str(x, lowerer, struct_lower=False) for x in arg_list])
         else:
             decl = ",".join([self.arg_to_str(x, lowerer, struct_lower=False) for x in arg_list])
 
@@ -686,7 +700,8 @@ class openmp_region_start(ir.Stmt):
         tgv = None
         if target_num is not None and self.target_copy != True:
             var_table = get_name_var_table(lowerer.func_ir.blocks)
-            """
+
+            extras_before = []
             struct_tags = []
             for i in range(len(self.tags)):
                 cur_tag = self.tags[i]
@@ -705,11 +720,12 @@ class openmp_region_start(ir.Stmt):
                         size_getattr = ir.Expr.getattr(array_var, "size", array_var.loc)
                         size_assign = ir.Assign(size_getattr, size_var, array_var.loc)
                         typemap[size_var.name] = types.int64
-                        lowerer._alloca_var(size_var.name, typemap[size_var.name])
                         lowerer.lower_inst(size_assign)
+                        extras_before.append(size_assign)
+                        lowerer._alloca_var(size_var.name, typemap[size_var.name])
 
                         #--------
-
+                        """
                         itemsize_var = ir.Var(None, cur_tag.arg + "_itemsize_var", array_var.loc)
                         itemsize_getattr = ir.Expr.getattr(array_var, "itemsize", array_var.loc)
                         itemsize_assign = ir.Assign(itemsize_getattr, itemsize_var, array_var.loc)
@@ -724,17 +740,24 @@ class openmp_region_start(ir.Stmt):
                         typemap[totalsize_var.name] = types.int64
                         lowerer.lower_inst(totalsize_assign)
                         #--------
+                        """
 
                         # see core/datamodel/models.py
-                        struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*data", non_arg=True, omp_slice=(0,lowerer.loadvar(size_var.name))))
-                        struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*shape", non_arg=True, omp_slice=(0,stride_abi_size * cur_tag_ndim)))
-                        struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*strides", non_arg=True, omp_slice=(0,stride_abi_size * cur_tag_ndim)))
+                        loaded_size = lowerer.loadvar(size_var.name)
+                        loaded_op = loaded_size.operands[0]
+                        loaded_pointee = loaded_op.type.pointee
+                        loaded_str = str(loaded_pointee) + " * " + loaded_size._get_reference()
+                        struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
+                        #struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, loaded_str)))
+                        #struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, lowerer.getvar(size_var.name).get_decl())))
+                        #struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, lowerer.loadvar(size_var.name))))
+                        struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, cur_tag_ndim)))
+                        struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, cur_tag_ndim)))
                         cur_tag.name = "QUAL.OMP.MAP.TOFROM"
             self.tags.extend(struct_tags)
             if config.DEBUG_OPENMP >= 1:
                 for otag in self.tags:
                     print("tag in target:", otag, type(otag.arg))
-            """
 
             #from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
             from numba.core.compiler import Compiler, Flags
@@ -911,6 +934,7 @@ class openmp_region_start(ir.Stmt):
                                          arg_names=tuple(target_args),
                                          arg_count=len(target_args),
                                          force_non_generator=True)
+            outlined_ir.blocks[start_block].body = extras_before + outlined_ir.blocks[start_block].body
             # Change the name of the outlined function to prepend the
             # word "device" to the function name.
             fparts = outlined_ir.func_id.func_qualname.split('.')
@@ -1760,6 +1784,14 @@ def get_enclosing_region(func_ir, cur_block):
         return None
 
 
+def get_var_from_enclosing(enclosing_regions, var):
+    if not enclosing_regions:
+        return None
+    if len(enclosing_regions) == 0:
+        return None
+    return enclosing_regions[-1].get_var_dsa(var)
+
+
 class OpenmpVisitor(Transformer):
     target_num = 0
 
@@ -1912,18 +1944,28 @@ class OpenmpVisitor(Transformer):
                 ret[without_ssa] = lo
         return ret
 
-    def make_implicit_explicit(self, scope, vars_in_explicit, explicit_clauses, gen_shared, inputs_to_region, def_but_live_out, private_to_region):
+    def make_implicit_explicit(self, scope, vars_in_explicit, explicit_clauses, gen_shared, inputs_to_region, def_but_live_out, private_to_region, for_task=False):
         #unversioned_privates = set() # we get rid of SSA on the first openmp region so no SSA forms should be here
         if gen_shared:
             for var_name in inputs_to_region:
-                explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
+                if for_task != False and get_var_from_enclosing(for_task, var_name) != "QUAL.OMP.SHARED":
+                    explicit_clauses.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", var_name))
+                else:
+                    explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
                 vars_in_explicit[var_name] = explicit_clauses[-1]
+
             for var_name in def_but_live_out:
-                explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
+                if for_task != False and get_var_from_enclosing(for_task, var_name) != "QUAL.OMP.SHARED":
+                    explicit_clauses.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", var_name))
+                else:
+                    explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
                 vars_in_explicit[var_name] = explicit_clauses[-1]
+
+            # What to do below for task regions?
             for var_name in private_to_region:
                 temp_var = ir.Var(scope, var_name, self.loc)
                 if not is_internal_var(temp_var):
+                    """
                     if config.OPENMP_SHARED_PRIVATE_REGION == 0:
                         #unver_var = temp_var.unversioned_name
                         #if unver_var not in unversioned_privates:
@@ -1933,8 +1975,9 @@ class OpenmpVisitor(Transformer):
                         explicit_clauses.append(openmp_tag("QUAL.OMP.PRIVATE", var_name))
                         vars_in_explicit[var_name] = explicit_clauses[-1]
                     else:
-                        explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
-                        vars_in_explicit[var_name] = explicit_clauses[-1]
+                    """
+                    explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
+                    vars_in_explicit[var_name] = explicit_clauses[-1]
 
         for var_name in private_to_region:
             temp_var = ir.Var(scope, var_name, self.loc)
@@ -2951,13 +2994,9 @@ class OpenmpVisitor(Transformer):
         eblk = self.blocks[self.blk_end]
         scope = sblk.scope
 
-        #clauses = args[1:]
         if config.DEBUG_OPENMP >= 1:
             for clause in args[1:]:
                 print("pre clause:", clause)
-        #clauses = [remove_indirections(x) for x in args[1:]]
-        #tag_clauses = self.flatten(clauses)
-        #clauses = tag_clauses
         clauses, _ = self.flatten(args[1:], sblk)
         if config.DEBUG_OPENMP >= 1:
             for clause in clauses:
@@ -3058,7 +3097,7 @@ class OpenmpVisitor(Transformer):
         keep_alive = []
         self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
 
-        #or_start = openmp_region_start([openmp_tag("DIR.OMP.TARGET", target_num)] + tag_clauses, 0, self.loc)
+        #or_start = openmp_region_start([openmp_tag("DIR.OMP.TARGET", target_num)] + clauses, 0, self.loc)
         #or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TARGET", target_num)], self.loc)
         new_target_block_num = max(self.blocks.keys()) + 1
 
@@ -3221,30 +3260,89 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for TASK.
 
     def task_directive(self, args):
-        #clauses = args[1:]
-        #tag_clauses = []
-        #for clause in clauses:
-        #    tag_clauses.extend(clause)
-
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
         scope = sblk.scope
-        tag_clauses, _ = self.flatten(args[1:], sblk)
+        clauses, _ = self.flatten(args[1:], sblk)
 
-        def get_var_from_enclosing(enclosing_regions, var):
-            if len(enclosing_regions) == 0:
-                return None
-            return enclosing_regions[-1].get_var_dsa(var)
+        before_start = []
+        after_start = []
 
         enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
         if config.DEBUG_OPENMP >= 1:
             print("enclosing_regions:", enclosing_regions)
 
-        start_tags = [openmp_tag("DIR.OMP.TASK")] + tag_clauses
+        start_tags = [openmp_tag("DIR.OMP.TASK")] + clauses
         end_tags   = [openmp_tag("DIR.OMP.END.TASK")]
         keep_alive = []
 
         inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
+        used_in_region = inputs_to_region | def_but_live_out | private_to_region
+        clauses = self.filter_unused_vars(clauses, used_in_region)
+
+        # Get a dict mapping variables explicitly mentioned in the data clauses above to their openmp_tag.
+        vars_in_explicit_clauses, explicit_privates = self.get_explicit_vars(clauses)
+        if config.DEBUG_OPENMP >= 1:
+            print("vars_in_explicit_clauses:", vars_in_explicit_clauses, type(vars_in_explicit_clauses))
+            for v in clauses:
+                print("vars_in_explicit clauses first:", v)
+
+        orig_inputs_to_region = copy.copy(inputs_to_region)
+        live_out_copy = copy.copy(def_but_live_out)
+
+        # Remove variables the user explicitly added to a clause from the auto-determined variables.
+        # This will also treat SSA forms of vars the same as their explicit Python var clauses.
+        self.remove_explicit_from_io_vars(inputs_to_region, def_but_live_out, private_to_region, vars_in_explicit_clauses, clauses, scope, self.loc)
+
+        if config.DEBUG_OPENMP >= 1:
+            for k,v in vars_in_explicit_clauses.items():
+                print("vars_in_explicit before:", k, v)
+            for v in clauses:
+                print("vars_in_explicit clauses before:", v)
+        self.make_implicit_explicit(scope, vars_in_explicit_clauses, clauses, True, inputs_to_region, def_but_live_out, private_to_region, for_task=enclosing_regions)
+        if config.DEBUG_OPENMP >= 1:
+            for k,v in vars_in_explicit_clauses.items():
+                print("vars_in_explicit after:", k, v)
+            for v in clauses:
+                print("vars_in_explicit clauses after:", v)
+        vars_in_explicit_clauses, explicit_privates = self.get_explicit_vars(clauses)
+        if config.DEBUG_OPENMP >= 1:
+            print("post get_explicit_vars:", explicit_privates)
+            for k,v in vars_in_explicit_clauses.items():
+                print("vars_in_explicit post:", k, v)
+        blocks_in_region = get_blocks_between_start_end(self.blocks, self.blk_start, self.blk_end)
+        if config.DEBUG_OPENMP >= 1:
+            print(1, "blocks_in_region:", blocks_in_region)
+        #replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region)
+        if config.DEBUG_OPENMP >= 1:
+            for v in clauses:
+                print("clause after remove_explicit_from_io_vars:", v)
+
+        #before_start.extend(copying_ir_before)
+        #after_start.extend(copying_ir)
+
+        priv_saves = []
+        priv_restores = []
+        # Returns a dict of private clause variables and their potentially SSA form at the end of the region.
+        clause_privates = self.get_clause_privates(clauses, live_out_copy, scope, self.loc)
+        if config.DEBUG_OPENMP >= 1:
+            print("clause_privates:", clause_privates, type(clause_privates))
+            print("inputs_to_region:", inputs_to_region)
+            print("def_but_live_out:", def_but_live_out)
+            print("live_out_copy:", live_out_copy)
+            print("private_to_region:", private_to_region)
+
+        # Numba typing is not aware of OpenMP semantics, so for private variables we save the value
+        # before entering the region and then restore it afterwards but we have to restore it to the SSA
+        # version of the variable at that point.
+        for cp in clause_privates:
+            cpvar = ir.Var(scope, cp, self.loc)
+            cplovar = ir.Var(scope, clause_privates[cp], self.loc)
+            save_var = scope.redefine("$"+cp, self.loc)
+            priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
+            priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
+
+        """
         for itr in inputs_to_region:
             enclosing_dsa = get_var_from_enclosing(enclosing_regions, itr)
             if config.DEBUG_OPENMP >= 1:
@@ -3268,14 +3366,17 @@ class OpenmpVisitor(Transformer):
             if config.DEBUG_OPENMP >= 1:
                 print("private_to_region:", ptr)
             start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", ir.Var(scope, ptr, self.loc)))
+        """
 
         if config.DEBUG_OPENMP >= 1:
-            print("visit task_directive", args, type(args), tag_clauses)
+            print("visit task_directive", args, type(args), clauses)
+
+        self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
         or_start = openmp_region_start(start_tags, 0, self.loc)
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
-        sblk.body = [or_start] + sblk.body[:]
+        sblk.body = priv_saves + before_start + [or_start] + after_start + sblk.body[:]
         #eblk.body = [or_end]   + eblk.body[:]
-        eblk.body = [or_end]   + keep_alive + eblk.body[:]
+        eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
 
     def task_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
@@ -3439,27 +3540,6 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             print("visit parallel_directive", args, type(args))
         clauses, default_shared = self.flatten(args[1:], sblk)
-
-        """
-        incoming_clauses = [remove_indirections(x) for x in args[1:]]
-        # Process all the incoming clauses which can be in singular or list form
-        # and flatten them to a list of openmp_tags.
-        for clause in incoming_clauses:
-            if config.DEBUG_OPENMP >= 1:
-                print("clause:", clause, type(clause))
-            if isinstance(clause, openmp_tag):
-                clauses.append(clause)
-            elif isinstance(clause, list):
-                clauses.extend(remove_indirections(clause))
-            elif isinstance(clause, default_shared_val):
-                default_shared = clause.val
-                if config.DEBUG_OPENMP >= 1:
-                    print("got new default_shared:", clause.val)
-            else:
-                if config.DEBUG_OPENMP >= 1:
-                    print("Unknown clause type in incoming_clauses", clause, type(clause))
-                assert(0)
-        """
 
         if len(list(filter(lambda x: x.name == "QUAL.OMP.NUM_THREADS", clauses))) > 1:
             raise MultipleNumThreadsClauses(f"Multiple num_threads clauses near line {self.loc} is not allowed in an OpenMP parallel region.")
