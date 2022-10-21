@@ -1091,6 +1091,8 @@ class openmp_region_start(ir.Stmt):
                 print("target_elf:", type(target_elf), len(target_elf))
                 sys.stdout.flush()
 
+            # if cuda then run ptxas on the cres and pass that
+
             #bytes_array_typ = lir.ArrayType(cgutils.voidptr_t, len(target_elf))
             #bytes_array_typ = lir.ArrayType(cgutils.int8_t, len(target_elf))
             #dev_image = cgutils.add_global_variable(mod, bytes_array_typ, ".omp_offloading.device_image")
@@ -1965,7 +1967,6 @@ class OpenmpVisitor(Transformer):
             for var_name in private_to_region:
                 temp_var = ir.Var(scope, var_name, self.loc)
                 if not is_internal_var(temp_var):
-                    """
                     if config.OPENMP_SHARED_PRIVATE_REGION == 0:
                         #unver_var = temp_var.unversioned_name
                         #if unver_var not in unversioned_privates:
@@ -1975,9 +1976,8 @@ class OpenmpVisitor(Transformer):
                         explicit_clauses.append(openmp_tag("QUAL.OMP.PRIVATE", var_name))
                         vars_in_explicit[var_name] = explicit_clauses[-1]
                     else:
-                    """
-                    explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
-                    vars_in_explicit[var_name] = explicit_clauses[-1]
+                        explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
+                        vars_in_explicit[var_name] = explicit_clauses[-1]
 
         for var_name in private_to_region:
             temp_var = ir.Var(scope, var_name, self.loc)
@@ -2571,7 +2571,16 @@ class OpenmpVisitor(Transformer):
 
                     self.blocks[latch_block_num] = latch_block
                     for bb in back_blocks:
-                        self.blocks[bb].body[-1] = ir.Jump(latch_block_num, inst.loc)
+                        if True:
+                            str_var = scope.redefine("$str_var", inst.loc)
+                            str_const = ir.Const("mid start:", inst.loc)
+                            str_assign = ir.Assign(str_const, str_var, inst.loc)
+                            str_print = ir.Print([str_var, size_var], None, inst.loc)
+                            #before_start.append(str_assign)
+                            #before_start.append(str_print)
+                            self.blocks[bb].body = self.blocks[bb].body[:-1] + [str_assign, str_print, ir.Jump(latch_block_num, inst.loc)]
+                        else:
+                            self.blocks[bb].body[-1] = ir.Jump(latch_block_num, inst.loc)
                     # -------------------------------------------------------------
 
                     # ---------- Header Manipulation ------------------------------
@@ -2587,6 +2596,7 @@ class OpenmpVisitor(Transformer):
                     step_var = loop_index.scope.redefine("$step_var", inst.loc)
                     detect_step_assign = ir.Assign(ir.Const(0, inst.loc), step_var, inst.loc)
                     after_start.append(detect_step_assign)
+
                     step_assign = ir.Assign(ir.Const(step, inst.loc), step_var, inst.loc)
                     scale_var = loop_index.scope.redefine("$scale", inst.loc)
                     fake_iternext = ir.Assign(ir.Const(0, inst.loc), iternext_inst.target, inst.loc)
@@ -2633,7 +2643,7 @@ class OpenmpVisitor(Transformer):
 
                     keep_alive = []
                     # Do an analysis to get variable use information coming into and out of the region.
-                    inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(loop_blocks_for_io)
+                    inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(loop_blocks_for_io_minus_entry)
                     orig_inputs_to_region = copy.copy(inputs_to_region)
                     live_out_copy = copy.copy(def_but_live_out)
 
@@ -2656,6 +2666,8 @@ class OpenmpVisitor(Transformer):
                     self.remove_explicit_from_io_vars(inputs_to_region, def_but_live_out, private_to_region, vars_in_explicit_clauses, clauses, scope, self.loc)
                     if config.DEBUG_OPENMP >= 1:
                         print("post remove explicit:", private_to_region)
+                        for c in clauses:
+                            print("post remove explicit clauses:", c)
 
                     if not default_shared and (
                         has_user_defined_var(inputs_to_region) or
@@ -2697,6 +2709,19 @@ class OpenmpVisitor(Transformer):
                     or_start = openmp_region_start(start_tags, 0, self.loc)
                     or_end   = openmp_region_end(or_start, end_tags, self.loc)
 
+                    """
+                    if len(lastprivate_copying) > 0:
+                        size_var_copy = scope.redefine("size_var_copy", inst.loc)
+                        before_start.append(ir.Assign(size_var, size_var_copy, inst.loc))
+                        if True:
+                            str_var = scope.redefine("$str_var", inst.loc)
+                            str_const = ir.Const("before start:", inst.loc)
+                            str_assign = ir.Assign(str_const, str_var, inst.loc)
+                            str_print = ir.Print([str_var, size_var_copy], None, inst.loc)
+                            before_start.append(str_assign)
+                            before_start.append(str_print)
+                    """
+
                     #new_header_block.body = [or_start] + before_start + new_header_block.body[:]
                     entry_pred.body = entry_pred.body[:-1] + priv_saves + before_start + [or_start] + after_start + [entry_pred.body[-1]]
                     #entry_block.body = [or_start] + before_start + entry_block.body[:]
@@ -2706,6 +2731,9 @@ class OpenmpVisitor(Transformer):
                         new_exit_block = ir.Block(scope, inst.loc)
                         new_exit_block_num = max(self.blocks.keys()) + 1
                         self.blocks[new_exit_block_num] = new_exit_block
+                        evar_copy = scope.redefine("evar_copy", self.loc)
+                        keep_alive.append(ir.Assign(size_var, evar_copy, self.loc))
+                        #keep_alive.append(ir.Assign(size_var_copy, evar_copy, self.loc))
                         new_exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
 
                         lastprivate_check_block = exit_block
@@ -2718,9 +2746,15 @@ class OpenmpVisitor(Transformer):
                         #lastprivate_check_block.body.append(ir.Jump(lastprivate_copy_block_num, inst.loc))
                         bool_var = scope.redefine("$bool_var", inst.loc)
                         lastprivate_check_block.body.append(ir.Assign(ir.Global("bool", bool, inst.loc), bool_var, inst.loc))
+                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", bool_var.name))
 
                         size_minus_step = scope.redefine("$size_minus_step", inst.loc)
                         lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.sub, size_var, step_var, inst.loc), size_minus_step, inst.loc))
+                        #lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.sub, size_var_copy, step_var, inst.loc), size_minus_step, inst.loc))
+                        #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", size_var_copy.name))
+                        start_tags.append(openmp_tag("QUAL.OMP.SHARED", size_var.name))
+                        #start_tags.append(openmp_tag("QUAL.OMP.SHARED", size_var_copy.name))
+                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", size_minus_step.name))
 
                         cmp_var = scope.redefine("$lastiter_cmp_var", inst.loc)
                         if latest_index.name in replace_vardict:
@@ -2728,29 +2762,36 @@ class OpenmpVisitor(Transformer):
                             lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ge, li_privatized, size_minus_step, inst.loc), cmp_var, inst.loc))
                         else:
                             lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ge, latest_index, size_minus_step, inst.loc), cmp_var, inst.loc))
+                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", cmp_var.name))
 
                         zero_var = loop_index.scope.redefine("$zero_var", inst.loc)
                         zero_assign = ir.Assign(ir.Const(0, inst.loc), zero_var, inst.loc)
                         lastprivate_check_block.body.append(zero_assign)
+                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", zero_var.name))
 
                         did_work_var = scope.redefine("$did_work_var", inst.loc)
                         lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ne, step_var, zero_var, inst.loc), did_work_var, inst.loc))
+                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", did_work_var.name))
 
                         last_iter_cmp = scope.redefine("$lastiter_cmp_var_bool", inst.loc)
                         lastprivate_check_block.body.append(ir.Assign(ir.Expr.call(bool_var, [cmp_var], (), inst.loc), last_iter_cmp, inst.loc))
+                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", last_iter_cmp.name))
 
                         did_work_cmp = scope.redefine("$did_work_var_bool", inst.loc)
                         lastprivate_check_block.body.append(ir.Assign(ir.Expr.call(bool_var, [did_work_var], (), inst.loc), did_work_cmp, inst.loc))
+                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", did_work_cmp.name))
 
                         and_var = scope.redefine("$and_var", inst.loc)
                         lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.and_, last_iter_cmp, did_work_cmp, inst.loc), and_var, inst.loc))
+                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", and_var.name))
 
-                        if False:
+                        if True:
                             str_var = scope.redefine("$str_var", inst.loc)
                             str_const = ir.Const("lastiter check:", inst.loc)
                             str_assign = ir.Assign(str_const, str_var, inst.loc)
                             lastprivate_check_block.body.append(str_assign)
-                            str_print = ir.Print([str_var, latest_index, size_var, last_iter_cmp, omp_lb_var, omp_ub_var, did_work_cmp, and_var, size_minus_step], None, inst.loc)
+                            str_print = ir.Print([str_var, latest_index, size_var, last_iter_cmp, omp_lb_var, omp_ub_var, did_work_cmp, and_var, size_minus_step, step_var], None, inst.loc)
+                            #str_print = ir.Print([str_var, latest_index, size_var_copy, last_iter_cmp, omp_lb_var, omp_ub_var, did_work_cmp, and_var, size_minus_step, step_var], None, inst.loc)
                             lastprivate_check_block.body.append(str_print)
 
                         lastprivate_check_block.body.append(ir.Branch(and_var, lastprivate_copy_block_num, new_exit_block_num, inst.loc))
