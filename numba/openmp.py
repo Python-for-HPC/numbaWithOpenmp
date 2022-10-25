@@ -438,6 +438,7 @@ def add_offload_info(lowerer, new_data):
     else:
         lowerer.omp_offload = [new_data]
 
+
 def get_next_offload_number(lowerer):
     if hasattr(lowerer, 'offload_number'):
         cur = lowerer.offload_number
@@ -446,6 +447,7 @@ def get_next_offload_number(lowerer):
     lowerer.offload_number = cur + 1
     return cur
 
+
 def list_vars_from_tags(tags):
     used_vars = []
     for t in tags:
@@ -453,8 +455,10 @@ def list_vars_from_tags(tags):
             used_vars.append(t.arg)
     return used_vars
 
+
 def openmp_region_alloca(obj, alloca_instr, typ):
     obj.alloca(alloca_instr, typ)
+
 
 def push_alloca_callback(lowerer, callback, data, builder):
     #cgutils.push_alloca_callbacks(callback, data)
@@ -462,15 +466,18 @@ def push_alloca_callback(lowerer, callback, data, builder):
         builder._lowerer_push_alloca_callbacks = 0
     builder._lowerer_push_alloca_callbacks += 1
 
+
 def pop_alloca_callback(lowerer, builder):
     #cgutils.pop_alloca_callbacks()
     builder._lowerer_push_alloca_callbacks -= 1
+
 
 def in_openmp_region(builder):
     if hasattr(builder, '_lowerer_push_alloca_callbacks'):
         return builder._lowerer_push_alloca_callbacks > 0
     else:
         return False
+
 
 def find_target_start_end(func_ir, target_num):
     start_block = None
@@ -491,6 +498,14 @@ def find_target_start_end(func_ir, target_num):
                     return start_block, end_block
 
     assert False
+
+
+def get_tags_of_type(clauses, ctype):
+    ret = []
+    for c in clauses:
+        if c.name == ctype:
+            ret.append(c)
+    return ret
 
 
 class openmp_region_start(ir.Stmt):
@@ -519,6 +534,16 @@ class openmp_region_start(ir.Stmt):
         self.acq_rel = False
         self.alloca_queue = []
         self.end_region = None
+
+    def add_tag(self, tag):
+        tag_arg_str = None
+        if isinstance(tag.arg, ir.Var):
+            tag_arg_str = tag.arg.name
+        if isinstance(tag.arg, str):
+            tag_arg_str = tag.arg
+        if isinstance(tag_arg_str, str):
+            self.tag_vars.add(tag_arg_str)
+        self.tags.append(tag)
 
     """
     def __new__(cls, *args, **kwargs):
@@ -612,7 +637,7 @@ class openmp_region_start(ir.Stmt):
     def process_one_alloca(self, alloca_instr, typ):
         avar = alloca_instr.name
         if config.DEBUG_OPENMP >= 1:
-            print("openmp_region_start process_one_alloca:", id(self), alloca_instr, avar, typ, type(alloca_instr))
+            print("openmp_region_start process_one_alloca:", id(self), alloca_instr, avar, typ, type(alloca_instr), self.tag_vars)
 
         has_update = False
         if self.normal_iv is not None and avar != self.normal_iv and avar.startswith(self.normal_iv):
@@ -628,9 +653,10 @@ class openmp_region_start(ir.Stmt):
         if avar not in self.tag_vars:
             if config.DEBUG_OPENMP >= 1:
                 print(f"LLVM variable {avar} didn't previously exist in the list of vars so adding as private.")
-            self.tags.append(openmp_tag("QUAL.OMP.PRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
+            self.add_tag(openmp_tag("QUAL.OMP.PRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
+            #self.tags.append(openmp_tag("QUAL.OMP.PRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
             #self.tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
-            self.tag_vars.add(avar)
+            #self.tag_vars.add(avar)
             has_update = True
         return has_update
 
@@ -701,6 +727,16 @@ class openmp_region_start(ir.Stmt):
         if target_num is not None and self.target_copy != True:
             var_table = get_name_var_table(lowerer.func_ir.blocks)
 
+            selected_device = 0
+            device_tags = get_tags_of_type(self.tags, "QUAL.OMP.DEVICE")
+            if len(device_tags) > 0:
+                device_tag = device_tags[-1]
+                if isinstance(device_tag.arg, int):
+                    selected_device = device_tag.arg
+                else:
+                    assert False
+                print("new selected device:", selected_device)
+
             extras_before = []
             struct_tags = []
             for i in range(len(self.tags)):
@@ -759,7 +795,6 @@ class openmp_region_start(ir.Stmt):
                 for otag in self.tags:
                     print("tag in target:", otag, type(otag.arg))
 
-            #from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
             from numba.core.compiler import Compiler, Flags
             #builder.module.device_triples = "spir64"
             if config.DEBUG_OPENMP >= 1:
@@ -947,29 +982,6 @@ class openmp_region_start(ir.Stmt):
                 print("outlined_ir:", type(outlined_ir), type(outlined_ir.func_id), fparts, outlined_ir.arg_names)
                 dprint_func_ir(outlined_ir, "outlined_ir")
 
-            #cuda_typingctx = cuda_descriptor.cuda_target.typing_context
-            #cuda_targetctx = cuda_descriptor.cuda_target.target_context
-            flags = Flags()
-            #flags = cuda_compiler.CUDAFlags()
-            # Do not compile (generate native code), just lower (to LLVM)
-            flags.no_compile = True
-            flags.no_cpython_wrapper = True
-            flags.no_cfunc_wrapper = True
-            # What to do here?
-            flags.forceinline = True
-            #flags.fastmath = True
-            flags.release_gil = True
-            flags.nogil = True
-            flags.inline = "always"
-            # Create a pipeline that only lowers the outlined target code.  No need to
-            # compile because it has already gone through those passes.
-            class OnlyLower(compiler.CompilerBase):
-                def define_pipelines(self):
-                    pms = []
-                    if not self.state.flags.force_pyobject:
-                        pms.append(compiler.DefaultPassBuilder.define_nopython_lowering_pipeline(self.state))
-                    return pms
-
             # Create a copy of the state and the typemap inside of it so that changes
             # for compiling the outlined IR don't effect the original compilation state
             # of the host.
@@ -1016,6 +1028,49 @@ class openmp_region_start(ir.Stmt):
             # Add typemap entry for the empty tuple return type.
             state_copy.typemap[last_block.body[-1].value.name] = types.containers.Tuple(())
 
+            if selected_device == 0:
+                flags = Flags()
+
+                subtarget = targetctx.subtarget(_registries=dict())
+                # Turn off the Numba runtime (incref and decref mostly) for the
+                # target compilation.
+                subtarget.enable_nrt = False
+                printreg = imputils.Registry()
+                @printreg.lower(print, types.VarArg(types.Any))
+                def print_varargs(context, builder, sig, args):
+                    #print("target print_varargs lowerer")
+                    return context.get_dummy_value()
+
+                subtarget.install_registry(printreg)
+                device_target = subtarget
+            elif selected_device == 1:
+                from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
+                flags = cuda_compiler.CUDAFlags()
+                #cuda_typingctx = cuda_descriptor.cuda_target.typing_context
+                #cuda_targetctx = cuda_descriptor.cuda_target.target_context
+                device_target = cuda_descriptor.cuda_target.target_context
+            else:
+                raise NotImplementedError("Unsupported OpenMP device number")
+
+            # Do not compile (generate native code), just lower (to LLVM)
+            flags.no_compile = True
+            flags.no_cpython_wrapper = True
+            flags.no_cfunc_wrapper = True
+            # What to do here?
+            flags.forceinline = True
+            #flags.fastmath = True
+            flags.release_gil = True
+            flags.nogil = True
+            flags.inline = "always"
+            # Create a pipeline that only lowers the outlined target code.  No need to
+            # compile because it has already gone through those passes.
+            class OnlyLower(compiler.CompilerBase):
+                def define_pipelines(self):
+                    pms = []
+                    if not self.state.flags.force_pyobject:
+                        pms.append(compiler.DefaultPassBuilder.define_nopython_lowering_pipeline(self.state))
+                    return pms
+
             if config.DEBUG_OPENMP >= 1:
                 print("outlined_ir:", outlined_ir, type(outlined_ir), outlined_ir.arg_names)
                 dprint_func_ir(outlined_ir, "outlined_ir")
@@ -1031,22 +1086,9 @@ class openmp_region_start(ir.Stmt):
                 print("===================================================================================")
                 print("===================================================================================")
 
-            subtarget = targetctx.subtarget(_registries=dict())
-            # Turn off the Numba runtime (incref and decref mostly) for the
-            # target compilation.
-            subtarget.enable_nrt = False
-            printreg = imputils.Registry()
-            @printreg.lower(print, types.VarArg(types.Any))
-            def print_varargs(context, builder, sig, args):
-                #print("target print_varargs lowerer")
-                return context.get_dummy_value()
 
-            subtarget.install_registry(printreg)
-
-            #from numba.core.registry import cpu_target
-            #with cpu_target.nested_context(typingctx, subtarget):
             cres = compiler.compile_ir(typingctx,
-                                       subtarget,
+                                       device_target,
                                        outlined_ir,
                                        outline_arg_typs,
                                        #state.args,
@@ -1917,7 +1959,7 @@ class OpenmpVisitor(Transformer):
                 assert not isinstance(c.arg, list)
                 if config.DEBUG_OPENMP >= 1:
                     print("c.arg:", c.arg, type(c.arg), user_defined_var(c.arg), is_dsa(c.name))
-                    
+
                 if isinstance(c.arg, str) and user_defined_var(c.arg) and is_dsa(c.name):
                     if c.arg in used_vars:
                         new_clauses.append(c)
@@ -2101,7 +2143,7 @@ class OpenmpVisitor(Transformer):
         block_dict = {k: v for k, v in self.blocks.items() if k in blocks}
         replace_ssa_vars(block_dict, replace_vardict)
         self.add_replacement(block_dict, replace_vardict)
-     
+
         new_shared_clauses = []
         copying_ir = []
         copying_ir_before = []
@@ -2255,25 +2297,6 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             print("some_for_directive", self.body_blocks)
         clauses, default_shared = self.flatten(args[first_clause:], sblk)
-
-        """
-        incoming_clauses = [remove_indirections(x) for x in args[first_clause:]]
-        # Process all the incoming clauses which can be in singular or list form
-        # and flatten them to a list of openmp_tags.
-        for clause in incoming_clauses:
-            if config.DEBUG_OPENMP >= 1:
-                print("clause:", clause, type(clause))
-            if isinstance(clause, openmp_tag):
-                clauses.append(clause)
-            elif isinstance(clause, list):
-                clauses.extend(remove_indirections(clause))
-            elif isinstance(clause, default_shared_val):
-                default_shared = clause.val
-                if config.DEBUG_OPENMP >= 1:
-                    print("got new default_shared:", clause.val)
-            else:
-                assert(0)
-        """
 
         if config.DEBUG_OPENMP >= 1:
             print("visit", main_start_tag, args, type(args), default_shared)
@@ -2746,15 +2769,15 @@ class OpenmpVisitor(Transformer):
                         #lastprivate_check_block.body.append(ir.Jump(lastprivate_copy_block_num, inst.loc))
                         bool_var = scope.redefine("$bool_var", inst.loc)
                         lastprivate_check_block.body.append(ir.Assign(ir.Global("bool", bool, inst.loc), bool_var, inst.loc))
-                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", bool_var.name))
+                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", bool_var.name))
 
                         size_minus_step = scope.redefine("$size_minus_step", inst.loc)
                         lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.sub, size_var, step_var, inst.loc), size_minus_step, inst.loc))
                         #lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.sub, size_var_copy, step_var, inst.loc), size_minus_step, inst.loc))
-                        #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", size_var_copy.name))
-                        start_tags.append(openmp_tag("QUAL.OMP.SHARED", size_var.name))
-                        #start_tags.append(openmp_tag("QUAL.OMP.SHARED", size_var_copy.name))
-                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", size_minus_step.name))
+                        #or_start.add_tag(openmp_tag("QUAL.OMP.FIRSTPRIVATE", size_var_copy.name))
+                        or_start.add_tag(openmp_tag("QUAL.OMP.SHARED", size_var.name))
+                        #or_start.add_tag(openmp_tag("QUAL.OMP.SHARED", size_var_copy.name))
+                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", size_minus_step.name))
 
                         cmp_var = scope.redefine("$lastiter_cmp_var", inst.loc)
                         if latest_index.name in replace_vardict:
@@ -2762,28 +2785,28 @@ class OpenmpVisitor(Transformer):
                             lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ge, li_privatized, size_minus_step, inst.loc), cmp_var, inst.loc))
                         else:
                             lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ge, latest_index, size_minus_step, inst.loc), cmp_var, inst.loc))
-                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", cmp_var.name))
+                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", cmp_var.name))
 
                         zero_var = loop_index.scope.redefine("$zero_var", inst.loc)
                         zero_assign = ir.Assign(ir.Const(0, inst.loc), zero_var, inst.loc)
                         lastprivate_check_block.body.append(zero_assign)
-                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", zero_var.name))
+                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", zero_var.name))
 
                         did_work_var = scope.redefine("$did_work_var", inst.loc)
                         lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ne, step_var, zero_var, inst.loc), did_work_var, inst.loc))
-                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", did_work_var.name))
+                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", did_work_var.name))
 
                         last_iter_cmp = scope.redefine("$lastiter_cmp_var_bool", inst.loc)
                         lastprivate_check_block.body.append(ir.Assign(ir.Expr.call(bool_var, [cmp_var], (), inst.loc), last_iter_cmp, inst.loc))
-                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", last_iter_cmp.name))
+                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", last_iter_cmp.name))
 
                         did_work_cmp = scope.redefine("$did_work_var_bool", inst.loc)
                         lastprivate_check_block.body.append(ir.Assign(ir.Expr.call(bool_var, [did_work_var], (), inst.loc), did_work_cmp, inst.loc))
-                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", did_work_cmp.name))
+                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", did_work_cmp.name))
 
                         and_var = scope.redefine("$and_var", inst.loc)
                         lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.and_, last_iter_cmp, did_work_cmp, inst.loc), and_var, inst.loc))
-                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", and_var.name))
+                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", and_var.name))
 
                         if True:
                             str_var = scope.redefine("$str_var", inst.loc)
@@ -2901,9 +2924,9 @@ class OpenmpVisitor(Transformer):
         return args[0]
 
     def device_clause(self, args):
-        raise NotImplementedError("Device clause currently unsupported.")
         if config.DEBUG_OPENMP >= 1:
             print("visit device_clause", args, type(args))
+        return [openmp_tag("QUAL.OMP.DEVICE", args[0])]
 
     def map_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
