@@ -424,7 +424,6 @@ class TestOpenmpRoutinesEnvVariables(TestOpenmpBase):
             return count1, count2, count3
         n1, n2 = 3, 4
         r = test_impl(n1, n2, 5)
-        print("r:", r)
         assert(r[0] == n1)
         assert(r[1] == n2)
         assert(r[2] == 1)
@@ -804,11 +803,9 @@ class TestOpenmpWorksharingSchedule(TestOpenmpBase):
             with openmp("parallel num_threads(8)"):
                 with openmp("for schedule(static)"):
                     for i in range(nt*c):
-                        print("filling a:", i)
                         a[i] = omp_get_thread_num()
                 with openmp("for schedule(static)"):
                     for i in range(nt*c):
-                        print("filling b:", i)
                         b[i] = omp_get_thread_num()
             return a, b
         r = test_impl(8, 7, 5)
@@ -895,11 +892,9 @@ class TestOpenmpParallelClauses(TestOpenmpBase):
             return d_count, a_count, n_count, nc_count
         a, b, c = 13, 3, 6
         r = test_impl(a, b, c)
-        print("r:", r)
         assert(r[0] == a)
         assert(r[1] == a + b)
         assert(r[2] == a * (a+b))
-        print(r[3])
         assert(r[3] == c)
 
     def test_if_clause(self):
@@ -1270,7 +1265,6 @@ class TestOpenmpDataClauses(TestOpenmpBase):
             return si, a
         n1, n2, s = 4, 26, 3
         r = test_impl(n1, n2, s)
-        print(r[0])
         ra = np.arange(n1, n2, s) + 1
         assert(r[0] == ra[-1])
         np.testing.assert_array_equal(r[1], ra)
@@ -1711,7 +1705,7 @@ class TestOpenmpConcurrency(TestOpenmpBase):
             omp_set_num_threads(N)
             ca = np.zeros(N)
             sum = 0
-            with openmp("parallel private(sum)"):
+            with openmp("parallel private(sum) shared(c)"):
                 c = N
                 with openmp("barrier"):
                     pass
@@ -2202,10 +2196,10 @@ class TestOpenmpTask(TestOpenmpBase):
     def test_taskwait(self):
         def test_impl(ntsks):
             a = np.zeros(ntsks)
-            with openmp("parallel"):
+            with openmp("parallel private(i)"):
                 with openmp("single"):
                     for i in range(ntsks):
-                        with openmp("task private(sum)"):
+                        with openmp("task private(sum) private(j)"):
                             sum = 0
                             for j in range(10000):
                                 if j % 2 == 0:

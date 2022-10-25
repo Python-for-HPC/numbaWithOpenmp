@@ -1909,6 +1909,7 @@ class OpenmpVisitor(Transformer):
             print("usedefs:", usedefs)
             print("live_map:", live_map)
             print("inputs_to_region:", inputs_to_region, type(inputs_to_region))
+            print("selected blocks:", selected_blocks)
         all_uses = set()
         all_defs = set()
         for label in selected_blocks:
@@ -1920,6 +1921,7 @@ class OpenmpVisitor(Transformer):
         private_to_region = all_defs.difference(inputs_to_region).difference(live_map[self.blk_end])
 
         if config.DEBUG_OPENMP >= 1:
+            print("all_uses:", all_uses)
             print("inputs_to_region:", inputs_to_region)
             print("private_to_region:", private_to_region)
             print("def_but_live_out:", def_but_live_out)
@@ -2594,7 +2596,7 @@ class OpenmpVisitor(Transformer):
 
                     self.blocks[latch_block_num] = latch_block
                     for bb in back_blocks:
-                        if True:
+                        if False:
                             str_var = scope.redefine("$str_var", inst.loc)
                             str_const = ir.Const("mid start:", inst.loc)
                             str_assign = ir.Assign(str_const, str_var, inst.loc)
@@ -2666,7 +2668,10 @@ class OpenmpVisitor(Transformer):
 
                     keep_alive = []
                     # Do an analysis to get variable use information coming into and out of the region.
-                    inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(loop_blocks_for_io_minus_entry)
+                    inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(loop_blocks_for_io)
+                    #inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(loop_blocks_for_io_minus_entry)
+                    if config.DEBUG_OPENMP >= 1:
+                        print("initial find_io_vars:", inputs_to_region, def_but_live_out, private_to_region)
                     orig_inputs_to_region = copy.copy(inputs_to_region)
                     live_out_copy = copy.copy(def_but_live_out)
 
@@ -2688,7 +2693,7 @@ class OpenmpVisitor(Transformer):
                     # This will also treat SSA forms of vars the same as their explicit Python var clauses.
                     self.remove_explicit_from_io_vars(inputs_to_region, def_but_live_out, private_to_region, vars_in_explicit_clauses, clauses, scope, self.loc)
                     if config.DEBUG_OPENMP >= 1:
-                        print("post remove explicit:", private_to_region)
+                        print("post remove explicit:", inputs_to_region, def_but_live_out, private_to_region, vars_in_explicit_clauses)
                         for c in clauses:
                             print("post remove explicit clauses:", c)
 
@@ -2808,7 +2813,7 @@ class OpenmpVisitor(Transformer):
                         lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.and_, last_iter_cmp, did_work_cmp, inst.loc), and_var, inst.loc))
                         or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", and_var.name))
 
-                        if True:
+                        if False:
                             str_var = scope.redefine("$str_var", inst.loc)
                             str_const = ir.Const("lastiter check:", inst.loc)
                             str_assign = ir.Assign(str_const, str_var, inst.loc)
