@@ -82,6 +82,12 @@ class CUDATargetContext(BaseContext):
         self._internal_codegen = codegen.JITCUDACodegen("numba.cuda.jit")
         self._target_data = ll.create_target_data(nvvm.default_data_layout)
 
+        # Add lower_extension attribute
+        self.lower_extensions = {}
+        from numba.openmp import _lower_openmp_region_start, _lower_openmp_region_end, openmp_region_start, openmp_region_end
+        self.lower_extensions[openmp_region_start] = _lower_openmp_region_start
+        self.lower_extensions[openmp_region_end] = _lower_openmp_region_end
+
     def load_additional_registries(self):
         # side effect of import needed for numba.cpython.*, the builtins
         # registry is updated at import time.

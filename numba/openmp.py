@@ -1128,10 +1128,15 @@ class openmp_region_start(ir.Stmt):
                 for k,v in lowerer.func_ir.blocks.items():
                     print("block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
 
-            target_elf = cres_library._get_compiled_object()
-            if config.DEBUG_OPENMP >= 1:
-                print("target_elf:", type(target_elf), len(target_elf))
-                sys.stdout.flush()
+            if selected_device == 0:
+                target_elf = cres_library._get_compiled_object()
+                if config.DEBUG_OPENMP >= 1:
+                    print("target_elf:", type(target_elf), len(target_elf))
+                    sys.stdout.flush()
+            elif selected_device == 1:
+                breakpoint()
+            else:
+                raise NotImplementedError("Unsupported OpenMP device number")
 
             # if cuda then run ptxas on the cres and pass that
 
