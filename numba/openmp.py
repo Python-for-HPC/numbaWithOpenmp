@@ -1134,7 +1134,7 @@ class openmp_region_start(ir.Stmt):
                     print("target_elf:", type(target_elf), len(target_elf))
                     sys.stdout.flush()
             elif selected_device == 1:
-                breakpoint()
+                target_elf = cres_library.get_cubin()
             else:
                 raise NotImplementedError("Unsupported OpenMP device number")
 
