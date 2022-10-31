@@ -2376,9 +2376,9 @@ class OpenmpVisitor(Transformer):
             if isinstance(nlb.body[0], ir.Jump):
                 # Non-loop empty blocks are fine.
                 continue
-            if isinstance(nlb.body[-1], ir.Jump) and nlb.body[-1].target == self.blk_end:
-                # The last block that jumps out of the with region is always okay.
-                continue
+#            if isinstance(nlb.body[-1], ir.Jump) and nlb.body[-1].target == self.blk_end:
+#                # The last block that jumps out of the with region is always okay.
+#                continue
             raise ParallelForExtraCode(f"Extra code near line {self.loc} is not allowed before or after the loop in an OpenMP parallel for region.")
 
         if config.DEBUG_OPENMP >= 1:

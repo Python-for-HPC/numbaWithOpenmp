@@ -17,9 +17,9 @@ build:
     # optional dependency: required only when omp is chosen as the backend for
     # the threading layer
     - lib/libiomp5.dylib # [osx]
-  ignore_run_exports:
+  #ignore_run_exports:
     # tbb-devel triggers hard dependency on tbb, this is not the case.
-    - tbb     # [not (armv6l or armv7l or aarch64 or linux32)]
+  #  - tbb     # [not (armv6l or armv7l or aarch64 or linux32)]
 
 requirements:
   # build and run dependencies are duplicated to avoid setuptools issues
@@ -40,9 +40,9 @@ requirements:
     # 2020.3 is the last version with the "old" ABI
     # NOTE: ppc64le exclusion is temporary until packages are more generally
     #       available.
-    - tbb-devel >=2021       # [not (armv6l or armv7l or aarch64 or linux32 or ppc64le)]
+    #- tbb-devel >=2021       # [not (armv6l or armv7l or aarch64 or linux32 or ppc64le)]
   run:
-    - python >=3.6
+    - python >=3.9,<3.10
     - numpy >=1.17
     - setuptools
     # On channel https://anaconda.org/numba/
@@ -52,7 +52,7 @@ requirements:
     - openmp
   run_constrained:
     # If TBB is present it must be at least version 2021
-    - tbb >=2021    # [not (armv6l or armv7l or aarch64 or linux32 or ppc64le)]
+    #- tbb >=2021    # [not (armv6l or armv7l or aarch64 or linux32 or ppc64le)]
     # avoid confusion from openblas bugs
     - libopenblas !=0.3.6      # [x86_64]
     # CUDA 9.2 or later is required for CUDA support
@@ -69,7 +69,7 @@ test:
     - scipy                    # [not (armv6l or armv7l)]
     - ipython                  # [not (armv6l or armv7l or aarch64)]
     - setuptools
-    - tbb  >=2021              # [not (armv6l or armv7l or aarch64 or linux32 or ppc64le)]
+    #- tbb  >=2021              # [not (armv6l or armv7l or aarch64 or linux32 or ppc64le)]
     - intel-openmp             # [osx]
     # Need these for AOT. Do not init msvc as it may not be present
     - {{ compiler('c') }}      # [not (win or armv6l or armv7l or aarch64)]
