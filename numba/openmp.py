@@ -1128,13 +1128,52 @@ class openmp_region_start(ir.Stmt):
                 for k,v in lowerer.func_ir.blocks.items():
                     print("block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
 
+            # TODO: move device pipelines in numba proper.
             if selected_device == 0:
+                arch = 'x86_64'
                 target_elf = cres_library._get_compiled_object()
+                fd_o, filename_o = tempfile.mkstemp('.o')
+                with open(filename_o, 'wb') as f:
+                    f.write(target_elf)
+                fd_so, filename_so = tempfile.mkstemp('.so')
+                subprocess.run(['clang', '-shared', filename_o, '-o', filename_so])
+                with open(filename_so, 'rb') as f:
+                    target_elf = f.read()
+                if config.DEBUG_OPENMP >= 1:
+                    print('filename_o', filename_o, 'filename_so', filename_so)
+                os.close(fd_o)
+                os.remove(filename_o)
+                os.close(fd_so)
+                os.remove(filename_so)
+
                 if config.DEBUG_OPENMP >= 1:
                     print("target_elf:", type(target_elf), len(target_elf))
                     sys.stdout.flush()
             elif selected_device == 1:
-                target_elf = cres_library.get_cubin()
+                arch = 'nvptx'
+                cc = 'sm_60'
+                filename_prefix = cres_library.name
+                target_llvm_ir = cres_library.get_llvm_str()
+                with open(filename_prefix + '.ll', 'w') as f:
+                    f.write(target_llvm_ir)
+                subprocess.run(['opt', '-S', '--intrinsics-openmp',
+                    filename_prefix + '.ll', '-o', filename_prefix + '-intrinsics_omp.ll'], check=True)
+                subprocess.run(['opt', '-S', '-O3', filename_prefix + '-intrinsics_omp.ll',
+                    '-o', filename_prefix + '-intrinsics_omp-opt.ll'], check=True)
+                omptarget_path = os.path.dirname(omptargetlib)
+                libomptarget_arch = omptarget_path + '/libomptarget-' + arch + '-' + cc + '.bc'
+                print('libomptarget_arch', libomptarget_arch)
+                subprocess.run(['llvm-link', '-S', libomptarget_arch, filename_prefix + '-intrinsics_omp-opt.ll',
+                    '-o', filename_prefix + '-intrinsics_omp-opt-linked.ll'], check=True)
+                subprocess.run(['clang', '-cc1', '-triple', 'nvptx64-nvidia-cuda',
+                    '-target-cpu', cc, '-target-feature', '+ptx64', '-S',
+                    filename_prefix + '-intrinsics_omp-opt-linked.ll',
+                    '-o', filename_prefix + '-intrinsics_omp-opt-linked.s'], check=True)
+                subprocess.run(['ptxas', '-m64', '--gpu-name', cc,
+                    filename_prefix + '-intrinsics_omp-opt-linked.s',
+                    '-o', filename_prefix + '-intrinsics_omp-opt-linked-opt.o'], check=True)
+                with open(filename_prefix + '-intrinsics_omp-opt-linked-opt.o', 'rb') as f:
+                    target_elf = f.read()
             else:
                 raise NotImplementedError("Unsupported OpenMP device number")
 
@@ -1160,22 +1199,8 @@ class openmp_region_start(ir.Stmt):
                 llvmused_gv.linkage = "appending"
             else:
                 host_side_target_tags.append(openmp_tag("QUAL.OMP.TARGET.DEV_FUNC", StringLiteral(cres.fndesc.mangled_name.encode("utf-8"))))
-                fd_o, filename_o = tempfile.mkstemp('.o')
-                with open(filename_o, 'wb') as f:
-                    f.write(target_elf)
-                fd_so, filename_so = tempfile.mkstemp('.so')
-                subprocess.run(['clang', '-shared', filename_o, '-o', filename_so])
-                with open(filename_so, 'rb') as f:
-                    target_elf = f.read()
                 host_side_target_tags.append(openmp_tag("QUAL.OMP.TARGET.ELF", StringLiteral(target_elf)))
-                if config.DEBUG_OPENMP >= 1:
-                    print('filename_o', filename_o, 'filename_so', filename_so)
-                #input('key...')
 
-                os.close(fd_o)
-                os.remove(filename_o)
-                os.close(fd_so)
-                os.remove(filename_so)
             """
             llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 1)
             llvmused_gv = cgutils.add_global_variable(mod, llvmused_typ, "llvm.used")
