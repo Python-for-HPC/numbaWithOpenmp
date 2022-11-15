@@ -2003,7 +2003,7 @@ class OpenmpVisitor(Transformer):
     def remove_privatized(cls, x):
         if isinstance(x, ir.Var):
             x = x.name
-        if x.endswith("%privatized"):
+        if isinstance(x, str) and x.endswith("%privatized"):
             return x[:len(x) - len("%privatized")]
         else:
             return x
