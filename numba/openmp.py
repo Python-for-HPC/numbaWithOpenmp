@@ -19,10 +19,12 @@ from numba.core.ir_utils import (
     dead_code_elimination
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, find_top_level_loops
-from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils, typing
+from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils, typing, withcontexts
+from numba.core.dispatcher import LiftedLoop
 from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
 from numba.extending import overload
+from numba.core.descriptors import TargetDescriptor
 from cffi import FFI
 import llvmlite.binding as ll
 import llvmlite.llvmpy.core as lc
@@ -1619,7 +1621,7 @@ class _OpenmpContextType(WithContext):
             flags.enable_ssa = False
             flags.release_gil = True
             flags.noalias = True
-            _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra, state)
+            _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra, state, dispatcher_factory)
             func_ir._definitions = build_definitions(func_ir.blocks)
             if config.DEBUG_OPENMP >= 1:
                 print("post-with-removal")
@@ -1869,7 +1871,7 @@ def get_var_from_enclosing(enclosing_regions, var):
 class OpenmpVisitor(Transformer):
     target_num = 0
 
-    def __init__(self, func_ir, blocks, blk_start, blk_end, body_blocks, loc, state):
+    def __init__(self, func_ir, blocks, blk_start, blk_end, body_blocks, loc, state, dispatcher_factory):
         self.func_ir = func_ir
         self.blocks = blocks
         self.blk_start = blk_start
@@ -1877,6 +1879,7 @@ class OpenmpVisitor(Transformer):
         self.body_blocks = body_blocks
         self.loc = loc
         self.state = state
+        self.dispatcher_factory = dispatcher_factory
         super(OpenmpVisitor, self).__init__()
 
     # --------- Non-parser functions --------------------
@@ -2167,6 +2170,7 @@ class OpenmpVisitor(Transformer):
 
     def replace_private_vars(self, blocks, all_explicits, explicit_privates, clauses, scope, loc, orig_inputs_to_region, for_target=False):
         replace_vardict = {}
+        """
         # Generate a new Numba privatized variable for each openmp private variable.
         for exp_priv in explicit_privates:
             replace_vardict[exp_priv] = ir.Var(scope, exp_priv + "%privatized", loc)
@@ -2175,6 +2179,7 @@ class OpenmpVisitor(Transformer):
         block_dict = {k: v for k, v in self.blocks.items() if k in blocks}
         replace_ssa_vars(block_dict, replace_vardict)
         self.add_replacement(block_dict, replace_vardict)
+        """
 
         new_shared_clauses = []
         copying_ir = []
@@ -2320,9 +2325,7 @@ class OpenmpVisitor(Transformer):
         return replace_vardict, copying_ir, copying_ir_before, lastprivate_copying
 
     def some_for_directive(self, args, main_start_tag, main_end_tag, first_clause, gen_shared):
-        sblk = self.blocks[self.blk_start]
-        scope = sblk.scope
-        eblk = self.blocks[self.blk_end]
+        scope, sblk, eblk = self.add_blocks_pre_outlining(self.blk_start, self.blk_end, self.blocks, self.loc, self.body_blocks)
 
         #clauses = []
         #default_shared = True
@@ -2423,6 +2426,7 @@ class OpenmpVisitor(Transformer):
         header_block = self.blocks[header]
 
         latch_block_num = max(self.blocks.keys()) + 1
+        self.body_blocks.append(latch_block_num)
 
         # We have to reformat the Numba style of loop to the only form that xmain openmp supports.
         header_preds = [x[0] for x in cfg.predecessors(header)]
@@ -2432,6 +2436,7 @@ class OpenmpVisitor(Transformer):
             print("header_preds:", header_preds)
             print("entry_preds:", entry_preds)
             print("back_blocks:", back_blocks)
+            print("latch_block_num:", latch_block_num)
         assert(len(entry_preds) == 1)
         entry_pred_label = entry_preds[0]
         entry_pred = self.blocks[entry_pred_label]
@@ -2861,6 +2866,7 @@ class OpenmpVisitor(Transformer):
                     else:
                         exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
 
+                    self.outline_openmp_region()
                     break
 
         assert(found_loop)
@@ -3091,9 +3097,12 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             print("visit target_directive", args, type(args))
 
+        """
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
         scope = sblk.scope
+        """
+        scope, sblk, eblk = self.add_blocks_pre_outlining(self.blk_start, self.blk_end, self.blocks, self.loc, self.body_blocks)
 
         if config.DEBUG_OPENMP >= 1:
             for clause in args[1:]:
@@ -3211,6 +3220,8 @@ class OpenmpVisitor(Transformer):
         sblk.body = priv_saves + before_start + [ir.Jump(new_target_block_num, self.loc)]
         #sblk.body = priv_saves + before_start + [or_start] + after_start + sblk.body[:]
         eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
+
+        self.outline_openmp_region()
 
     def target_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
@@ -3629,18 +3640,79 @@ class OpenmpVisitor(Transformer):
 
     # Don't need a rule for parallel_construct.
 
-    def parallel_directive(self, args):
-        sblk = self.blocks[self.blk_start]
-        eblk = self.blocks[self.blk_end]
+    def add_blocks_pre_outlining(self, blk_start, blk_end, blocks, loc, body_blocks):
+        sblk = blocks[blk_start]
+        eblk = blocks[blk_end]
         scope = sblk.scope
+
+        assert isinstance(sblk.body[-1], ir.Jump)
+        next_blk_num = sblk.body[-1].target
+        next_blk = blocks[next_blk_num]
+
+        new_sblk_num = max(blocks.keys()) + 1
+        blocks[new_sblk_num] = next_blk
+
+        new_sblk = ir.Block(scope, loc)
+        new_sblk.body.append(ir.Jump(new_sblk_num, loc))
+        blocks[next_blk_num] = new_sblk
+
+        new_eblk_num = max(blocks.keys()) + 1
+        new_eblk = ir.Block(scope, loc)
+        new_eblk.body.append(ir.Jump(blk_end, loc))
+        for block in blocks.values():
+            if isinstance(block.body[-1], ir.Jump) and block.body[-1].target == blk_end:
+                block.body[-1] = ir.Jump(new_eblk_num, block.body[-1].loc)
+        blocks[new_eblk_num] = new_eblk
+        body_blocks += [new_sblk_num, new_eblk_num]
+        return scope, new_sblk, new_eblk
+
+    def outline_openmp_region(self):
+        outlined_blocks = self.body_blocks
+        ins, outs = transforms.find_region_inout_vars(
+            blocks=self.blocks,
+            livemap=self.func_ir.variable_lifetime.livemap,
+            callfrom=self.blk_start,
+            returnto=self.blk_end,
+            body_block_ids=set(outlined_blocks)
+        )
+        # Get the types of the variables live-in to the target region.
+        if config.DEBUG_OPENMP >= 1:
+            print("outlined_blocks:", outlined_blocks)
+            print("ins:", ins)
+            print("outs:", outs)
+            print("livemap:", self.func_ir.variable_lifetime.livemap)
+
+        region_blocks = dict((k, self.blocks[k]) for k in outlined_blocks)
+        withcontexts._mutate_with_block_callee(region_blocks, self.blk_start, self.blk_end, ins, outs)
+
+        outlined_ir = self.func_ir.derive(blocks=region_blocks,
+                                          arg_names=tuple(ins),
+                                          arg_count=len(ins),
+                                          force_non_generator=True)
+        def wrap(*args):
+            return outlined_ir.func_id.func(*args)
+        outlined_ir.func_id.func = wrap
+        new_dispatcher = self.dispatcher_factory(outlined_ir)
+
+        if config.DEBUG_OPENMP >= 1:
+            print("outlined_ir:", type(outlined_ir), type(outlined_ir.func_id))
+            dprint_func_ir(outlined_ir, "outlined_ir")
+
+        newblk = withcontexts._mutate_with_block_caller(new_dispatcher, self.blocks, self.blk_start, self.blk_end, ins, outs)
+        self.blocks[self.blk_start] = newblk
+        withcontexts._clear_blocks(self.blocks, outlined_blocks)
+
+    def parallel_directive(self, args):
+        scope, new_sblk, new_eblk = self.add_blocks_pre_outlining(self.blk_start, self.blk_end, self.blocks, self.loc, self.body_blocks)
 
         before_start = []
         after_start = []
         #clauses = []
         #default_shared = True
         if config.DEBUG_OPENMP >= 1:
-            print("visit parallel_directive", args, type(args))
-        clauses, default_shared = self.flatten(args[1:], sblk)
+            print("visit parallel_directive", args, type(args), self.blk_start, self.blk_end, self.body_blocks)
+        clauses, default_shared = self.flatten(args[1:], new_sblk)
+        #clauses, default_shared = self.flatten(args[1:], sblk)
 
         if len(list(filter(lambda x: x.name == "QUAL.OMP.NUM_THREADS", clauses))) > 1:
             raise MultipleNumThreadsClauses(f"Multiple num_threads clauses near line {self.loc} is not allowed in an OpenMP parallel region.")
@@ -3652,6 +3724,10 @@ class OpenmpVisitor(Transformer):
         inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
         used_in_region = inputs_to_region | def_but_live_out | private_to_region
         clauses = self.filter_unused_vars(clauses, used_in_region)
+        if config.DEBUG_OPENMP >= 1:
+            print("inputs_to_region:", inputs_to_region, type(inputs_to_region))
+            print("def_but_live_out:", def_but_live_out, type(def_but_live_out))
+            print("private_to_region:", private_to_region, type(private_to_region))
 
         # Get a dict mapping variables explicitly mentioned in the data clauses above to their openmp_tag.
         vars_in_explicit_clauses, explicit_privates = self.get_explicit_vars(clauses)
@@ -3742,12 +3818,15 @@ class OpenmpVisitor(Transformer):
 
         or_start = openmp_region_start(start_tags, 0, self.loc)
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
-        sblk.body = priv_saves + before_start + [or_start] + after_start + sblk.body[:]
+
+        new_sblk.body = priv_saves + before_start + [or_start] + after_start + new_sblk.body[:]
         #eblk.body = [or_end]   + eblk.body[:]
         #eblk.body = [or_end] + priv_restores + eblk.body[:]
-        eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
+        new_eblk.body = [or_end] + priv_restores + keep_alive + new_eblk.body[:]
 
         add_enclosing_region(self.func_ir, self.body_blocks, or_start)
+
+        self.outline_openmp_region()
 
     def parallel_clause(self, args):
         (val,) = args
@@ -4335,7 +4414,7 @@ def remove_ssa_from_func_ir(func_ir):
     func_ir._definitions = build_definitions(func_ir.blocks)
 
 
-def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra, state):
+def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra, state, dispatcher_factory):
     """Given the starting and ending block of the with-context,
     replaces the head block with a new block that has the starting
     openmp ir nodes in it and adds the ending openmp ir nodes to
@@ -4375,7 +4454,7 @@ def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra
         print("args:", args, type(args))
         print("arg:", arg, type(arg), arg.value, type(arg.value))
         print(parse_res.pretty())
-    visitor = OpenmpVisitor(func_ir, blocks, blk_start, blk_end, body_blocks, loc, state)
+    visitor = OpenmpVisitor(func_ir, blocks, blk_start, blk_end, body_blocks, loc, state, dispatcher_factory)
     try:
         visitor.transform(parse_res)
     except VisitError as e:
