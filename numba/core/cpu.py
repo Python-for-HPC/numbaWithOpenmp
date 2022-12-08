@@ -17,7 +17,6 @@ import numba.core.entrypoints
 from numba.core.cpu_options import (ParallelOptions, FastMathOptions,
                                     InlineOptions)
 from numba.np import ufunc_db
-from numba.openmp import in_openmp_region, post_lowering_openmp
 
 # Keep those structures in sync with _dynfunc.c.
 
@@ -158,6 +157,7 @@ class CPUContext(BaseContext):
                                         self.get_env_name(self.fndesc))
         envarg = builder.load(envgv)
         pyapi = self.get_python_api(builder)
+        from numba.openmp import in_openmp_region
         if not in_openmp_region(builder):
             pyapi.emit_environment_sentry(
                 envarg, debug_msg=self.fndesc.env_name,
@@ -199,6 +199,7 @@ class CPUContext(BaseContext):
             fastmathpass.rewrite_module(mod, self.fastmath)
 
         if hasattr(library, "openmp") and library.openmp:
+            from numba.openmp import post_lowering_openmp
             post_lowering_openmp(mod)
 
         if self.is32bit:
