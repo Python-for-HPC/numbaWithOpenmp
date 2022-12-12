@@ -77,6 +77,33 @@ class StringLiteral:
         self.x = x
 
 
+def remove_privatized(x):
+    if isinstance(x, ir.Var):
+        x = x.name
+
+    if isinstance(x, str) and x.endswith("%privatized"):
+        return x[:len(x) - len("%privatized")]
+    else:
+        return x
+
+
+def typemap_lookup(typemap, x):
+    orig_x = x
+    if isinstance(x, ir.Var):
+        x = x.name
+
+    while True:
+        if x in typemap:
+            return typemap[x]
+        new_x = remove_privatized(x)
+        if new_x == x:
+            break
+        else:
+           x = new_x
+
+    raise KeyError(f"{orig_x} and all of its non-privatized names not found in typemap")
+
+
 class openmp_tag(object):
     def __init__(self, name, arg=None, load=False, non_arg=False, omp_slice=None):
         self.name = name
@@ -165,7 +192,7 @@ class openmp_tag(object):
             x = x.name
         if isinstance(x, ir.Var):
             # Make sure the var referred to has been alloc'ed already.
-            lowerer._alloca_var(x.name, typemap[x.name])
+            lowerer._alloca_var(x.name, typemap_lookup(typemap, x))
             if self.load:
                 if not self.loaded_arg:
                     self.loaded_arg = lowerer.loadvar(x.name)
@@ -184,7 +211,7 @@ class openmp_tag(object):
                 xsplit = x.split("*")
                 assert len(xsplit) == 2
                 #xtyp = get_dotted_type(x, typemap, lowerer)
-                xtyp = typemap[xsplit[0]]
+                xtyp = typemap_lookup(typemap, xsplit[0])
                 if config.DEBUG_OPENMP >= 1:
                     print("xtyp:", xtyp, type(xtyp))
                 lowerer._alloca_var(x, xtyp)
@@ -213,9 +240,7 @@ class openmp_tag(object):
                         decl += f", {fi_str}"
                         #decl = f"SCOPE({decl}, {fi_str})"
             else:
-                if x not in typemap:
-                    return ""
-                xtyp = typemap[x]
+                xtyp = typemap_lookup(typemap, x)
                 if config.DEBUG_OPENMP >= 1:
                     print("xtyp:", xtyp, type(xtyp))
                 lowerer._alloca_var(x, xtyp)
@@ -690,7 +715,7 @@ class openmp_region_start(ir.Stmt):
         for i in range(len(self.tags)):
             cur_tag = self.tags[i]
             if cur_tag.name == "QUAL.OMP.TARGET.IMPLICIT":
-                if isinstance(typemap[cur_tag.arg], types.npytypes.Array):
+                if isinstance(typemap_lookup(typemap, cur_tag.arg), types.npytypes.Array):
                     cur_tag.name = "QUAL.OMP.MAP.TOFROM"
                 else:
                     cur_tag.name = "QUAL.OMP.FIRSTPRIVATE"
@@ -743,7 +768,7 @@ class openmp_region_start(ir.Stmt):
                 cur_tag = self.tags[i]
                 if cur_tag.name in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.MAP.TO", "QUAL.OMP.MAP.FROM"]:
                     assert isinstance(cur_tag.arg, str)
-                    cur_tag_typ = typemap[cur_tag.arg]
+                    cur_tag_typ = typemap_lookup(typemap, cur_tag.arg)
                     if isinstance(cur_tag_typ, types.npytypes.Array):
                         cur_tag_ndim = cur_tag_typ.ndim
                         stride_typ = lowerer.context.get_value_type(types.intp) #lc.Type.int(64)
@@ -1673,7 +1698,7 @@ def is_dsa(name):
 
 def get_dotted_type(x, typemap, lowerer):
     xsplit = x.split("*")
-    cur_typ = typemap[xsplit[0]]
+    cur_typ = typemap_lookup(typemap, xsplit[0])
     #print("xsplit:", xsplit, cur_typ, type(cur_typ))
     for field in xsplit[1:]:
         dm = lowerer.context.data_model_manager.lookup(cur_typ)
@@ -1999,19 +2024,10 @@ class OpenmpVisitor(Transformer):
                     new_clauses.append(c)
         return new_clauses
 
-    @classmethod
-    def remove_privatized(cls, x):
-        if isinstance(x, ir.Var):
-            x = x.name
-        if isinstance(x, str) and x.endswith("%privatized"):
-            return x[:len(x) - len("%privatized")]
-        else:
-            return x
-
     def get_clause_privates(self, clauses, def_but_live_out, scope, loc):
         # Get all the private clauses from the whole set of clauses.
-        private_clauses_vars = [OpenmpVisitor.remove_privatized(x.arg) for x in clauses if x.name in ["QUAL.OMP.PRIVATE", "QUAL.OMP.FIRSTPRIVATE"]]
-        #private_clauses_vars = [OpenmpVisitor.remove_privatized(x.arg) for x in clauses if x.name in ["QUAL.OMP.PRIVATE", "QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.LASTPRIVATE"]]
+        private_clauses_vars = [remove_privatized(x.arg) for x in clauses if x.name in ["QUAL.OMP.PRIVATE", "QUAL.OMP.FIRSTPRIVATE"]]
+        #private_clauses_vars = [remove_privatized(x.arg) for x in clauses if x.name in ["QUAL.OMP.PRIVATE", "QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.LASTPRIVATE"]]
         ret = {}
         # Get a mapping of vars in private clauses to the SSA version of variable exiting the region.
         for lo in def_but_live_out:
