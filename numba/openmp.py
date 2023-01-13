@@ -2335,39 +2335,11 @@ class OpenmpVisitor(Transformer):
                 print("clauses:", c)
         return replace_vardict, copying_ir, copying_ir_before, lastprivate_copying
 
-    def some_for_directive(self, args, main_start_tag, main_end_tag, first_clause, gen_shared):
-        sblk = self.blocks[self.blk_start]
-        scope = sblk.scope
-        eblk = self.blocks[self.blk_end]
-
-        #clauses = []
-        #default_shared = True
-        if config.DEBUG_OPENMP >= 1:
-            print("some_for_directive", self.body_blocks)
-        clauses, default_shared = self.flatten(args[first_clause:], sblk)
-
-        if config.DEBUG_OPENMP >= 1:
-            print("visit", main_start_tag, args, type(args), default_shared)
-            for clause in clauses:
-                print("post-process clauses:", clause)
-
-        if len(list(filter(lambda x: x.name == "QUAL.OMP.NUM_THREADS", clauses))) > 1:
-            raise MultipleNumThreadsClauses(f"Multiple num_threads clauses near line {self.loc} is not allowed in an OpenMP parallel region.")
-
-        # Get a dict mapping variables explicitly mentioned in the data clauses above to their openmp_tag.
-        vars_in_explicit_clauses, explicit_privates = self.get_explicit_vars(clauses)
-        if config.DEBUG_OPENMP >= 1:
-            print("vars_in_explicit_clauses:", vars_in_explicit_clauses, type(vars_in_explicit_clauses), explicit_privates)
-
-        before_start = []
-        after_start = []
-        start_tags = [ openmp_tag(main_start_tag) ]
-        end_tags   = [ openmp_tag(main_end_tag) ]
-
+    def prepare_for_directive(self, clauses, vars_in_explicit_clauses, before_start, after_start, start_tags, end_tags, scope):
         call_table, _ = get_call_table(self.blocks)
         cfg = compute_cfg_from_blocks(self.blocks)
-        usedefs = compute_use_defs(self.blocks)
-        live_map = compute_live_map(cfg, self.blocks, usedefs.usemap, usedefs.defmap)
+        #usedefs = compute_use_defs(self.blocks)
+        #live_map = compute_live_map(cfg, self.blocks, usedefs.usemap, usedefs.defmap)
         all_loops = cfg.loops()
         if config.DEBUG_OPENMP >= 1:
             print("all_loops:", all_loops)
@@ -2427,13 +2399,7 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             print("loop_blocks_for_io:", loop_blocks_for_io, entry, exit)
             print("non_loop_blocks:", non_loop_blocks)
-            print("pre-replace vars_in_explicit_clauses:", vars_in_explicit_clauses)
-            print("pre-replace explicit_privates:", explicit_privates)
-            for c in clauses:
-                print("pre-replace clauses:", c)
 
-
-        found_loop = False
         entry_block = self.blocks[entry]
         exit_block = self.blocks[exit]
         header_block = self.blocks[header]
@@ -2470,7 +2436,6 @@ class OpenmpVisitor(Transformer):
                 if config.DEBUG_OPENMP >= 1:
                     print("loop_kind:", loop_kind)
                 if loop_kind != False and loop_kind == range:
-                    found_loop = True
                     range_inst = inst
                     range_args = inst.value.args
                     if config.DEBUG_OPENMP >= 1:
@@ -2616,13 +2581,8 @@ class OpenmpVisitor(Transformer):
                         start = ir.Const(start, inst.loc)
                     before_start.append(ir.Assign(start, omp_start_var, inst.loc))
 
-                    gen_ssa = False
-
                     # ---------- Create latch block -------------------------------
-                    if gen_ssa:
-                        latch_iv = loop_index.scope.redefine("$omp_iv", inst.loc)
-                    else:
-                        latch_iv = omp_iv_var
+                    latch_iv = omp_iv_var
 
                     latch_block = ir.Block(scope, inst.loc)
                     const1_var = loop_index.scope.redefine("$const1", inst.loc)
@@ -2657,15 +2617,6 @@ class OpenmpVisitor(Transformer):
                     # -------------------------------------------------------------
 
                     # ---------- Header Manipulation ------------------------------
-                    ssa_code = []
-                    if gen_ssa:
-                        ssa_var = loop_index.scope.redefine("$omp_iv", inst.loc)
-                        ssa_phi = ir.Expr.phi(inst.loc)
-                        ssa_phi.incoming_values = [latch_iv, omp_iv_var]
-                        ssa_phi.incoming_blocks = [latch_block_num, entry_pred_label]
-                        ssa_inst = ir.Assign(ssa_phi, ssa_var, inst.loc)
-                        ssa_code.append(ssa_inst)
-
                     step_var = loop_index.scope.redefine("$step_var", inst.loc)
                     detect_step_assign = ir.Assign(ir.Const(0, inst.loc), step_var, inst.loc)
                     after_start.append(detect_step_assign)
@@ -2677,15 +2628,13 @@ class OpenmpVisitor(Transformer):
                     scale_assign = ir.Assign(ir.Expr.binop(operator.mul, step_var, omp_iv_var, inst.loc), scale_var, inst.loc)
                     unnormalize_iv = ir.Assign(ir.Expr.binop(operator.add, omp_start_var, scale_var, inst.loc), loop_index, inst.loc)
                     cmp_var = loop_index.scope.redefine("$cmp", inst.loc)
-                    if gen_ssa:
-                        iv_lte_ub = ir.Assign(ir.Expr.binop(operator.le, ssa_var, omp_ub_var, inst.loc), cmp_var, inst.loc)
-                    else:
-                        iv_lte_ub = ir.Assign(ir.Expr.binop(operator.le, omp_iv_var, omp_ub_var, inst.loc), cmp_var, inst.loc)
+                    iv_lte_ub = ir.Assign(ir.Expr.binop(operator.le, omp_iv_var, omp_ub_var, inst.loc), cmp_var, inst.loc)
                     old_branch = header_block.body[-1]
                     new_branch = ir.Branch(cmp_var, old_branch.truebr, old_branch.falsebr, old_branch.loc)
                     body_label = old_branch.truebr
                     first_body_block = self.blocks[body_label]
                     new_end = [iv_lte_ub, new_branch]
+                    # Turn this on to add printing to help debug at runtime.
                     if False:
                         str_var = loop_index.scope.redefine("$str_var", inst.loc)
                         str_const = ir.Const("header1:", inst.loc)
@@ -2698,7 +2647,7 @@ class OpenmpVisitor(Transformer):
                     first_body_block.body = [fake_iternext, fake_second, step_assign, scale_assign, unnormalize_iv] + header_block.body[:-1] + first_body_block.body
 
                     header_block.body = new_end
-                    #header_block.body = ssa_code + [fake_iternext, fake_second, unnormalize_iv] + header_block.body[:-1] + new_end
+                    #header_block.body = [fake_iternext, fake_second, unnormalize_iv] + header_block.body[:-1] + new_end
 
                     # -------------------------------------------------------------
 
@@ -2711,175 +2660,222 @@ class OpenmpVisitor(Transformer):
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_start_var.name))
                     #start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.IV", loop_index.name))
                     #start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.UB", size_var.name))
+                    return True, loop_blocks_for_io, loop_blocks_for_io_minus_entry, entry_pred, exit_block
 
-                    # ----------- DSA handling ----------------------
+        return False, None, None, None, None
 
-                    keep_alive = []
-                    # Do an analysis to get variable use information coming into and out of the region.
-                    inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(loop_blocks_for_io)
-                    #inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(loop_blocks_for_io_minus_entry)
-                    if config.DEBUG_OPENMP >= 1:
-                        print("initial find_io_vars:", inputs_to_region, def_but_live_out, private_to_region)
-                    orig_inputs_to_region = copy.copy(inputs_to_region)
-                    live_out_copy = copy.copy(def_but_live_out)
+    def some_for_directive(self, args, main_start_tag, main_end_tag, first_clause, gen_shared):
+        sblk = self.blocks[self.blk_start]
+        scope = sblk.scope
+        eblk = self.blocks[self.blk_end]
 
-                    priv_saves = []
-                    priv_restores = []
-                    # Returns a dict of private clause variables and their potentially SSA form at the end of the region.
-                    clause_privates = self.get_clause_privates(clauses, live_out_copy, scope, self.loc)
-                    # Numba typing is not aware of OpenMP semantics, so for private variables we save the value
-                    # before entering the region and then restore it afterwards but we have to restore it to the SSA
-                    # version of the variable at that point.
-                    for cp in clause_privates:
-                        cpvar = ir.Var(scope, cp, self.loc)
-                        cplovar = ir.Var(scope, clause_privates[cp], self.loc)
-                        save_var = scope.redefine("$"+cp, self.loc)
-                        priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
-                        priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
+        #clauses = []
+        #default_shared = True
+        if config.DEBUG_OPENMP >= 1:
+            print("some_for_directive", self.body_blocks)
+        clauses, default_shared = self.flatten(args[first_clause:], sblk)
 
-                    # Remove variables the user explicitly added to a clause from the auto-determined variables.
-                    # This will also treat SSA forms of vars the same as their explicit Python var clauses.
-                    self.remove_explicit_from_io_vars(inputs_to_region, def_but_live_out, private_to_region, vars_in_explicit_clauses, clauses, scope, self.loc)
-                    if config.DEBUG_OPENMP >= 1:
-                        print("post remove explicit:", inputs_to_region, def_but_live_out, private_to_region, vars_in_explicit_clauses)
-                        for c in clauses:
-                            print("post remove explicit clauses:", c)
+        if config.DEBUG_OPENMP >= 1:
+            print("visit", main_start_tag, args, type(args), default_shared)
+            for clause in clauses:
+                print("post-process clauses:", clause)
 
-                    if not default_shared and (
-                        has_user_defined_var(inputs_to_region) or
-                        has_user_defined_var(def_but_live_out) or
-                        has_user_defined_var(private_to_region)):
-                        user_defined_inputs = get_user_defined_var(inputs_to_region)
-                        user_defined_def_live = get_user_defined_var(def_but_live_out)
-                        user_defined_private = get_user_defined_var(private_to_region)
-                        if config.DEBUG_OPENMP >= 1:
-                            print("inputs users:", user_defined_inputs)
-                            print("def users:", user_defined_def_live)
-                            print("private users:", user_defined_private)
-                        raise UnspecifiedVarInDefaultNone("Variables with no data env clause in OpenMP region: " + str(user_defined_inputs.union(user_defined_def_live).union(user_defined_private)))
+        if len(list(filter(lambda x: x.name == "QUAL.OMP.NUM_THREADS", clauses))) > 1:
+            raise MultipleNumThreadsClauses(f"Multiple num_threads clauses near line {self.loc} is not allowed in an OpenMP parallel region.")
 
-                    self.make_implicit_explicit(scope, vars_in_explicit_clauses, clauses, gen_shared, inputs_to_region, def_but_live_out, private_to_region)
-                    #self.add_variables_to_start(scope, vars_in_explicit_clauses, clauses, gen_shared, start_tags, keep_alive, inputs_to_region, def_but_live_out, private_to_region)
+        # Get a dict mapping variables explicitly mentioned in the data clauses above to their openmp_tag.
+        vars_in_explicit_clauses, explicit_privates = self.get_explicit_vars(clauses)
+        if config.DEBUG_OPENMP >= 1:
+            print("vars_in_explicit_clauses:", vars_in_explicit_clauses, type(vars_in_explicit_clauses), explicit_privates)
 
-                    replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(loop_blocks_for_io_minus_entry, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region)
-                    before_start.extend(copying_ir_before)
-                    after_start.extend(copying_ir)
+        before_start = []
+        after_start = []
+        start_tags = [ openmp_tag(main_start_tag) ]
+        end_tags   = [ openmp_tag(main_end_tag) ]
 
-                    if config.DEBUG_OPENMP >= 1:
-                        print("post-replace vars_in_explicit_clauses:", vars_in_explicit_clauses)
-                        print("post-replace explicit_privates:", explicit_privates)
-                        for c in clauses:
-                            print("post-replace clauses:", c)
-                        print("lastprivate_copying:", lastprivate_copying)
-                        for c in lastprivate_copying:
-                            print(c)
-                        print("copying_ir:", copying_ir)
-                        for c in copying_ir:
-                            print(c)
-                        print("copying_ir_before:", copying_ir_before)
-                        for c in copying_ir_before:
-                            print(c)
+        if config.DEBUG_OPENMP >= 1:
+            print("pre-replace vars_in_explicit_clauses:", vars_in_explicit_clauses)
+            print("pre-replace explicit_privates:", explicit_privates)
+            for c in clauses:
+                print("pre-replace clauses:", c)
 
-                    self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, gen_shared, start_tags, keep_alive)
-
-                    or_start = openmp_region_start(start_tags, 0, self.loc)
-                    or_end   = openmp_region_end(or_start, end_tags, self.loc)
-
-                    """
-                    if len(lastprivate_copying) > 0:
-                        size_var_copy = scope.redefine("size_var_copy", inst.loc)
-                        before_start.append(ir.Assign(size_var, size_var_copy, inst.loc))
-                        if True:
-                            str_var = scope.redefine("$str_var", inst.loc)
-                            str_const = ir.Const("before start:", inst.loc)
-                            str_assign = ir.Assign(str_const, str_var, inst.loc)
-                            str_print = ir.Print([str_var, size_var_copy], None, inst.loc)
-                            before_start.append(str_assign)
-                            before_start.append(str_print)
-                    """
-
-                    #new_header_block.body = [or_start] + before_start + new_header_block.body[:]
-                    entry_pred.body = entry_pred.body[:-1] + priv_saves + before_start + [or_start] + after_start + [entry_pred.body[-1]]
-                    #entry_block.body = [or_start] + before_start + entry_block.body[:]
-                    #entry_block.body = entry_block.body[:inst_num] + before_start + [or_start] + entry_block.body[inst_num:]
-                    #exit_block.body = [or_end] + priv_restores + exit_block.body
-                    if len(lastprivate_copying) > 0:
-                        new_exit_block = ir.Block(scope, inst.loc)
-                        new_exit_block_num = max(self.blocks.keys()) + 1
-                        self.blocks[new_exit_block_num] = new_exit_block
-                        evar_copy = scope.redefine("evar_copy", self.loc)
-                        keep_alive.append(ir.Assign(size_var, evar_copy, self.loc))
-                        #keep_alive.append(ir.Assign(size_var_copy, evar_copy, self.loc))
-                        new_exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
-
-                        lastprivate_check_block = exit_block
-                        lastprivate_check_block.body = []
-
-                        lastprivate_copy_block = ir.Block(scope, inst.loc)
-                        lastprivate_copy_block_num = max(self.blocks.keys()) + 1
-                        self.blocks[lastprivate_copy_block_num] = lastprivate_copy_block
-
-                        #lastprivate_check_block.body.append(ir.Jump(lastprivate_copy_block_num, inst.loc))
-                        bool_var = scope.redefine("$bool_var", inst.loc)
-                        lastprivate_check_block.body.append(ir.Assign(ir.Global("bool", bool, inst.loc), bool_var, inst.loc))
-                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", bool_var.name))
-
-                        size_minus_step = scope.redefine("$size_minus_step", inst.loc)
-                        lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.sub, size_var, step_var, inst.loc), size_minus_step, inst.loc))
-                        #lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.sub, size_var_copy, step_var, inst.loc), size_minus_step, inst.loc))
-                        #or_start.add_tag(openmp_tag("QUAL.OMP.FIRSTPRIVATE", size_var_copy.name))
-                        or_start.add_tag(openmp_tag("QUAL.OMP.SHARED", size_var.name))
-                        #or_start.add_tag(openmp_tag("QUAL.OMP.SHARED", size_var_copy.name))
-                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", size_minus_step.name))
-
-                        cmp_var = scope.redefine("$lastiter_cmp_var", inst.loc)
-                        if latest_index.name in replace_vardict:
-                            li_privatized = replace_vardict[latest_index.name]
-                            lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ge, li_privatized, size_minus_step, inst.loc), cmp_var, inst.loc))
-                        else:
-                            lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ge, latest_index, size_minus_step, inst.loc), cmp_var, inst.loc))
-                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", cmp_var.name))
-
-                        zero_var = loop_index.scope.redefine("$zero_var", inst.loc)
-                        zero_assign = ir.Assign(ir.Const(0, inst.loc), zero_var, inst.loc)
-                        lastprivate_check_block.body.append(zero_assign)
-                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", zero_var.name))
-
-                        did_work_var = scope.redefine("$did_work_var", inst.loc)
-                        lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ne, step_var, zero_var, inst.loc), did_work_var, inst.loc))
-                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", did_work_var.name))
-
-                        last_iter_cmp = scope.redefine("$lastiter_cmp_var_bool", inst.loc)
-                        lastprivate_check_block.body.append(ir.Assign(ir.Expr.call(bool_var, [cmp_var], (), inst.loc), last_iter_cmp, inst.loc))
-                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", last_iter_cmp.name))
-
-                        did_work_cmp = scope.redefine("$did_work_var_bool", inst.loc)
-                        lastprivate_check_block.body.append(ir.Assign(ir.Expr.call(bool_var, [did_work_var], (), inst.loc), did_work_cmp, inst.loc))
-                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", did_work_cmp.name))
-
-                        and_var = scope.redefine("$and_var", inst.loc)
-                        lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.and_, last_iter_cmp, did_work_cmp, inst.loc), and_var, inst.loc))
-                        or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", and_var.name))
-
-                        if False:
-                            str_var = scope.redefine("$str_var", inst.loc)
-                            str_const = ir.Const("lastiter check:", inst.loc)
-                            str_assign = ir.Assign(str_const, str_var, inst.loc)
-                            lastprivate_check_block.body.append(str_assign)
-                            str_print = ir.Print([str_var, latest_index, size_var, last_iter_cmp, omp_lb_var, omp_ub_var, did_work_cmp, and_var, size_minus_step, step_var], None, inst.loc)
-                            #str_print = ir.Print([str_var, latest_index, size_var_copy, last_iter_cmp, omp_lb_var, omp_ub_var, did_work_cmp, and_var, size_minus_step, step_var], None, inst.loc)
-                            lastprivate_check_block.body.append(str_print)
-
-                        lastprivate_check_block.body.append(ir.Branch(and_var, lastprivate_copy_block_num, new_exit_block_num, inst.loc))
-
-                        lastprivate_copy_block.body.extend(lastprivate_copying)
-                        lastprivate_copy_block.body.append(ir.Jump(new_exit_block_num, inst.loc))
-                    else:
-                        exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
-
-                    break
+        prepare_out = self.prepare_for_directive(clauses,
+                                                 vars_in_explicit_clauses,
+                                                 before_start,
+                                                 after_start,
+                                                 start_tags,
+                                                 end_tags,
+                                                 scope)
+        found_loop, loop_blocks_for_io, loop_blocks_for_io_minus_entry, entry_pred, exit_block = prepare_out
 
         assert(found_loop)
+
+        # ----------- DSA handling ----------------------
+
+        keep_alive = []
+        # Do an analysis to get variable use information coming into and out of the region.
+        inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(loop_blocks_for_io)
+        #inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(loop_blocks_for_io_minus_entry)
+        if config.DEBUG_OPENMP >= 1:
+            print("initial find_io_vars:", inputs_to_region, def_but_live_out, private_to_region)
+        orig_inputs_to_region = copy.copy(inputs_to_region)
+        live_out_copy = copy.copy(def_but_live_out)
+
+        priv_saves = []
+        priv_restores = []
+        # Returns a dict of private clause variables and their potentially SSA form at the end of the region.
+        clause_privates = self.get_clause_privates(clauses, live_out_copy, scope, self.loc)
+        # Numba typing is not aware of OpenMP semantics, so for private variables we save the value
+        # before entering the region and then restore it afterwards but we have to restore it to the SSA
+        # version of the variable at that point.
+        for cp in clause_privates:
+            cpvar = ir.Var(scope, cp, self.loc)
+            cplovar = ir.Var(scope, clause_privates[cp], self.loc)
+            save_var = scope.redefine("$"+cp, self.loc)
+            priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
+            priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
+
+        # Remove variables the user explicitly added to a clause from the auto-determined variables.
+        # This will also treat SSA forms of vars the same as their explicit Python var clauses.
+        self.remove_explicit_from_io_vars(inputs_to_region, def_but_live_out, private_to_region, vars_in_explicit_clauses, clauses, scope, self.loc)
+        if config.DEBUG_OPENMP >= 1:
+            print("post remove explicit:", inputs_to_region, def_but_live_out, private_to_region, vars_in_explicit_clauses)
+            for c in clauses:
+                print("post remove explicit clauses:", c)
+
+        if not default_shared and (
+            has_user_defined_var(inputs_to_region) or
+            has_user_defined_var(def_but_live_out) or
+            has_user_defined_var(private_to_region)):
+            user_defined_inputs = get_user_defined_var(inputs_to_region)
+            user_defined_def_live = get_user_defined_var(def_but_live_out)
+            user_defined_private = get_user_defined_var(private_to_region)
+            if config.DEBUG_OPENMP >= 1:
+                print("inputs users:", user_defined_inputs)
+                print("def users:", user_defined_def_live)
+                print("private users:", user_defined_private)
+            raise UnspecifiedVarInDefaultNone("Variables with no data env clause in OpenMP region: " + str(user_defined_inputs.union(user_defined_def_live).union(user_defined_private)))
+
+        self.make_implicit_explicit(scope, vars_in_explicit_clauses, clauses, gen_shared, inputs_to_region, def_but_live_out, private_to_region)
+        #self.add_variables_to_start(scope, vars_in_explicit_clauses, clauses, gen_shared, start_tags, keep_alive, inputs_to_region, def_but_live_out, private_to_region)
+
+        replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(loop_blocks_for_io_minus_entry, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region)
+        before_start.extend(copying_ir_before)
+        after_start.extend(copying_ir)
+
+        if config.DEBUG_OPENMP >= 1:
+            print("post-replace vars_in_explicit_clauses:", vars_in_explicit_clauses)
+            print("post-replace explicit_privates:", explicit_privates)
+            for c in clauses:
+                print("post-replace clauses:", c)
+            print("lastprivate_copying:", lastprivate_copying)
+            for c in lastprivate_copying:
+                print(c)
+            print("copying_ir:", copying_ir)
+            for c in copying_ir:
+                print(c)
+            print("copying_ir_before:", copying_ir_before)
+            for c in copying_ir_before:
+                print(c)
+
+        self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, gen_shared, start_tags, keep_alive)
+
+        or_start = openmp_region_start(start_tags, 0, self.loc)
+        or_end   = openmp_region_end(or_start, end_tags, self.loc)
+
+        """
+        if len(lastprivate_copying) > 0:
+            size_var_copy = scope.redefine("size_var_copy", inst.loc)
+            before_start.append(ir.Assign(size_var, size_var_copy, inst.loc))
+            if True:
+                str_var = scope.redefine("$str_var", inst.loc)
+                str_const = ir.Const("before start:", inst.loc)
+                str_assign = ir.Assign(str_const, str_var, inst.loc)
+                str_print = ir.Print([str_var, size_var_copy], None, inst.loc)
+                before_start.append(str_assign)
+                before_start.append(str_print)
+        """
+
+        #new_header_block.body = [or_start] + before_start + new_header_block.body[:]
+        #entry_pred.body = entry_pred.body[:-1] + priv_saves + before_start + [or_start] + after_start + [entry_pred.body[-1]]
+        #entry_block.body = [or_start] + before_start + entry_block.body[:]
+        #entry_block.body = entry_block.body[:inst_num] + before_start + [or_start] + entry_block.body[inst_num:]
+        #exit_block.body = [or_end] + priv_restores + exit_block.body
+        if len(lastprivate_copying) > 0:
+            new_exit_block = ir.Block(scope, inst.loc)
+            new_exit_block_num = max(self.blocks.keys()) + 1
+            self.blocks[new_exit_block_num] = new_exit_block
+            evar_copy = scope.redefine("evar_copy", self.loc)
+            keep_alive.append(ir.Assign(size_var, evar_copy, self.loc))
+            #keep_alive.append(ir.Assign(size_var_copy, evar_copy, self.loc))
+            new_exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
+
+            lastprivate_check_block = exit_block
+            lastprivate_check_block.body = []
+
+            lastprivate_copy_block = ir.Block(scope, inst.loc)
+            lastprivate_copy_block_num = max(self.blocks.keys()) + 1
+            self.blocks[lastprivate_copy_block_num] = lastprivate_copy_block
+
+            #lastprivate_check_block.body.append(ir.Jump(lastprivate_copy_block_num, inst.loc))
+            bool_var = scope.redefine("$bool_var", inst.loc)
+            lastprivate_check_block.body.append(ir.Assign(ir.Global("bool", bool, inst.loc), bool_var, inst.loc))
+            or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", bool_var.name))
+
+            size_minus_step = scope.redefine("$size_minus_step", inst.loc)
+            lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.sub, size_var, step_var, inst.loc), size_minus_step, inst.loc))
+            #lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.sub, size_var_copy, step_var, inst.loc), size_minus_step, inst.loc))
+            #or_start.add_tag(openmp_tag("QUAL.OMP.FIRSTPRIVATE", size_var_copy.name))
+            or_start.add_tag(openmp_tag("QUAL.OMP.SHARED", size_var.name))
+            #or_start.add_tag(openmp_tag("QUAL.OMP.SHARED", size_var_copy.name))
+            or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", size_minus_step.name))
+
+            cmp_var = scope.redefine("$lastiter_cmp_var", inst.loc)
+            if latest_index.name in replace_vardict:
+                li_privatized = replace_vardict[latest_index.name]
+                lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ge, li_privatized, size_minus_step, inst.loc), cmp_var, inst.loc))
+            else:
+                lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ge, latest_index, size_minus_step, inst.loc), cmp_var, inst.loc))
+            or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", cmp_var.name))
+
+            zero_var = loop_index.scope.redefine("$zero_var", inst.loc)
+            zero_assign = ir.Assign(ir.Const(0, inst.loc), zero_var, inst.loc)
+            lastprivate_check_block.body.append(zero_assign)
+            or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", zero_var.name))
+
+            did_work_var = scope.redefine("$did_work_var", inst.loc)
+            lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ne, step_var, zero_var, inst.loc), did_work_var, inst.loc))
+            or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", did_work_var.name))
+
+            last_iter_cmp = scope.redefine("$lastiter_cmp_var_bool", inst.loc)
+            lastprivate_check_block.body.append(ir.Assign(ir.Expr.call(bool_var, [cmp_var], (), inst.loc), last_iter_cmp, inst.loc))
+            or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", last_iter_cmp.name))
+
+            did_work_cmp = scope.redefine("$did_work_var_bool", inst.loc)
+            lastprivate_check_block.body.append(ir.Assign(ir.Expr.call(bool_var, [did_work_var], (), inst.loc), did_work_cmp, inst.loc))
+            or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", did_work_cmp.name))
+
+            and_var = scope.redefine("$and_var", inst.loc)
+            lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.and_, last_iter_cmp, did_work_cmp, inst.loc), and_var, inst.loc))
+            or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", and_var.name))
+
+            if False:
+                str_var = scope.redefine("$str_var", inst.loc)
+                str_const = ir.Const("lastiter check:", inst.loc)
+                str_assign = ir.Assign(str_const, str_var, inst.loc)
+                lastprivate_check_block.body.append(str_assign)
+                str_print = ir.Print([str_var, latest_index, size_var, last_iter_cmp, omp_lb_var, omp_ub_var, did_work_cmp, and_var, size_minus_step, step_var], None, inst.loc)
+                #str_print = ir.Print([str_var, latest_index, size_var_copy, last_iter_cmp, omp_lb_var, omp_ub_var, did_work_cmp, and_var, size_minus_step, step_var], None, inst.loc)
+                lastprivate_check_block.body.append(str_print)
+
+            lastprivate_check_block.body.append(ir.Branch(and_var, lastprivate_copy_block_num, new_exit_block_num, inst.loc))
+
+            lastprivate_copy_block.body.extend(lastprivate_copying)
+            lastprivate_copy_block.body.append(ir.Jump(new_exit_block_num, inst.loc))
+            entry_pred.body = entry_pred.body[:-1] + priv_saves + before_start + [or_start] + after_start + [entry_pred.body[-1]]
+        else:
+            entry_pred.body = entry_pred.body[:-1] + priv_saves + before_start + [or_start] + after_start + [entry_pred.body[-1]]
+            exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
 
         return None
 
@@ -2922,11 +2918,11 @@ class OpenmpVisitor(Transformer):
 
     # Don't need a rule for openmp_construct.
 
-    def teams_distribute_parallel_for_simd_clause(self, args):
-        raise NotImplementedError("""Simd clause for target teams
-                                 distribute parallel loop currently unsupported.""")
-        if config.DEBUG_OPENMP >= 1:
-            print("visit device_clause", args, type(args))
+    #def teams_distribute_parallel_for_simd_clause(self, args):
+    #    raise NotImplementedError("""Simd clause for target teams
+    #                             distribute parallel loop currently unsupported.""")
+    #    if config.DEBUG_OPENMP >= 1:
+    #        print("visit device_clause", args, type(args))
 
     # Don't need a rule for for_simd_construct.
 
@@ -3101,29 +3097,46 @@ class OpenmpVisitor(Transformer):
         eblk.body = reset + [or_end] + eblk.body[:]
 
     # Don't need a rule for CRITICAL.
-    # Don't need arule for target_construct.
+    # Don't need a rule for target_construct.
+    # Don't need a rule for target_teams_distribute_parallel_for_simd_construct.
 
     def target_directive(self, args):
+        self.some_target_directive(args, "TARGET", 1)
+
+    def target_teams_distribute_parallel_for_simd_directive(self, args):
+        self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 6, has_loop=True)
+
+    def target_teams_distribute_parallel_for_directive(self, args):
+        self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP", 5, has_loop=True)
+
+    def some_target_directive(self, args, dir_tag, lexer_count, has_loop=False):
         if config.DEBUG_OPENMP >= 1:
-            print("visit target_directive", args, type(args))
+            print("visit some_target_directive", args, type(args), self.blk_start, self.blk_end)
+
+        dir_start_tag = "DIR.OMP." + dir_tag
+        dir_end_tag = "DIR.OMP.END." + dir_tag
 
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
         scope = sblk.scope
 
         if config.DEBUG_OPENMP >= 1:
-            for clause in args[1:]:
+            for clause in args[lexer_count:]:
                 print("pre clause:", clause)
-        clauses, _ = self.flatten(args[1:], sblk)
+        clauses, _ = self.flatten(args[lexer_count:], sblk)
         if config.DEBUG_OPENMP >= 1:
             for clause in clauses:
                 print("final clause:", clause)
 
-        before_start = []
-        after_start = []
-
         target_num = OpenmpVisitor.target_num
         OpenmpVisitor.target_num += 1
+
+        before_start = []
+        after_start = []
+        for_before_start = []
+        for_after_start = []
+        start_tags = [openmp_tag(dir_start_tag, target_num)]
+        end_tags = [openmp_tag(dir_end_tag, target_num)]
 
         # Get a dict mapping variables explicitly mentioned in the data clauses above to their openmp_tag.
         vars_in_explicit_clauses, explicit_privates = self.get_explicit_vars(clauses)
@@ -3132,8 +3145,26 @@ class OpenmpVisitor(Transformer):
             for v in clauses:
                 print("vars_in_explicit clauses first:", v)
 
+        if has_loop:
+            prepare_out = self.prepare_for_directive(clauses,
+                                                     vars_in_explicit_clauses,
+                                                     for_before_start,
+                                                     for_after_start,
+                                                     start_tags,
+                                                     end_tags,
+                                                     scope)
+
+            found_loop, blocks_for_io, blocks_in_region, entry_pred, exit_block = prepare_out
+
+            assert(found_loop)
+        else:
+            blocks_for_io = self.body_blocks
+            blocks_in_region = get_blocks_between_start_end(self.blocks, self.blk_start, self.blk_end)
+            entry_pred = sblk
+            exit_block = eblk
+
         # Do an analysis to get variable use information coming into and out of the region.
-        inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
+        inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(blocks_for_io)
         orig_inputs_to_region = copy.copy(inputs_to_region)
         live_out_copy = copy.copy(def_but_live_out)
 
@@ -3168,7 +3199,6 @@ class OpenmpVisitor(Transformer):
             print("post get_explicit_vars:", explicit_privates)
             for k,v in vars_in_explicit_clauses.items():
                 print("vars_in_explicit post:", k, v)
-        blocks_in_region = get_blocks_between_start_end(self.blocks, self.blk_start, self.blk_end)
         if config.DEBUG_OPENMP >= 1:
             print(1, "blocks_in_region:", blocks_in_region)
         replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region, for_target=True)
@@ -3209,8 +3239,6 @@ class OpenmpVisitor(Transformer):
             priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
             priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
 
-        start_tags = [openmp_tag("DIR.OMP.TARGET", target_num)]
-        end_tags = [openmp_tag("DIR.OMP.END.TARGET", target_num)]
         keep_alive = []
         self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
 
@@ -3224,13 +3252,30 @@ class OpenmpVisitor(Transformer):
         target_block.body = [or_start] + after_start + sblk.body[:]
         self.blocks[new_target_block_num] = target_block
 
-        sblk.body = priv_saves + before_start + [ir.Jump(new_target_block_num, self.loc)]
-        #sblk.body = priv_saves + before_start + [or_start] + after_start + sblk.body[:]
-        eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
+        if has_loop:
+            entry_pred.body = entry_pred.body[:-1] + before_start + for_before_start + [or_start] + after_start + for_after_start + [entry_pred.body[-1]]
+            exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
+        else:
+            sblk.body = priv_saves + before_start + [ir.Jump(new_target_block_num, self.loc)]
+            eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
 
     def target_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit target_clause", args, type(args), args[0])
+            if isinstance(args[0], list):
+                print(args[0][0])
+        return args[0]
+
+    def target_teams_distribute_parallel_for_simd_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_teams_distribute_parallel_for_simd_clause", args, type(args), args[0])
+            if isinstance(args[0], list):
+                print(args[0][0])
+        return args[0]
+
+    def target_teams_distribute_parallel_for_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_teams_distribute_parallel_for_clause", args, type(args), args[0])
             if isinstance(args[0], list):
                 print(args[0][0])
         return args[0]
@@ -3367,10 +3412,10 @@ class OpenmpVisitor(Transformer):
 
     # Don't need a rule for UNIFORM.
 
-    def collapse_expr(self, args):
+    def collapse_clause(self, args):
         raise NotImplementedError("Collapse currently unsupported.")
         if config.DEBUG_OPENMP >= 1:
-            print("visit collapse_expr", args, type(args))
+            print("visit collapse_clause", args, type(args))
 
     # Don't need a rule for COLLAPSE.
     # Don't need a rule for task_construct.
@@ -4056,6 +4101,8 @@ openmp_grammar = r"""
                     | single_construct
                     | task_construct
                     | target_construct
+                    | target_teams_distribute_parallel_for_simd_construct
+                    | target_teams_distribute_parallel_for_construct
                     | critical_construct
                     | atomic_construct
                     | sections_construct
@@ -4068,8 +4115,8 @@ openmp_grammar = r"""
                     | parallel_sections_construct
                     | master_construct
                     | ordered_construct
-    teams_distribute_parallel_for_simd_clause: target_clause
-                                             | teams_distribute_parallel_for_simd_clause
+    //teams_distribute_parallel_for_simd_clause: target_clause
+    //                                         | teams_distribute_parallel_for_simd_clause
     for_simd_construct: for_simd_directive
     for_simd_directive: FOR SIMD [for_simd_clause*]
     for_simd_clause: for_clause
@@ -4081,6 +4128,12 @@ openmp_grammar = r"""
     target_data_construct: target_data_directive
     target_data_directive: TARGET DATA [target_data_clause*]
     DATA: "data"
+    ENTER: "enter"
+    EXIT: "exit"
+    target_enter_data_construct: target_enter_data_directive
+    target_enter_data_directive: TARGET ENTER DATA [target_data_clause*]
+    target_exit_data_construct: target_exit_data_directive
+    target_exit_data_directive: TARGET EXIT DATA [target_data_clause*]
     target_data_clause: device_clause
                       | map_clause
                       | if_clause
@@ -4127,12 +4180,106 @@ openmp_grammar = r"""
     critical_directive: CRITICAL
     CRITICAL: "critical"
     target_construct: target_directive
+    target_teams_distribute_parallel_for_simd_construct: target_teams_distribute_parallel_for_simd_directive
+    target_teams_distribute_parallel_for_construct: target_teams_distribute_parallel_for_directive
     target_directive: TARGET [target_clause*]
     target_clause: device_clause
                  | map_clause
                  | if_clause
                  | data_privatization_clause
                  | data_privatization_in_clause
+    teams_clause: num_teams_clause
+                | thread_limit_clause
+                | data_default_clause
+                | data_privatization_clause
+                | data_privatization_in_clause
+                | data_sharing_clause
+                | data_reduction_clause
+    num_teams_clause: NUM_TEAMS "(" const_num_or_var ")"
+    NUM_TEAMS: "num_teams"
+    thread_limit_clause: THREAD_LIMIT "(" const_num_or_var ")"
+    THREAD_LIMIT: "thread_limit"
+
+    distribute_clause: private_clause
+                     | firstprivate_clause
+                     | lastprivate_clause
+                     | collapse_clause
+                     | dist_schedule_expr
+                     | dist_schedule_no_expr
+    dist_schedule_expr: DIST_SCHEDULE "(" STATIC ")"
+    dist_schedule_no_expr: DIST_SCHEDULE "(" STATIC "," const_num_or_var ")"
+    dist_schedule_clause: dist_schedule_expr
+                        | dist_schedule_no_expr
+    DIST_SCHEDULE: "dist_schedule"
+
+    target_teams_distribute_parallel_for_simd_directive: TARGET TEAMS DISTRIBUTE PARALLEL FOR SIMD [target_teams_distribute_parallel_for_simd_clause*]
+    target_teams_distribute_parallel_for_simd_clause: if_clause
+                                                    | device_clause
+                                                    | data_privatization_clause
+                                                    | data_privatization_in_clause
+                                             //     | in_reduction_clause
+                                                    | map_clause
+                                                    | is_device_ptr_clause
+                                             //     | defaultmap_clause
+                                                    | NOWAIT
+                                                    | allocate_clause
+                                                    | depend_with_modifier_clause
+                                             //     | uses_allocators_clause 
+                                                    | num_teams_clause
+                                                    | thread_limit_clause
+                                                    | data_default_clause
+                                                    | data_sharing_clause
+                                                    | data_reduction_clause
+                                                    | num_threads_clause
+                                                    | copyin_clause 
+                                             //     | proc_bind_clause
+                                                    | data_privatization_out_clause
+                                                    | linear_clause
+                                                    | schedule_clause
+                                                    | collapse_clause
+                                                    | ORDERED
+                                             //     | order_clause 
+                                                    | dist_schedule_clause
+                                             //     | safelen_clause
+                                             //     | simdlen_clause
+                                                    | aligned_clause
+                                             //     | nontemporal_clause
+
+    target_teams_distribute_parallel_for_directive: TARGET TEAMS DISTRIBUTE PARALLEL FOR [target_teams_distribute_parallel_for_clause*]
+    target_teams_distribute_parallel_for_clause: if_clause
+                                               | device_clause
+                                               | data_privatization_clause
+                                               | data_privatization_in_clause
+                                        //     | in_reduction_clause
+                                               | map_clause
+                                               | is_device_ptr_clause
+                                        //     | defaultmap_clause
+                                               | NOWAIT
+                                               | allocate_clause
+                                               | depend_with_modifier_clause
+                                        //     | uses_allocators_clause 
+                                               | num_teams_clause
+                                               | thread_limit_clause
+                                               | data_default_clause
+                                               | data_sharing_clause
+                                               | data_reduction_clause
+                                               | num_threads_clause
+                                               | copyin_clause 
+                                        //     | proc_bind_clause
+                                               | data_privatization_out_clause
+                                               | linear_clause
+                                               | schedule_clause
+                                               | collapse_clause
+                                               | ORDERED
+                                        //     | order_clause 
+                                               | dist_schedule_clause
+
+    IS_DEVICE_PTR: "is_device_ptr"
+    is_device_ptr_clause: IS_DEVICE_PTR "(" var_list ")"
+    allocate_clause: ALLOCATE "(" allocate_parameter ")"
+    ALLOCATE: "allocate"
+    allocate_parameter: [const_num_or_var] var_list
+
     target_update_construct: target_update_directive
     target_update_directive: TARGET UPDATE target_update_clause*
     target_update_clause: motion_clause
@@ -4150,6 +4297,8 @@ openmp_grammar = r"""
                            | "[" [const_num_or_var] ":" [const_num_or_var] "]"
                            | "[" const_num_or_var "]"
     TARGET: "target"
+    TEAMS: "teams"
+    DISTRIBUTE: "distribute"
     single_construct: single_directive
     single_directive: SINGLE [single_clause*]
     SINGLE: "single"
@@ -4164,7 +4313,7 @@ openmp_grammar = r"""
     simd_construct: simd_directive
     simd_directive: SIMD [simd_clause*]
     SIMD: "simd"
-    simd_clause: collapse_expr
+    simd_clause: collapse_clause
                | aligned_clause
                | linear_clause
                | uniform_clause
@@ -4188,7 +4337,7 @@ openmp_grammar = r"""
     NOTINBRANCH: "notinbranch"
     uniform_clause: UNIFORM "(" var_list ")"
     UNIFORM: "uniform"
-    collapse_expr: COLLAPSE "(" const_num_or_var ")"
+    collapse_clause: COLLAPSE "(" const_num_or_var ")"
     COLLAPSE: "collapse"
     task_construct: task_directive
     TASK: "task"
@@ -4202,7 +4351,7 @@ openmp_grammar = r"""
                       | UNTIED
                       | MERGEABLE
                       | FINAL "(" const_num_or_var ")"
-                      | DEPEND "(" dependence_type ":" variable_array_section_list ")"
+                      | depend_with_modifier_clause
     DEPEND: "depend"
     FINAL: "final"
     UNTIED: "untied"
@@ -4210,6 +4359,7 @@ openmp_grammar = r"""
     dependence_type: IN
                    | OUT
                    | INOUT
+    depend_with_modifier_clause: DEPEND "(" dependence_type ":" variable_array_section_list ")"
     IN: "in"
     OUT: "out"
     INOUT: "inout"
@@ -4275,12 +4425,14 @@ openmp_grammar = r"""
     unique_for_clause: ORDERED
                      | sched_no_expr
                      | sched_expr
-                     | collapse_expr
+                     | collapse_clause
     LINEAR: "linear"
     linear_clause: LINEAR "(" var_list ":" const_num_or_var ")"
                  | LINEAR "(" var_list ")"
     sched_no_expr: SCHEDULE "(" schedule_kind ")"
     sched_expr: SCHEDULE "(" schedule_kind "," const_num_or_var ")"
+    schedule_clause: sched_no_expr
+                   | sched_expr
     SCHEDULE: "schedule"
     schedule_kind: STATIC | DYNAMIC | GUIDED | RUNTIME | AUTO
     STATIC: "static"
@@ -4321,7 +4473,6 @@ openmp_grammar = r"""
                     | target_teams_distribute_construct
                     | teams_distribute_parallel_for_simd_construct
                     | target_teams_distribute_parallel_for_construct
-                    | target_teams_distribute_parallel_for_simd_construct
                     | target_teams_construct
                     | target_teams_distribute_simd_construct
                     | teams_distribute_parallel_for_construct
