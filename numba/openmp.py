@@ -776,7 +776,7 @@ class openmp_region_start(ir.Stmt):
                         array_var = var_table[cur_tag.arg]
                         if config.DEBUG_OPENMP >= 1:
                             print("Found array mapped:", cur_tag.name, cur_tag.arg, cur_tag_typ, type(cur_tag_typ), stride_typ, type(stride_typ), stride_abi_size, array_var, type(array_var))
-                        size_var = ir.Var(None, cur_tag.arg + "_size_var", array_var.loc)
+                        size_var = ir.Var(None, f"{cur_tag.arg}_size_var{target_num}", array_var.loc)
                         #size_var = array_var.scope.redefine("size_var", array_var.loc)
                         size_getattr = ir.Expr.getattr(array_var, "size", array_var.loc)
                         size_assign = ir.Assign(size_getattr, size_var, array_var.loc)
@@ -2958,12 +2958,34 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for target_data_construct.
 
     def target_data_directive(self, args):
-        raise NotImplementedError("Target data directive currently unsupported.")
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
 
         if config.DEBUG_OPENMP >= 1:
             print("visit target_data_directive", args, type(args))
+
+        before_start = []
+        after_start = []
+
+        clauses, default_shared = self.flatten(args[2:], sblk)
+
+        if config.DEBUG_OPENMP >= 1:
+            for clause in clauses:
+                print("final clause:", clause)
+
+        inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
+        used_in_region = inputs_to_region | def_but_live_out | private_to_region
+        clauses = self.filter_unused_vars(clauses, used_in_region)
+
+        start_tags = [openmp_tag("DIR.OMP.TARGET.DATA")] + clauses
+        end_tags = [openmp_tag("DIR.OMP.END.TARGET.DATA")]
+
+        or_start = openmp_region_start(start_tags, 0, self.loc)
+        or_end   = openmp_region_end(or_start, end_tags, self.loc)
+        sblk.body = before_start + [or_start] + after_start + sblk.body[:]
+        eblk.body = [or_end] + eblk.body[:]
+
+        add_enclosing_region(self.func_ir, self.body_blocks, or_start)
 
     # Don't need a rule for DATA.
 
@@ -3103,11 +3125,17 @@ class OpenmpVisitor(Transformer):
     def target_directive(self, args):
         self.some_target_directive(args, "TARGET", 1)
 
-    def target_teams_distribute_parallel_for_simd_directive(self, args):
-        self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 6, has_loop=True)
+    def target_teams_directive(self, args):
+        self.some_target_directive(args, "TARGET.TEAMS", 2)
+
+    def target_teams_loop_directive(self, args):
+        self.some_target_directive(args, "TARGET.TEAMS.LOOP", 3, has_loop=True)
 
     def target_teams_distribute_parallel_for_directive(self, args):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP", 5, has_loop=True)
+
+    def target_teams_distribute_parallel_for_simd_directive(self, args):
+        self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 6, has_loop=True)
 
     def some_target_directive(self, args, dir_tag, lexer_count, has_loop=False):
         if config.DEBUG_OPENMP >= 1:
@@ -3262,6 +3290,20 @@ class OpenmpVisitor(Transformer):
     def target_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit target_clause", args, type(args), args[0])
+            if isinstance(args[0], list):
+                print(args[0][0])
+        return args[0]
+
+    def target_teams_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_teams_clause", args, type(args), args[0])
+            if isinstance(args[0], list):
+                print(args[0][0])
+        return args[0]
+
+    def target_teams_loop_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_teams_loop_clause", args, type(args), args[0])
             if isinstance(args[0], list):
                 print(args[0][0])
         return args[0]
@@ -3697,8 +3739,6 @@ class OpenmpVisitor(Transformer):
 
         before_start = []
         after_start = []
-        #clauses = []
-        #default_shared = True
         if config.DEBUG_OPENMP >= 1:
             print("visit parallel_directive", args, type(args))
         clauses, default_shared = self.flatten(args[1:], sblk)
@@ -4101,8 +4141,10 @@ openmp_grammar = r"""
                     | single_construct
                     | task_construct
                     | target_construct
+                    | target_teams_construct
                     | target_teams_distribute_parallel_for_simd_construct
                     | target_teams_distribute_parallel_for_construct
+                    | target_teams_loop_construct
                     | critical_construct
                     | atomic_construct
                     | sections_construct
@@ -4137,6 +4179,8 @@ openmp_grammar = r"""
     target_data_clause: device_clause
                       | map_clause
                       | if_clause
+                      | NOWAIT
+                      | depend_with_modifier_clause
     device_clause: "device" "(" const_num_or_var ")"
     map_clause: "map" "(" [map_type ":"] var_list ")"
     map_type: ALLOC | TO | FROM | TOFROM
@@ -4182,6 +4226,8 @@ openmp_grammar = r"""
     target_construct: target_directive
     target_teams_distribute_parallel_for_simd_construct: target_teams_distribute_parallel_for_simd_directive
     target_teams_distribute_parallel_for_construct: target_teams_distribute_parallel_for_directive
+    target_teams_loop_construct: target_teams_loop_directive
+    target_teams_construct: target_teams_directive
     target_directive: TARGET [target_clause*]
     target_clause: device_clause
                  | map_clause
@@ -4224,21 +4270,21 @@ openmp_grammar = r"""
                                                     | NOWAIT
                                                     | allocate_clause
                                                     | depend_with_modifier_clause
-                                             //     | uses_allocators_clause 
+                                             //     | uses_allocators_clause
                                                     | num_teams_clause
                                                     | thread_limit_clause
                                                     | data_default_clause
                                                     | data_sharing_clause
                                                     | data_reduction_clause
                                                     | num_threads_clause
-                                                    | copyin_clause 
+                                                    | copyin_clause
                                              //     | proc_bind_clause
                                                     | data_privatization_out_clause
                                                     | linear_clause
                                                     | schedule_clause
                                                     | collapse_clause
                                                     | ORDERED
-                                             //     | order_clause 
+                                             //     | order_clause
                                                     | dist_schedule_clause
                                              //     | safelen_clause
                                              //     | simdlen_clause
@@ -4257,22 +4303,66 @@ openmp_grammar = r"""
                                                | NOWAIT
                                                | allocate_clause
                                                | depend_with_modifier_clause
-                                        //     | uses_allocators_clause 
+                                        //     | uses_allocators_clause
                                                | num_teams_clause
                                                | thread_limit_clause
                                                | data_default_clause
                                                | data_sharing_clause
                                                | data_reduction_clause
                                                | num_threads_clause
-                                               | copyin_clause 
+                                               | copyin_clause
                                         //     | proc_bind_clause
                                                | data_privatization_out_clause
                                                | linear_clause
                                                | schedule_clause
                                                | collapse_clause
                                                | ORDERED
-                                        //     | order_clause 
+                                        //     | order_clause
                                                | dist_schedule_clause
+
+    LOOP: "loop"
+
+    target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_loop_clause*]
+    target_teams_loop_clause: if_clause
+                            | device_clause
+                            | data_privatization_clause
+                            | data_privatization_in_clause
+                     //     | in_reduction_clause
+                            | map_clause
+                            | is_device_ptr_clause
+                     //     | defaultmap_clause
+                            | NOWAIT
+                            | allocate_clause
+                            | depend_with_modifier_clause
+                     //     | uses_allocators_clause
+                            | num_teams_clause
+                            | thread_limit_clause
+                            | data_default_clause
+                            | data_sharing_clause
+                     //     | reduction_default_only_clause
+                     //     | bind_clause
+                            | collapse_clause
+                            | ORDERED
+                            | data_privatization_out_clause
+
+    target_teams_directive: TARGET TEAMS [target_teams_clause*]
+    target_teams_clause: if_clause
+                       | device_clause
+                       | data_privatization_clause
+                       | data_privatization_in_clause
+                //     | in_reduction_clause
+                       | map_clause
+                       | is_device_ptr_clause
+                //     | defaultmap_clause
+                       | NOWAIT
+                       | allocate_clause
+                       | depend_with_modifier_clause
+                //     | uses_allocators_clause
+                       | num_teams_clause
+                       | thread_limit_clause
+                       | data_default_clause
+                       | data_sharing_clause
+                //     | reduction_default_only_clause
 
     IS_DEVICE_PTR: "is_device_ptr"
     is_device_ptr_clause: IS_DEVICE_PTR "(" var_list ")"
