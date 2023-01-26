@@ -1056,17 +1056,10 @@ class openmp_region_start(ir.Stmt):
             if selected_device == 0:
                 flags = Flags()
 
-                subtarget = targetctx.subtarget(_registries=dict())
+                subtarget = targetctx.subtarget()
                 # Turn off the Numba runtime (incref and decref mostly) for the
                 # target compilation.
                 subtarget.enable_nrt = False
-                printreg = imputils.Registry()
-                @printreg.lower(print, types.VarArg(types.Any))
-                def print_varargs(context, builder, sig, args):
-                    #print("target print_varargs lowerer")
-                    return context.get_dummy_value()
-
-                subtarget.install_registry(printreg)
                 device_target = subtarget
             elif selected_device == 1:
                 from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
@@ -1161,7 +1154,8 @@ class openmp_region_start(ir.Stmt):
                 with open(filename_o, 'wb') as f:
                     f.write(target_elf)
                 fd_so, filename_so = tempfile.mkstemp('.so')
-                subprocess.run(['clang', '-shared', filename_o, '-o', filename_so])
+                from numba._helperlib import __file__ as helperlib
+                subprocess.run(['clang', '-shared', filename_o, helperlib, '-o', filename_so])
                 with open(filename_so, 'rb') as f:
                     target_elf = f.read()
                 if config.DEBUG_OPENMP >= 1:
