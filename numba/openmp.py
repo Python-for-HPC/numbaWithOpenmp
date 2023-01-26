@@ -1176,7 +1176,9 @@ class openmp_region_start(ir.Stmt):
                     sys.stdout.flush()
             elif selected_device == 1:
                 arch = 'nvptx'
-                cc = 'sm_60'
+                import numba.cuda.api as cudaapi
+                cc_api = cudaapi.get_current_device().compute_capability
+                cc = 'sm_' + str(cc_api[0]) + str(cc_api[1])
                 filename_prefix = cres_library.name
                 target_llvm_ir = cres_library.get_llvm_str()
                 with open(filename_prefix + '.ll', 'w') as f:
