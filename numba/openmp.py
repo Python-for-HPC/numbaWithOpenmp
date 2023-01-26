@@ -2338,11 +2338,13 @@ class OpenmpVisitor(Transformer):
     def prepare_for_directive(self, clauses, vars_in_explicit_clauses, before_start, after_start, start_tags, end_tags, scope):
         call_table, _ = get_call_table(self.blocks)
         cfg = compute_cfg_from_blocks(self.blocks)
-        #usedefs = compute_use_defs(self.blocks)
-        #live_map = compute_live_map(cfg, self.blocks, usedefs.usemap, usedefs.defmap)
+        usedefs = compute_use_defs(self.blocks)
+        live_map = compute_live_map(cfg, self.blocks, usedefs.usemap, usedefs.defmap)
+
         all_loops = cfg.loops()
         if config.DEBUG_OPENMP >= 1:
             print("all_loops:", all_loops)
+            print("live_map:", live_map)
         loops = {}
         # Find the outer-most loop in this OpenMP region.
         for k, v in all_loops.items():
@@ -2384,16 +2386,22 @@ class OpenmpVisitor(Transformer):
         if not isinstance(first_stmt, ir.Assign) or not isinstance(first_stmt.value, ir.Global) or first_stmt.value.name != "range":
             raise ParallelForExtraCode(f"Extra code near line {self.loc} is not allowed before or after the loop in an OpenMP parallel for region.")
 
+        live_end = live_map[self.blk_end]
         for non_loop_block in non_loop_blocks:
             nlb = self.blocks[non_loop_block]
             if isinstance(nlb.body[0], ir.Jump):
                 # Non-loop empty blocks are fine.
                 continue
             if isinstance(nlb.body[-1], ir.Jump) and nlb.body[-1].target == self.blk_end:
-                if len(nlb.body) == 2 and isinstance(nlb.body[0], ir.Assign) and isinstance(nlb.body[0].value, ir.Const) and nlb.body[0].value.value == None:
+                # Loop through all statements in block that jumps to the end of the region.
+                # If those are all assignments where the LHS is dead then they are safe.
+                for nlb_stmt in nlb.body[:-1]:
+                    if not isinstance(nlb_stmt, ir.Assign):
+                        break  # Non-assignment is not known to be safe...will fallthrough to raise exception.
+                    if nlb_stmt.target.name in live_end:
+                        break  # Non-dead variables in assignment is not safe...will fallthrough to raise exception.
+                else:
                     continue
-#                # The last block that jumps out of the with region is always okay.
-#                continue
             raise ParallelForExtraCode(f"Extra code near line {self.loc} is not allowed before or after the loop in an OpenMP parallel for region.")
 
         if config.DEBUG_OPENMP >= 1:
@@ -4145,6 +4153,10 @@ openmp_grammar = r"""
                     | target_teams_distribute_parallel_for_simd_construct
                     | target_teams_distribute_parallel_for_construct
                     | target_teams_loop_construct
+                    | target_enter_data_construct
+                    | target_exit_data_construct
+                    | distribute_construct
+                    | distribute_parallel_for_construct
                     | critical_construct
                     | atomic_construct
                     | sections_construct
@@ -4167,6 +4179,35 @@ openmp_grammar = r"""
     parallel_for_simd_directive: PARALLEL FOR SIMD [parallel_for_simd_clause*]
     parallel_for_simd_clause: parallel_for_clause
                             | simd_clause
+    distribute_construct: distribute_directive
+    distribute_directive: DISTRIBUTE [distribute_clause*]
+    distribute_clause: data_privatization_clause
+                     | data_privatization_in_clause
+              //     | lastprivate_distribute_clause
+                     | collapse_clause
+                     | dist_schedule_clause
+                     | allocate_clause
+
+    distribute_parallel_for_construct: distribute_parallel_for_directive
+    distribute_parallel_for_directive: DISTRIBUTE PARALLEL FOR [distribute_parallel_for_clause*]
+    distribute_parallel_for_clause: if_clause
+                                  | num_threads_clause
+                                  | data_default_clause
+                                  | data_privatization_clause
+                                  | data_privatization_in_clause
+                                  | data_sharing_clause
+                                  | data_reduction_clause
+                                  | copyin_clause
+                           //     | proc_bind_clause
+                                  | allocate_clause
+                                  | data_privatization_out_clause
+                                  | linear_clause
+                                  | schedule_clause
+                                  | collapse_clause
+                                  | ORDERED
+                                  | NOWAIT
+                           //     | order_clause
+                                  | dist_schedule_clause
     target_data_construct: target_data_directive
     target_data_directive: TARGET DATA [target_data_clause*]
     DATA: "data"
@@ -4229,11 +4270,22 @@ openmp_grammar = r"""
     target_teams_loop_construct: target_teams_loop_directive
     target_teams_construct: target_teams_directive
     target_directive: TARGET [target_clause*]
-    target_clause: device_clause
-                 | map_clause
-                 | if_clause
+    HAS_DEVICE_ADDR: "has_device_addr"
+    has_device_addr_clause: HAS_DEVICE_ADDR "(" var_list ")"
+    target_clause: if_clause
+                 | device_clause
+                 | thread_limit_clause
                  | data_privatization_clause
                  | data_privatization_in_clause
+          //     | in_reduction_clause
+                 | map_clause
+                 | is_device_ptr_clause
+                 | has_device_addr_clause
+          //     | defaultmap_clause
+                 | NOWAIT
+                 | allocate_clause
+                 | depend_with_modifier_clause
+          //     | uses_allocators_clause
     teams_clause: num_teams_clause
                 | thread_limit_clause
                 | data_default_clause
@@ -4246,12 +4298,6 @@ openmp_grammar = r"""
     thread_limit_clause: THREAD_LIMIT "(" const_num_or_var ")"
     THREAD_LIMIT: "thread_limit"
 
-    distribute_clause: private_clause
-                     | firstprivate_clause
-                     | lastprivate_clause
-                     | collapse_clause
-                     | dist_schedule_expr
-                     | dist_schedule_no_expr
     dist_schedule_expr: DIST_SCHEDULE "(" STATIC ")"
     dist_schedule_no_expr: DIST_SCHEDULE "(" STATIC "," const_num_or_var ")"
     dist_schedule_clause: dist_schedule_expr
