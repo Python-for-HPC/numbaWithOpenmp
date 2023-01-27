@@ -564,8 +564,12 @@ class openmp_region_start(ir.Stmt):
         tag_arg_str = None
         if isinstance(tag.arg, ir.Var):
             tag_arg_str = tag.arg.name
-        if isinstance(tag.arg, str):
+        elif isinstance(tag.arg, str):
             tag_arg_str = tag.arg
+        elif isinstance(tag.arg, lir.instructions.AllocaInstr):
+            tag_arg_str = tag.arg._get_name()
+        else:
+            assert False
         if isinstance(tag_arg_str, str):
             self.tag_vars.add(tag_arg_str)
         self.tags.append(tag)
@@ -679,9 +683,7 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 print(f"LLVM variable {avar} didn't previously exist in the list of vars so adding as private.")
             self.add_tag(openmp_tag("QUAL.OMP.PRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
-            #self.tags.append(openmp_tag("QUAL.OMP.PRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
             #self.tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
-            #self.tag_vars.add(avar)
             has_update = True
         return has_update
 
