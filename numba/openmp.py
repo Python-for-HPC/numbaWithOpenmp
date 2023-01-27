@@ -23,7 +23,6 @@ from numba.core import ir, config, types, typeinfer, cgutils, compiler, transfor
 from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
 from numba.extending import overload
-from cffi import FFI
 import llvmlite.binding as ll
 import llvmlite.llvmpy.core as lc
 import llvmlite.ir as lir
@@ -4704,66 +4703,33 @@ def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra
         sys.exit(-3)
     assert(blocks is visitor.blocks)
 
-ffi = FFI()
-ffi.cdef('void omp_set_num_threads(int num_threads);')
-ffi.cdef('int omp_get_thread_num(void);')
-ffi.cdef('int omp_get_num_threads(void);')
-ffi.cdef('double omp_get_wtime(void);')
-ffi.cdef('void omp_set_dynamic(int num_threads);')
-ffi.cdef('void omp_set_nested(int nested);')
-ffi.cdef('void omp_set_max_active_levels(int levels);')
-ffi.cdef('int omp_get_max_active_levels(void);')
-ffi.cdef('int omp_get_max_threads(void);')
-ffi.cdef('int omp_get_num_procs(void);')
-ffi.cdef('int omp_in_parallel(void);')
-ffi.cdef('int omp_get_thread_limit(void);')
-ffi.cdef('int omp_get_supported_active_levels(void);')
-ffi.cdef('int omp_get_level(void);')
-ffi.cdef('int omp_get_active_level(void);')
-ffi.cdef('int omp_get_ancestor_thread_num(int level);')
-ffi.cdef('int omp_get_team_size(int level);')
-ffi.cdef('int omp_in_final(void);')
-ffi.cdef('int omp_get_proc_bind(void);')
-ffi.cdef('int omp_get_num_places(void);')
-ffi.cdef('int omp_get_place_num_procs(int place_num);')
-ffi.cdef('int omp_get_place_num(void);')
-ffi.cdef('int omp_set_default_device(int device_num);')
-ffi.cdef('int omp_get_default_device(void);')
-ffi.cdef('int omp_get_num_devices(void);')
-ffi.cdef('int omp_get_device_num(void);')
-ffi.cdef('int omp_get_team_num(void);')
-ffi.cdef('int omp_get_num_teams(void);')
-ffi.cdef('int omp_is_initial_device(void);')
-ffi.cdef('int omp_get_initial_device(void);')
-
-C = ffi.dlopen(None)
-omp_set_num_threads = C.omp_set_num_threads
-omp_get_thread_num = C.omp_get_thread_num
-omp_get_num_threads = C.omp_get_num_threads
-omp_get_wtime = C.omp_get_wtime
-omp_set_dynamic = C.omp_set_dynamic
-omp_set_nested = C.omp_set_nested
-omp_set_max_active_levels = C.omp_set_max_active_levels
-omp_get_max_active_levels = C.omp_get_max_active_levels
-omp_get_max_threads = C.omp_get_max_threads
-omp_get_num_procs = C.omp_get_num_procs
-omp_in_parallel = C.omp_in_parallel
-omp_get_thread_limit = C.omp_get_thread_limit
-omp_get_supported_active_levels = C.omp_get_supported_active_levels
-omp_get_level = C.omp_get_level
-omp_get_active_level = C.omp_get_active_level
-omp_get_ancestor_thread_num = C.omp_get_ancestor_thread_num
-omp_get_team_size = C.omp_get_team_size
-omp_in_final = C.omp_in_final
-omp_get_proc_bind = C.omp_get_proc_bind
-omp_get_num_places = C.omp_get_num_places
-omp_get_place_num_procs = C.omp_get_place_num_procs
-omp_get_place_num = C.omp_get_place_num
-omp_set_default_device = C.omp_set_default_device
-omp_get_default_device = C.omp_get_default_device
-omp_get_num_devices = C.omp_get_num_devices
-omp_get_device_num = C.omp_get_device_num
-omp_get_team_num = C.omp_get_team_num
-omp_get_num_teams = C.omp_get_num_teams
-omp_is_initial_device = C.omp_is_initial_device
-omp_get_initial_device = C.omp_get_initial_device
+omp_set_num_threads = types.ExternalFunction('omp_set_num_threads', types.void(types.int32))
+omp_get_thread_num = types.ExternalFunction('omp_get_thread_num', types.int32())
+omp_get_num_threads = types.ExternalFunction('omp_get_num_threads', types.int32())
+omp_get_wtime = types.ExternalFunction('omp_get_wtime', types.float64())
+omp_set_dynamic = types.ExternalFunction('omp_set_dynamic', types.void(types.int32))
+omp_set_nested = types.ExternalFunction('omp_set_nested', types.void(types.int32))
+omp_set_max_active_levels = types.ExternalFunction('omp_set_max_active_levels', types.void(types.int32))
+omp_get_max_active_levels = types.ExternalFunction('omp_get_max_active_levels', types.int32())
+omp_get_max_threads = types.ExternalFunction('omp_get_max_threads', types.int32())
+omp_get_num_procs = types.ExternalFunction('omp_get_num_procs', types.int32())
+omp_in_parallel = types.ExternalFunction('omp_in_parallel', types.int32())
+omp_get_thread_limit = types.ExternalFunction('omp_get_thread_limit', types.int32())
+omp_get_supported_active_levels = types.ExternalFunction('omp_get_supported_active_levels', types.int32())
+omp_get_level = types.ExternalFunction('omp_get_level', types.int32())
+omp_get_active_level = types.ExternalFunction('omp_get_active_level', types.int32())
+omp_get_ancestor_thread_num = types.ExternalFunction('omp_get_ancestor_thread_num', types.int32(types.int32))
+omp_get_team_size = types.ExternalFunction('omp_get_team_size', types.int32(types.int32))
+omp_in_final = types.ExternalFunction('omp_in_finale', types.int32())
+omp_get_proc_bind = types.ExternalFunction('omp_get_proc_bind', types.int32())
+omp_get_num_places = types.ExternalFunction('omp_get_num_places', types.int32())
+omp_get_place_num_procs = types.ExternalFunction('omp_get_place_num_procs', types.int32(types.int32))
+omp_get_place_num = types.ExternalFunction('omp_get_place_num', types.int32())
+omp_set_default_device = types.ExternalFunction('omp_set_default_device', types.int32(types.int32))
+omp_get_default_device = types.ExternalFunction('omp_get_default_device', types.int32())
+omp_get_num_devices = types.ExternalFunction('omp_get_num_devices', types.int32())
+omp_get_device_num = types.ExternalFunction('omp_get_device_num', types.int32())
+omp_get_team_num = types.ExternalFunction('omp_get_team_num', types.int32())
+omp_get_num_teams = types.ExternalFunction('omp_get_num_teams', types.int32())
+omp_is_initial_device = types.ExternalFunction('omp_is_initial_device', types.int32())
+omp_get_initial_device = types.ExternalFunction('omp_get_initial_device', types.int32())
