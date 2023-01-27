@@ -1177,6 +1177,9 @@ class openmp_region_start(ir.Stmt):
                     print("target_elf:", type(target_elf), len(target_elf))
                     sys.stdout.flush()
             elif selected_device == 1:
+                # Explicitly trigger post_lowering_openmp on device code since
+                # it is not called by the context.
+                post_lowering_openmp(cres_library._module)
                 arch = 'nvptx'
                 import numba.cuda.api as cudaapi
                 cc_api = cudaapi.get_current_device().compute_capability
