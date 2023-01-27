@@ -557,7 +557,7 @@ class openmp_region_start(ir.Stmt):
             print("tag_vars:", self.tag_vars)
         self.acq_res = False
         self.acq_rel = False
-        self.alloca_queue = []
+        self.alloca_set= set()
         self.end_region = None
 
     def add_tag(self, tag):
@@ -630,23 +630,23 @@ class openmp_region_start(ir.Stmt):
         # and then process them later at the end_region marker so that the
         # variables are guaranteed to exist in their full form so that when we
         # process them then they won't lead to infinite recursion.
-        self.alloca_queue.append((alloca_instr, typ))
+        self.alloca_set.add((alloca_instr, typ))
 
     def process_alloca_queue(self):
         # This should be old code...making sure with the assertion.
-        assert len(self.alloca_queue) == 0
+        assert len(self.alloca_set) == 0
         has_update = False
-        for alloca_instr, typ in self.alloca_queue:
+        for alloca_instr, typ in self.alloca_set:
             has_update = self.process_one_alloca(alloca_instr, typ) or has_update
         if has_update:
             self.update_tags()
-        self.alloca_queue = []
+        self.alloca_set = set()
 
     def post_lowering_process_alloca_queue(self, enter_directive):
         has_update = False
         if config.DEBUG_OPENMP >= 1:
             print("starting post_lowering_process_alloca_queue")
-        for alloca_instr, typ in self.alloca_queue:
+        for alloca_instr, typ in self.alloca_set:
             has_update = self.process_one_alloca(alloca_instr, typ) or has_update
         if has_update:
             if config.DEBUG_OPENMP >= 1:
@@ -657,7 +657,7 @@ class openmp_region_start(ir.Stmt):
             enter_directive._clear_string_cache()
             if config.DEBUG_OPENMP >= 1:
                 print("post_lowering_process_alloca_queue updated tags:", enter_directive.tags)
-        self.alloca_queue = []
+        self.alloca_set = set()
 
     def process_one_alloca(self, alloca_instr, typ):
         avar = alloca_instr.name
@@ -897,7 +897,7 @@ class openmp_region_start(ir.Stmt):
                         start_region.tags.append(openmp_tag("OMP.DEVICE"))
                     end_region = blocks[end_block].body[ebindex]
                     #assert(start_region.omp_region_var is None)
-                    assert(len(start_region.alloca_queue) == 0)
+                    assert(len(start_region.alloca_set) == 0)
                     # Make start and end copies point at each other.
                     end_region.start_region = start_region
                     start_region.end_region = end_region
@@ -1175,6 +1175,9 @@ class openmp_region_start(ir.Stmt):
                     print("target_elf:", type(target_elf), len(target_elf))
                     sys.stdout.flush()
             elif selected_device == 1:
+                # Explicitly trigger post_lowering_openmp on device code since
+                # it is not called by the context.
+                post_lowering_openmp(cres_library._module)
                 arch = 'nvptx'
                 import numba.cuda.api as cudaapi
                 cc_api = cudaapi.get_current_device().compute_capability
