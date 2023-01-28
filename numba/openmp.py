@@ -3137,6 +3137,37 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for target_construct.
     # Don't need a rule for target_teams_distribute_parallel_for_simd_construct.
 
+    def teams_directive(self, args):
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit teams_directive", args, type(args))
+
+        before_start = []
+        after_start = []
+
+        clauses, default_shared = self.flatten(args[2:], sblk)
+
+        if config.DEBUG_OPENMP >= 1:
+            for clause in clauses:
+                print("final clause:", clause)
+
+        inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
+        used_in_region = inputs_to_region | def_but_live_out | private_to_region
+        clauses = self.filter_unused_vars(clauses, used_in_region)
+
+        start_tags = [openmp_tag("DIR.OMP.TEAMS")] + clauses
+        end_tags = [openmp_tag("DIR.OMP.END.TEAMS")]
+
+        or_start = openmp_region_start(start_tags, 0, self.loc)
+        or_end   = openmp_region_end(or_start, end_tags, self.loc)
+        sblk.body = before_start + [or_start] + after_start + sblk.body[:]
+        eblk.body = [or_end] + eblk.body[:]
+
+        add_enclosing_region(self.func_ir, self.body_blocks, or_start)
+
+
     def target_directive(self, args):
         self.some_target_directive(args, "TARGET", 1)
 
@@ -4155,6 +4186,7 @@ openmp_grammar = r"""
                     | for_construct
                     | single_construct
                     | task_construct
+                    | teams_construct
                     | target_construct
                     | target_teams_construct
                     | target_teams_distribute_parallel_for_simd_construct
@@ -4271,6 +4303,8 @@ openmp_grammar = r"""
     critical_construct: critical_directive
     critical_directive: CRITICAL
     CRITICAL: "critical"
+    teams_construct: teams_directive
+    teams_directive: TEAMS [teams_clause*]
     target_construct: target_directive
     target_teams_distribute_parallel_for_simd_construct: target_teams_distribute_parallel_for_simd_directive
     target_teams_distribute_parallel_for_construct: target_teams_distribute_parallel_for_directive
@@ -4300,6 +4334,7 @@ openmp_grammar = r"""
                 | data_privatization_in_clause
                 | data_sharing_clause
                 | data_reduction_clause
+                | allocate_clause
     num_teams_clause: NUM_TEAMS "(" const_num_or_var ")"
     NUM_TEAMS: "num_teams"
     thread_limit_clause: THREAD_LIMIT "(" const_num_or_var ")"
