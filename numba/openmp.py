@@ -3159,8 +3159,14 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for target_teams_distribute_parallel_for_simd_construct.
 
     def teams_directive(self, args):
+        start_tags = [openmp_tag("DIR.OMP.TEAMS")]
+        end_tags = [openmp_tag("DIR.OMP.END.TEAMS")]
+        self.some_data_clause_directive(args, start_tags, end_tags, 1)
+
+        """
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
+        scope = sblk.scope
 
         if config.DEBUG_OPENMP >= 1:
             print("visit teams_directive", args, type(args))
@@ -3173,6 +3179,13 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             for clause in clauses:
                 print("final clause:", clause)
+
+        # Get a dict mapping variables explicitly mentioned in the data clauses above to their openmp_tag.
+        vars_in_explicit_clauses, explicit_privates = self.get_explicit_vars(clauses)
+        if config.DEBUG_OPENMP >= 1:
+            print("vars_in_explicit_clauses:", vars_in_explicit_clauses, type(vars_in_explicit_clauses))
+            for v in clauses:
+                print("vars_in_explicit clauses first:", v)
 
         inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
         used_in_region = inputs_to_region | def_but_live_out | private_to_region
@@ -3187,7 +3200,7 @@ class OpenmpVisitor(Transformer):
         eblk.body = [or_end] + eblk.body[:]
 
         add_enclosing_region(self.func_ir, self.body_blocks, or_start)
-
+        """
 
     def target_directive(self, args):
         self.some_target_directive(args, "TARGET", 1)
@@ -3205,11 +3218,19 @@ class OpenmpVisitor(Transformer):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 6, has_loop=True)
 
     def some_target_directive(self, args, dir_tag, lexer_count, has_loop=False):
-        if config.DEBUG_OPENMP >= 1:
-            print("visit some_target_directive", args, type(args), self.blk_start, self.blk_end)
+        target_num = OpenmpVisitor.target_num
+        OpenmpVisitor.target_num += 1
 
         dir_start_tag = "DIR.OMP." + dir_tag
         dir_end_tag = "DIR.OMP.END." + dir_tag
+        start_tags = [openmp_tag(dir_start_tag, target_num)]
+        end_tags = [openmp_tag(dir_end_tag, target_num)]
+
+        self.some_data_clause_directive(args, start_tags, end_tags, lexer_count, has_loop=has_loop)
+
+    def some_data_clause_directive(self, args, start_tags, end_tags, lexer_count, has_loop=False):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit some_target_directive", args, type(args), self.blk_start, self.blk_end)
 
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
@@ -3223,15 +3244,10 @@ class OpenmpVisitor(Transformer):
             for clause in clauses:
                 print("final clause:", clause)
 
-        target_num = OpenmpVisitor.target_num
-        OpenmpVisitor.target_num += 1
-
         before_start = []
         after_start = []
         for_before_start = []
         for_after_start = []
-        start_tags = [openmp_tag(dir_start_tag, target_num)]
-        end_tags = [openmp_tag(dir_end_tag, target_num)]
 
         # Get a dict mapping variables explicitly mentioned in the data clauses above to their openmp_tag.
         vars_in_explicit_clauses, explicit_privates = self.get_explicit_vars(clauses)
@@ -3353,6 +3369,8 @@ class OpenmpVisitor(Transformer):
         else:
             sblk.body = priv_saves + before_start + [ir.Jump(new_target_block_num, self.loc)]
             eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
+
+        add_enclosing_region(self.func_ir, self.body_blocks, or_start)
 
     def target_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
