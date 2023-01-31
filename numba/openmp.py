@@ -3930,6 +3930,20 @@ class OpenmpVisitor(Transformer):
         assert(isinstance(val, openmp_tag))
         return val
 
+    def num_teams_clause(self, args):
+        (_, num_teams) = args
+        if config.DEBUG_OPENMP >= 1:
+            print("visit num_teams_clause", args, type(args))
+
+        return openmp_tag("QUAL.OMP.NUM_TEAMS", num_teams, load=True)
+
+    def thread_limit_clause(self, args):
+        (_, thread_limit) = args
+        if config.DEBUG_OPENMP >= 1:
+            print("visit thread_limit_clause", args, type(args))
+
+        return openmp_tag("QUAL.OMP.THREAD_LIMIT", thread_limit, load=True)
+
     def if_clause(self, args):
         (_, if_val) = args
         if config.DEBUG_OPENMP >= 1:
