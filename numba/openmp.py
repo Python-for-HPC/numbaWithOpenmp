@@ -87,6 +87,15 @@ def remove_privatized(x):
         return x
 
 
+def remove_all_privatized(x):
+    new_x = None
+    while new_x != x:
+        new_x = x
+        x = remove_privatized(new_x)
+
+    return new_x
+
+
 def typemap_lookup(typemap, x):
     orig_x = x
     if isinstance(x, ir.Var):
@@ -100,6 +109,18 @@ def typemap_lookup(typemap, x):
             break
         else:
            x = new_x
+
+    tkeys = typemap.keys()
+
+    # Get basename (without privatized)
+    x = remove_all_privatized(x)
+
+    potential_keys = list(filter(lambda y: y.startswith(x), tkeys))
+
+    for pkey in potential_keys:
+        pkey_base = remove_all_privatized(pkey)
+        if pkey_base == x:
+            return typemap[pkey]
 
     raise KeyError(f"{orig_x} and all of its non-privatized names not found in typemap")
 
@@ -2675,9 +2696,9 @@ class OpenmpVisitor(Transformer):
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_start_var.name))
                     #start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.IV", loop_index.name))
                     #start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.UB", size_var.name))
-                    return True, loop_blocks_for_io, loop_blocks_for_io_minus_entry, entry_pred, exit_block
+                    return True, loop_blocks_for_io, loop_blocks_for_io_minus_entry, entry_pred, exit_block, inst, size_var, step_var, latest_index, loop_index
 
-        return False, None, None, None, None
+        return False, None, None, None, None, None, None, None, None, None
 
     def some_for_directive(self, args, main_start_tag, main_end_tag, first_clause, gen_shared):
         sblk = self.blocks[self.blk_start]
@@ -2721,7 +2742,7 @@ class OpenmpVisitor(Transformer):
                                                  start_tags,
                                                  end_tags,
                                                  scope)
-        found_loop, loop_blocks_for_io, loop_blocks_for_io_minus_entry, entry_pred, exit_block = prepare_out
+        found_loop, loop_blocks_for_io, loop_blocks_for_io_minus_entry, entry_pred, exit_block, inst, size_var, step_var, latest_index, loop_index = prepare_out
 
         assert(found_loop)
 
@@ -3228,7 +3249,7 @@ class OpenmpVisitor(Transformer):
                                                      end_tags,
                                                      scope)
 
-            found_loop, blocks_for_io, blocks_in_region, entry_pred, exit_block = prepare_out
+            found_loop, blocks_for_io, blocks_in_region, entry_pred, exit_block, _, _, _, _, _ = prepare_out
 
             assert(found_loop)
         else:
@@ -4744,66 +4765,80 @@ def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra
         sys.exit(-3)
     assert(blocks is visitor.blocks)
 
-ffi = FFI()
-ffi.cdef('void omp_set_num_threads(int num_threads);')
-ffi.cdef('int omp_get_thread_num(void);')
-ffi.cdef('int omp_get_num_threads(void);')
-ffi.cdef('double omp_get_wtime(void);')
-ffi.cdef('void omp_set_dynamic(int num_threads);')
-ffi.cdef('void omp_set_nested(int nested);')
-ffi.cdef('void omp_set_max_active_levels(int levels);')
-ffi.cdef('int omp_get_max_active_levels(void);')
-ffi.cdef('int omp_get_max_threads(void);')
-ffi.cdef('int omp_get_num_procs(void);')
-ffi.cdef('int omp_in_parallel(void);')
-ffi.cdef('int omp_get_thread_limit(void);')
-ffi.cdef('int omp_get_supported_active_levels(void);')
-ffi.cdef('int omp_get_level(void);')
-ffi.cdef('int omp_get_active_level(void);')
-ffi.cdef('int omp_get_ancestor_thread_num(int level);')
-ffi.cdef('int omp_get_team_size(int level);')
-ffi.cdef('int omp_in_final(void);')
-ffi.cdef('int omp_get_proc_bind(void);')
-ffi.cdef('int omp_get_num_places(void);')
-ffi.cdef('int omp_get_place_num_procs(int place_num);')
-ffi.cdef('int omp_get_place_num(void);')
-ffi.cdef('int omp_set_default_device(int device_num);')
-ffi.cdef('int omp_get_default_device(void);')
-ffi.cdef('int omp_get_num_devices(void);')
-ffi.cdef('int omp_get_device_num(void);')
-ffi.cdef('int omp_get_team_num(void);')
-ffi.cdef('int omp_get_num_teams(void);')
-ffi.cdef('int omp_is_initial_device(void);')
-ffi.cdef('int omp_get_initial_device(void);')
+omp_runtime_funcs = [
+    ("omp_set_num_threads", ("void", "types.void"), [("int", "types.int32", "num_threads")]),
+    ("omp_get_thread_num", ("int", "types.int32"), []),
+    ("omp_get_num_threads", ("int", "types.int32"), []),
+    ("omp_get_wtime", ("double", "types.float64"), []),
+    ("omp_set_dynamic", ("void", "types.void"), [("int", "types.int32", "num_threads")]),
+    ("omp_set_nested", ("void", "types.void"), [("int", "types.int32", "nested")]),
+    ("omp_set_max_active_levels", ("void", "types.void"), [("int", "types.int32", "levels")]),
+    ("omp_get_max_active_levels", ("int", "types.int32"), []),
+    ("omp_get_max_threads", ("int", "types.int32"), []),
+    ("omp_get_num_procs", ("int", "types.int32"), []),
+    ("omp_in_parallel", ("int", "types.int32"), []),
+    ("omp_get_thread_limit", ("int", "types.int32"), []),
+    ("omp_get_supported_active_levels", ("int", "types.int32"), []),
+    ("omp_get_level", ("int", "types.int32"), []),
+    ("omp_get_active_level", ("int", "types.int32"), []),
+    ("omp_get_ancestor_thread_num", ("int", "types.int32"), [("int", "types.int32", "level")]),
+    ("omp_get_team_size", ("int", "types.int32"), [("int", "types.int32", "level")]),
+    ("omp_in_final", ("int", "types.int32"), []),
+    ("omp_get_proc_bind", ("int", "types.int32"), []),
+    ("omp_get_num_places", ("int", "types.int32"), []),
+    ("omp_get_place_num_procs", ("int", "types.int32"), [("int", "types.int32", "place_num")]),
+    ("omp_get_place_num", ("int", "types.int32"), []),
+    ("omp_set_default_device", ("int", "types.int32"), [("int", "types.int32", "device_num")]),
+    ("omp_get_default_device", ("int", "types.int32"), []),
+    ("omp_get_num_devices", ("int", "types.int32"), []),
+    ("omp_get_device_num", ("int", "types.int32"), []),
+    ("omp_get_team_num", ("int", "types.int32"), []),
+    ("omp_get_num_teams", ("int", "types.int32"), []),
+    ("omp_is_initial_device", ("int", "types.int32"), []),
+    ("omp_get_initial_device", ("int", "types.int32"), []),
+]
 
-C = ffi.dlopen(None)
-omp_set_num_threads = C.omp_set_num_threads
-omp_get_thread_num = C.omp_get_thread_num
-omp_get_num_threads = C.omp_get_num_threads
-omp_get_wtime = C.omp_get_wtime
-omp_set_dynamic = C.omp_set_dynamic
-omp_set_nested = C.omp_set_nested
-omp_set_max_active_levels = C.omp_set_max_active_levels
-omp_get_max_active_levels = C.omp_get_max_active_levels
-omp_get_max_threads = C.omp_get_max_threads
-omp_get_num_procs = C.omp_get_num_procs
-omp_in_parallel = C.omp_in_parallel
-omp_get_thread_limit = C.omp_get_thread_limit
-omp_get_supported_active_levels = C.omp_get_supported_active_levels
-omp_get_level = C.omp_get_level
-omp_get_active_level = C.omp_get_active_level
-omp_get_ancestor_thread_num = C.omp_get_ancestor_thread_num
-omp_get_team_size = C.omp_get_team_size
-omp_in_final = C.omp_in_final
-omp_get_proc_bind = C.omp_get_proc_bind
-omp_get_num_places = C.omp_get_num_places
-omp_get_place_num_procs = C.omp_get_place_num_procs
-omp_get_place_num = C.omp_get_place_num
-omp_set_default_device = C.omp_set_default_device
-omp_get_default_device = C.omp_get_default_device
-omp_get_num_devices = C.omp_get_num_devices
-omp_get_device_num = C.omp_get_device_num
-omp_get_team_num = C.omp_get_team_num
-omp_get_num_teams = C.omp_get_num_teams
-omp_is_initial_device = C.omp_is_initial_device
-omp_get_initial_device = C.omp_get_initial_device
+# For all the OpenMP runtime functions in the list above,
+# dynamically create a pure Python function that invokes
+# the runtime functions with cffi.  Also generates a
+# Numba overload of that function that calls it as an
+# external function.
+for fname, retinfo, arginfo in omp_runtime_funcs:
+    def form_argstr(retinfo, arginfo):
+        return ",".join([x[2] for x in arginfo])
+
+    def form_cdef_args(retinfo, arginfo):
+        return ",".join([x[0] + " " + x[2] for x in arginfo])
+
+    def form_overload_argstr(retinfo, arginfo):
+        return ",".join([x[1] for x in arginfo])
+
+    argstr = form_argstr(retinfo, arginfo)
+    cdef_args = form_cdef_args(retinfo, arginfo)
+    overload_argstr = form_overload_argstr(retinfo, arginfo)
+
+    fdef = f"""def {fname}({argstr}):
+    ffi = FFI()
+    ffi.cdef('{retinfo[0]} {fname}({cdef_args});')
+    C = ffi.dlopen(None)
+    return C.{fname}({argstr})
+    """
+
+    ldict = {}
+    gdict = globals()
+
+    #print("fdef:", fdef)
+    exec(fdef, gdict, ldict)
+    fout = ldict[fname]
+    gdict[fname] = fout
+
+    odef = f"""def ol_{fname}({argstr}):
+    fnty = types.ExternalFunction("{fname}", {retinfo[1]}({overload_argstr}))
+    def impl({argstr}):
+        return fnty({argstr})
+    return impl
+    """
+    #print("odef:", odef)
+    exec(odef, gdict, ldict)
+    oout = ldict[f"ol_{fname}"]
+    overload(fout)(oout)
