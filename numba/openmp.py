@@ -3166,11 +3166,12 @@ class OpenmpVisitor(Transformer):
         enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
         if config.DEBUG_OPENMP >= 1:
             print("teams enclosing_regions:", enclosing_regions)
-        for enclosing_region in enclosing_regions[::-1]:
-            if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
-                nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.NUM_TEAMS")
-                assert len(nt_tag) == 1
-                nt_tag[0].arg = 0
+        if enclosing_regions:
+            for enclosing_region in enclosing_regions[::-1]:
+                if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
+                    nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.NUM_TEAMS")
+                    assert len(nt_tag) == 1
+                    nt_tag[0].arg = 0
 
         """
         sblk = self.blocks[self.blk_start]
@@ -3853,11 +3854,12 @@ class OpenmpVisitor(Transformer):
         enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
         if config.DEBUG_OPENMP >= 1:
             print("parallel enclosing_regions:", enclosing_regions)
-        for enclosing_region in enclosing_regions[::-1]:
-            if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
-                nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.THREAD_LIMIT")
-                assert len(nt_tag) == 1
-                nt_tag[0].arg = 0
+        if enclosing_regions:
+            for enclosing_region in enclosing_regions[::-1]:
+                if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
+                    nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.THREAD_LIMIT")
+                    assert len(nt_tag) == 1
+                    nt_tag[0].arg = 0
 
         before_start = []
         after_start = []
