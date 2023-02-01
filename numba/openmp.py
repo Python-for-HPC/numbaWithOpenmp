@@ -3163,6 +3163,15 @@ class OpenmpVisitor(Transformer):
         end_tags = [openmp_tag("DIR.OMP.END.TEAMS")]
         self.some_data_clause_directive(args, start_tags, end_tags, 1)
 
+        enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
+        if config.DEBUG_OPENMP >= 1:
+            print("teams enclosing_regions:", enclosing_regions)
+        for enclosing_region in enclosing_regions[::-1]:
+            if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
+                nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.NUM_TEAMS")
+                assert len(nt_tag) == 1
+                nt_tag[0].arg = 0
+
         """
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
@@ -3217,6 +3226,9 @@ class OpenmpVisitor(Transformer):
     def target_teams_distribute_parallel_for_simd_directive(self, args):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 6, has_loop=True)
 
+    def get_clauses_by_name(self, clauses, name):
+        return list(filter(lambda x: x.name == name, clauses))
+
     def some_target_directive(self, args, dir_tag, lexer_count, has_loop=False):
         target_num = OpenmpVisitor.target_num
         OpenmpVisitor.target_num += 1
@@ -3226,7 +3238,23 @@ class OpenmpVisitor(Transformer):
         start_tags = [openmp_tag(dir_start_tag, target_num)]
         end_tags = [openmp_tag(dir_end_tag, target_num)]
 
-        self.some_data_clause_directive(args, start_tags, end_tags, lexer_count, has_loop=has_loop)
+        sblk = self.blocks[self.blk_start]
+        clauses, _ = self.flatten(args[lexer_count:], sblk)
+        if len(self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS")) == 0:
+            if config.DEBUG_OPENMP >= 1:
+                print("Adding NUM_TEAMS implicit clause.")
+            start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
+        if len(self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")) == 0:
+            if config.DEBUG_OPENMP >= 1:
+                print("Adding THREAD_LIMIT implicit clause.")
+            start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
+
+        if config.DEBUG_OPENMP >= 1:
+            for clause in clauses:
+                print("target clause:", clause)
+
+        self.some_data_clause_directive(clauses, start_tags, end_tags, 0, has_loop=has_loop)
+        #self.some_data_clause_directive(args, start_tags, end_tags, lexer_count, has_loop=has_loop)
 
     def some_data_clause_directive(self, args, start_tags, end_tags, lexer_count, has_loop=False):
         if config.DEBUG_OPENMP >= 1:
@@ -3821,6 +3849,15 @@ class OpenmpVisitor(Transformer):
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
         scope = sblk.scope
+
+        enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
+        if config.DEBUG_OPENMP >= 1:
+            print("parallel enclosing_regions:", enclosing_regions)
+        for enclosing_region in enclosing_regions[::-1]:
+            if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
+                nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.THREAD_LIMIT")
+                assert len(nt_tag) == 1
+                nt_tag[0].arg = 0
 
         before_start = []
         after_start = []
@@ -4874,3 +4911,4 @@ for fname, retinfo, arginfo in omp_runtime_funcs:
     exec(odef, gdict, ldict)
     oout = ldict[f"ol_{fname}"]
     overload(fout)(oout)
+#    overload(fout, target="cuda")(oout)
