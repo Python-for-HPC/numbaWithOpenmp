@@ -23,6 +23,8 @@ from numba.core import ir, config, types, typeinfer, cgutils, compiler, transfor
 from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
 from numba.extending import overload
+from numba.core.callconv import BaseCallConv, MinimalCallConv, errcode_t, RETCODE_OK
+from numba.core.utils import cached_property
 from cffi import FFI
 import llvmlite.binding as ll
 import llvmlite.llvmpy.core as lc
@@ -36,6 +38,7 @@ import numpy as np
 from numba.core.analysis import compute_use_defs, compute_live_map, compute_cfg_from_blocks, ir_extension_usedefs, _use_defs_result
 import subprocess
 import tempfile
+from numba.cuda.cudaimpl import lower as cudaimpl_lower
 
 library_missing = False
 
@@ -1094,9 +1097,66 @@ class openmp_region_start(ir.Stmt):
             elif selected_device == 1:
                 from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
                 flags = cuda_compiler.CUDAFlags()
-                #cuda_typingctx = cuda_descriptor.cuda_target.typing_context
-                #cuda_targetctx = cuda_descriptor.cuda_target.target_context
-                device_target = cuda_descriptor.cuda_target.target_context
+                #class OpenmpCUDACallConv(BaseCallConv):
+                class OpenmpCUDACallConv(MinimalCallConv):
+                    def return_value(self, builder, retval):
+                        self._return_errcode_raw(builder, RETCODE_OK)
+
+                    def return_user_exc(self, builder, exc, exc_args=None, loc=None,
+                                        func_name=None):
+                        assert False
+
+                    def get_arguments(self, func):
+                        return func.args
+
+                    def call_function(self, builder, callee, resty, argtys, args):
+                        assert False
+
+                        """
+                        Call the Numba-compiled *callee*.
+                        """
+                        retty = callee.args[0].type.pointee
+                        retvaltmp = cgutils.alloca_once(builder, retty)
+                        # initialize return value
+                        builder.store(cgutils.get_null_value(retty), retvaltmp)
+
+                        arginfo = self._get_arg_packer(argtys)
+                        args = arginfo.as_arguments(builder, args)
+                        realargs = [retvaltmp] + list(args)
+                        code = builder.call(callee, realargs)
+                        status = self._get_return_status(builder, code)
+                        retval = builder.load(retvaltmp)
+                        out = self.context.get_returned_value(builder, resty, retval)
+                        return status, out
+
+                    def get_function_type(self, restype, argtypes):
+                        """
+                        Get the implemented Function type for *restype* and *argtypes*.
+                        """
+                        arginfo = self._get_arg_packer(argtypes)
+                        argtypes = list(arginfo.argument_types)
+                        #resptr = self.get_return_type(restype)
+                        #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
+                        fnty = lir.FunctionType(errcode_t, argtypes)
+                        return fnty
+
+                    def decorate_function(self, fn, args, fe_argtypes, noalias=False):
+                        """
+                        Set names and attributes of function arguments.
+                        """
+                        assert not noalias
+                        arginfo = self._get_arg_packer(fe_argtypes)
+                        arginfo.assign_names(self.get_arguments(fn),
+                                             ['arg.' + a for a in args])
+                        return fn
+
+                class OpenmpCUDATargetContext(cuda_descriptor.CUDATargetContext):
+                    @cached_property
+                    def call_conv(self):
+                        return OpenmpCUDACallConv(self)
+
+                device_target = OpenmpCUDATargetContext(cuda_descriptor.cuda_target.typing_context)
+                #device_target = cuda_descriptor.cuda_target.target_context
             else:
                 raise NotImplementedError("Unsupported OpenMP device number")
 
@@ -4903,6 +4963,8 @@ omp_runtime_funcs = [
     ("omp_get_initial_device", ("int", "types.int32"), []),
 ]
 
+numba_to_lir = {"types.int32":"lir.IntType(32)", "types.void":"lir.VoidType()", "types.float64":"lir.DoubleType()"}
+
 # For all the OpenMP runtime functions in the list above,
 # dynamically create a pure Python function that invokes
 # the runtime functions with cffi.  Also generates a
@@ -4918,10 +4980,23 @@ for fname, retinfo, arginfo in omp_runtime_funcs:
     def form_overload_argstr(retinfo, arginfo):
         return ",".join([x[1] for x in arginfo])
 
+    def get_overload_list(retinfo, arginfo):
+        return [eval(x[1]) for x in arginfo]
+
+    def tolir(x):
+        if isinstance(x, list):
+            return [tolir(z) for z in x]
+        else:
+            return numba_to_lir[x]
+
+    def form_lir_argstr(retinfo, arginfo):
+        return ",".join([tolir(x[1]) for x in arginfo])
+
     argstr = form_argstr(retinfo, arginfo)
     cdef_args = form_cdef_args(retinfo, arginfo)
     overload_argstr = form_overload_argstr(retinfo, arginfo)
 
+    # ----- Create Python function for this openmp runtime function.
     fdef = f"""def {fname}({argstr}):
     ffi = FFI()
     ffi.cdef('{retinfo[0]} {fname}({cdef_args});')
@@ -4932,19 +5007,41 @@ for fname, retinfo, arginfo in omp_runtime_funcs:
     ldict = {}
     gdict = globals()
 
-    #print("fdef:", fdef)
+    #print("fdef:\n", fdef)
     exec(fdef, gdict, ldict)
     fout = ldict[fname]
     gdict[fname] = fout
 
+    # ----- Create Numba CPU overload for this openmp runtime function.
     odef = f"""def ol_{fname}({argstr}):
     fnty = types.ExternalFunction("{fname}", {retinfo[1]}({overload_argstr}))
     def impl({argstr}):
         return fnty({argstr})
     return impl
     """
-    #print("odef:", odef)
+    #print("odef:\n", odef)
     exec(odef, gdict, ldict)
     oout = ldict[f"ol_{fname}"]
     overload(fout)(oout)
+
+    # ----- Create Numba cuda overload for this openmp runtime function.
+    lirret = tolir(retinfo[1])
+    lirargstr = form_lir_argstr(retinfo, arginfo)
+    if len(arginfo) > 0:
+        lirargstr += ","
+
+    cdef = f"""def cuda_{fname}(context, builder, sig, args):
+    fname = '{fname}'
+    lmod = builder.module
+    fnty = ir.FunctionType({lirret}, ({lirargstr}))
+    goif = cgutils.get_or_insert_function(lmod, fnty, fname)
+    return builder.call(goif, args)
+    """
+    overload_list = tuple(get_overload_list(retinfo, arginfo))
+    print("cdef:", overload_list, "\n", cdef)
+    exec(cdef, gdict, ldict)
+    cout = ldict[f"cuda_{fname}"]
+    cudaimpl_lower(fout, *overload_list)(cout)
+
+
 #    overload(fout, target="cuda")(oout)
