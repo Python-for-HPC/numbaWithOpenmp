@@ -3179,6 +3179,16 @@ class OpenmpVisitor(Transformer):
                     else:
                         nt_tag[-1].arg = 0
 
+                    nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.THREAD_LIMIT")
+                    assert len(nt_tag) > 0
+                    cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")
+                    if len(cur_num_team_clauses) >= 1:
+                        nt_tag[-1].arg = cur_num_team_clauses[-1].arg
+                    else:
+                        nt_tag[-1].arg = 0
+
+                    break
+
         """
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
@@ -3860,16 +3870,6 @@ class OpenmpVisitor(Transformer):
         eblk = self.blocks[self.blk_end]
         scope = sblk.scope
 
-        enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
-        if config.DEBUG_OPENMP >= 1:
-            print("parallel enclosing_regions:", enclosing_regions)
-        if enclosing_regions:
-            for enclosing_region in enclosing_regions[::-1]:
-                if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
-                    nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.THREAD_LIMIT")
-                    assert len(nt_tag) == 1
-                    nt_tag[0].arg = 0
-
         before_start = []
         after_start = []
         if config.DEBUG_OPENMP >= 1:
@@ -3882,6 +3882,25 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             for clause in clauses:
                 print("final clause:", clause)
+
+        # ---- Back propagate THREAD_LIMIT to enclosed target region. ----
+        enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
+        if config.DEBUG_OPENMP >= 1:
+            print("parallel enclosing_regions:", enclosing_regions)
+        if enclosing_regions:
+            for enclosing_region in enclosing_regions[::-1]:
+                if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TEAMS")) == 1:
+                    break
+                if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
+                    nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.THREAD_LIMIT")
+                    assert len(nt_tag) > 0
+                    cur_thread_limit_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_THREADS")
+                    if len(cur_thread_limit_clauses) >= 1:
+                        nt_tag[-1].arg = cur_thread_limit_clauses[-1].arg
+                    else:
+                        nt_tag[-1].arg = 0
+                    break
+        # DONE ---- Back propagate THREAD_LIMIT to enclosed target region ----
 
         inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
         used_in_region = inputs_to_region | def_but_live_out | private_to_region
