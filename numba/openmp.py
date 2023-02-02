@@ -3159,6 +3159,8 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for target_teams_distribute_parallel_for_simd_construct.
 
     def teams_directive(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit teams_directive", args, type(args), self.blk_start, self.blk_end)
         start_tags = [openmp_tag("DIR.OMP.TEAMS")]
         end_tags = [openmp_tag("DIR.OMP.END.TEAMS")]
         self.some_data_clause_directive(args, start_tags, end_tags, 1)
@@ -3231,6 +3233,8 @@ class OpenmpVisitor(Transformer):
         return list(filter(lambda x: x.name == name, clauses))
 
     def some_target_directive(self, args, dir_tag, lexer_count, has_loop=False):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit some_target_directive", args, type(args), self.blk_start, self.blk_end)
         target_num = OpenmpVisitor.target_num
         OpenmpVisitor.target_num += 1
 
@@ -3259,7 +3263,7 @@ class OpenmpVisitor(Transformer):
 
     def some_data_clause_directive(self, args, start_tags, end_tags, lexer_count, has_loop=False):
         if config.DEBUG_OPENMP >= 1:
-            print("visit some_target_directive", args, type(args), self.blk_start, self.blk_end)
+            print("visit some_data_clause_directive", args, type(args), self.blk_start, self.blk_end)
 
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
@@ -3415,13 +3419,6 @@ class OpenmpVisitor(Transformer):
                 print(args[0][0])
         return args[0]
 
-    def target_teams_loop_clause(self, args):
-        if config.DEBUG_OPENMP >= 1:
-            print("visit target_teams_loop_clause", args, type(args), args[0])
-            if isinstance(args[0], list):
-                print(args[0][0])
-        return args[0]
-
     def target_teams_distribute_parallel_for_simd_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit target_teams_distribute_parallel_for_simd_clause", args, type(args), args[0])
@@ -3432,6 +3429,13 @@ class OpenmpVisitor(Transformer):
     def target_teams_distribute_parallel_for_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit target_teams_distribute_parallel_for_clause", args, type(args), args[0])
+            if isinstance(args[0], list):
+                print(args[0][0])
+        return args[0]
+
+    def target_teams_loop_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_teams_loop_clause", args, type(args), args[0])
             if isinstance(args[0], list):
                 print(args[0][0])
         return args[0]
@@ -3985,6 +3989,12 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             print("visit unique_parallel_clause", args, type(args), args[0])
         assert(isinstance(val, openmp_tag))
+        return val
+
+    def teams_clause(self, args):
+        (val,) = args
+        if config.DEBUG_OPENMP >= 1:
+            print("visit teams_clause", args, type(args), args[0])
         return val
 
     def num_teams_clause(self, args):
