@@ -3163,7 +3163,7 @@ class OpenmpVisitor(Transformer):
             print("visit teams_directive", args, type(args), self.blk_start, self.blk_end)
         start_tags = [openmp_tag("DIR.OMP.TEAMS")]
         end_tags = [openmp_tag("DIR.OMP.END.TEAMS")]
-        self.some_data_clause_directive(args, start_tags, end_tags, 1)
+        clauses = self.some_data_clause_directive(args, start_tags, end_tags, 1)
 
         enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
         if config.DEBUG_OPENMP >= 1:
@@ -3172,8 +3172,12 @@ class OpenmpVisitor(Transformer):
             for enclosing_region in enclosing_regions[::-1]:
                 if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
                     nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.NUM_TEAMS")
-                    assert len(nt_tag) == 1
-                    nt_tag[0].arg = 0
+                    assert len(nt_tag) > 0
+                    cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS")
+                    if len(cur_num_team_clauses) >= 1:
+                        nt_tag[-1].arg = cur_num_team_clauses[-1].arg
+                    else:
+                        nt_tag[-1].arg = 0
 
         """
         sblk = self.blocks[self.blk_start]
@@ -3404,6 +3408,7 @@ class OpenmpVisitor(Transformer):
             eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
 
         add_enclosing_region(self.func_ir, self.body_blocks, or_start)
+        return clauses
 
     def target_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
