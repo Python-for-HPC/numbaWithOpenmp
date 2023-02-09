@@ -584,6 +584,16 @@ class openmp_region_start(ir.Stmt):
         self.alloca_queue = []
         self.end_region = None
 
+    def replace_var_names(self, namedict):
+        for i in range(len(self.tags)):
+            if isinstance(self.tags[i].arg, ir.Var):
+                if self.tags[i].arg.name in namedict:
+                    var = self.tags[i].arg
+                    self.tags[i].arg = ir.Var(var.scope, namedict[var.name], var.log)
+            elif isinstance(self.tags[i].arg, str):
+                if self.tags[i].arg in namedict:
+                    self.tags[i].arg = namedict[self.tags[i].arg]
+
     def add_tag(self, tag):
         tag_arg_str = None
         if isinstance(tag.arg, ir.Var):
@@ -1049,6 +1059,7 @@ class openmp_region_start(ir.Stmt):
             rev_arg_assigns = []
             cpointer_args = []
             # Add entries in the copied typemap for the arguments to the outlined IR.
+            new_cpointer_arg_var_dict = {}
             for idx, zipvar in enumerate(zip(target_args, outline_arg_typs)):
                 var_in, vtyp = zipvar
                 arg_name = "arg." + var_in
@@ -1058,8 +1069,15 @@ class openmp_region_start(ir.Stmt):
                 #state_copy.typemap[arg_name] = typemap[var_in]
                 if isinstance(vtyp, types.CPointer):
                     cpointer_args.append(var_in)
-                    arg_assigns.append(ir.Assign(ir.Arg(var_in, idx, self.loc, openmp_ptr=True), ir.Var(None, var_in, self.loc), self.loc))
-                    rev_arg_assigns.append(ir.RevArgAssign(ir.Var(None, var_in, self.loc), ir.Arg(var_in, idx, self.loc, openmp_ptr=True, reverse=True), self.loc))
+                    new_cpointer_arg_var_dict[var_in] = arg_name
+                    #arg_assigns.append(ir.Assign(ir.Arg(var_in, idx, self.loc, openmp_ptr=True), ir.Var(None, var_in, self.loc), self.loc))
+                    #rev_arg_assigns.append(ir.RevArgAssign(ir.Var(None, var_in, self.loc), ir.Arg(var_in, idx, self.loc, openmp_ptr=True, reverse=True), self.loc))
+            if len(new_cpointer_arg_var_dict) > 0:
+                replace_var_names(outlined_ir.blocks, new_cpointer_arg_var_dict)
+                for blk in outlined_ir.blocks.values():
+                    for stmt in blk.body:
+                        if isinstance(stmt, openmp_region_start):
+                            stmt.replace_var_names(new_cpointer_arg_var_dict)
 
             non_cpointer = []
             # If we are adding a cpointer arg to the entry block then we need to remove
@@ -1381,6 +1399,7 @@ class openmp_region_start(ir.Stmt):
                 ])
             add_offload_info(lowerer, self.omp_metadata)
         """
+        breakpoint()
         if self.acq_res:
             builder.fence("acquire")
         if self.acq_rel:
