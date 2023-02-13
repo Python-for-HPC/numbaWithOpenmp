@@ -657,12 +657,12 @@ numba_fptouif(float x) {
     return (uint64_t) (int64_t) x;
 }
 
-NUMBA_EXPORT_FUNC(void)
+void
 numba_gil_ensure(PyGILState_STATE *state) {
     *state = PyGILState_Ensure();
 }
 
-NUMBA_EXPORT_FUNC(void)
+void
 numba_gil_release(PyGILState_STATE *state) {
     PyGILState_Release(*state);
 }
@@ -979,7 +979,7 @@ numba_do_raise(PyObject *exc_packed)
 
 #ifdef PYCC_COMPILING
 /* AOT avoid the use of `numba.core.serialize` */
-NUMBA_EXPORT_FUNC(PyObject *)
+PyObject *
 numba_unpickle(const char *data, int n, const char *hashed)
 {
     PyObject *buf, *obj;
@@ -1007,7 +1007,7 @@ numba_unpickle(const char *data, int n, const char *hashed)
 
 #else
 
-NUMBA_EXPORT_FUNC(PyObject *)
+PyObject *
 numba_unpickle(const char *data, int n, const char *hashed)
 {
     PyObject *buf=NULL, *obj=NULL, *addr=NULL, *hashedbuf=NULL;
