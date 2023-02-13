@@ -59,7 +59,14 @@ class FunctionDescriptor(object):
         else:
             # Get argument types from the type inference result
             # (note the "arg.FOO" convention as used in typeinfer
-            self.argtypes = tuple(self.typemap['arg.' + a] for a in args)
+            def cpointer_check(a):
+                ty = self.typemap['arg.' + a]
+                if hasattr(ty, "cpointer") and ty.cpointer:
+                    ty = types.CPointer(ty)
+                return ty
+
+            self.argtypes = tuple(cpointer_check(a) for a in args)
+            #self.argtypes = tuple(self.typemap['arg.' + a] for a in args)
         mangler = default_mangler if mangler is None else mangler
         # The mangled name *must* be unique, else the wrong function can
         # be chosen at link time.

@@ -3,6 +3,7 @@ import operator
 from functools import partial
 
 from llvmlite.llvmpy.core import Constant, Type, Builder
+from llvmlite.ir import values
 
 from numba.core import (typing, utils, types, ir, debuginfo, funcdesc,
                         generators, config, ir_utils, cgutils, removerefctpass)
@@ -1340,6 +1341,12 @@ class Lower(BaseLower):
         """
         if name in self.varmap:
             # quit early
+            return
+
+        if hasattr(fetype, "cpointer") and fetype.cpointer:
+            llty = self.context.get_value_type(types.CPointer(fetype))
+            ptr = values.Argument(self.module, llty, name)
+            self.varmap[name] = ptr
             return
 
         # If the name is used in multiple blocks or lowering with debuginfo...

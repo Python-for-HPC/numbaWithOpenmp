@@ -19,12 +19,14 @@ from numba.core.ir_utils import (
     dead_code_elimination
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, find_top_level_loops
-from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils, typing
+from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils, typing, cpu
 from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
 from numba.extending import overload
 from numba.core.callconv import BaseCallConv, MinimalCallConv, errcode_t, RETCODE_OK
 from numba.core.utils import cached_property
+from numba.core.datamodel.registry import register_default as model_register
+from numba.core.datamodel.registry import default_manager as model_manager
 from cffi import FFI
 import llvmlite.binding as ll
 import llvmlite.llvmpy.core as lc
@@ -227,7 +229,10 @@ class openmp_tag(object):
                 decl = str(pointee) + " " + ref
             else:
                 arg_str = lowerer.getvar(x.name)
-                decl = arg_str.get_decl()
+                if isinstance(arg_str, lir.values.Argument):
+                    pass
+                else:
+                    decl = arg_str.get_decl()
         elif isinstance(x, lir.instructions.AllocaInstr):
             decl = x.get_decl()
         elif isinstance(x, str):
@@ -278,7 +283,12 @@ class openmp_tag(object):
                     decl = str(pointee) + " " + ref
                 else:
                     arg_str = lowerer.getvar(x)
-                    decl = arg_str.get_decl()
+                    if isinstance(arg_str, lir.values.Argument):
+                        decl = str(arg_str)
+                    elif isinstance(arg_str, lir.instructions.AllocaInstr):
+                        decl = arg_str.get_decl()
+                    else:
+                        breakpoint()
 
                 if struct_lower and isinstance(xtyp, types.npytypes.Array):
                     dm = lowerer.context.data_model_manager.lookup(xtyp)
@@ -555,6 +565,35 @@ def get_tags_of_type(clauses, ctype):
         if c.name == ctype:
             ret.append(c)
     return ret
+
+
+def copy_ir(input_ir, calltypes, depth=1):
+    assert depth >= 0 and depth <= 1
+
+    # This is a depth 0 copy.
+    cur_ir = input_ir.copy()
+    if depth == 1:
+        for blk in cur_ir.blocks.values():
+            for i in range(len(blk.body)):
+                if not isinstance(blk.body[i], (openmp_region_start, openmp_region_end)):
+                    if isinstance(blk.body[i], ir.Print):
+                        ctyp = calltypes[blk.body[i]] 
+                        blk.body[i] = copy.copy(blk.body[i])
+                        calltypes[blk.body[i]] = ctyp
+                        continue
+                        
+                    if iscall(blk.body[i]):
+                        ctyp = calltypes[blk.body[i].value] 
+                    else:
+                        ctyp = None
+
+                    blk.body[i] = copy.copy(blk.body[i])
+
+                    if ctyp:
+                       if blk.body[i].value not in calltypes:
+                           calltypes[blk.body[i].value] = ctyp
+
+    return cur_ir
 
 
 class openmp_region_start(ir.Stmt):
@@ -861,7 +900,7 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 print("openmp start region lower has target", type(lowerer.func_ir))
             # Make a copy of the host IR being lowered.
-            func_ir = lowerer.func_ir.copy()
+            func_ir = copy_ir(lowerer.func_ir, calltypes)
             if config.DEBUG_OPENMP >= 1:
                 for k,v in lowerer.func_ir.blocks.items():
                     print("region ids block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
@@ -1063,11 +1102,23 @@ class openmp_region_start(ir.Stmt):
             for idx, zipvar in enumerate(zip(target_args, outline_arg_typs)):
                 var_in, vtyp = zipvar
                 arg_name = "arg." + var_in
+                print("todd typemap:", var_in, vtyp, id(vtyp), state_copy.typemap)
                 state_copy.typemap.pop(arg_name, None)
                 state_copy.typemap[arg_name] = vtyp
+
                 #atyp = typemap[tag.arg]
                 #state_copy.typemap[arg_name] = typemap[var_in]
                 if isinstance(vtyp, types.CPointer):
+                    class cpointer_wrap(type(vtyp.dtype)):
+                        def __init__(self, base):
+                            self.cpointer = True
+                            self.__dict__.update(vtyp.dtype.__dict__)
+                            #super().__init__(*args)
+                    model_register(cpointer_wrap)(type(model_manager[vtyp.dtype]))
+                    cvtyp = cpointer_wrap(vtyp.dtype)
+                    print("vtyp.dtype:", vtyp.dtype, id(vtyp.dtype), id(cvtyp))
+                    state_copy.typemap.pop(arg_name, None)
+                    state_copy.typemap[arg_name] = cvtyp
                     cpointer_args.append(var_in)
                     new_cpointer_arg_var_dict[var_in] = arg_name
                     #arg_assigns.append(ir.Assign(ir.Arg(var_in, idx, self.loc, openmp_ptr=True), ir.Var(None, var_in, self.loc), self.loc))
@@ -1097,10 +1148,68 @@ class openmp_region_start(ir.Stmt):
             # Add typemap entry for the empty tuple return type.
             state_copy.typemap[last_block.body[-1].value.name] = types.containers.Tuple(())
 
+            class OpenmpCallConv(MinimalCallConv):
+                def return_value(self, builder, retval):
+                    self._return_errcode_raw(builder, RETCODE_OK)
+
+                def return_user_exc(self, builder, exc, exc_args=None, loc=None,
+                                    func_name=None):
+                    assert False
+
+                def get_arguments(self, func):
+                    return func.args
+
+                def call_function(self, builder, callee, resty, argtys, args):
+                    assert False
+
+                    """
+                    Call the Numba-compiled *callee*.
+                    """
+                    retty = callee.args[0].type.pointee
+                    retvaltmp = cgutils.alloca_once(builder, retty)
+                    # initialize return value
+                    builder.store(cgutils.get_null_value(retty), retvaltmp)
+
+                    arginfo = self._get_arg_packer(argtys)
+                    args = arginfo.as_arguments(builder, args)
+                    realargs = [retvaltmp] + list(args)
+                    code = builder.call(callee, realargs)
+                    status = self._get_return_status(builder, code)
+                    retval = builder.load(retvaltmp)
+                    out = self.context.get_returned_value(builder, resty, retval)
+                    return status, out
+
+                def get_function_type(self, restype, argtypes):
+                    """
+                    Get the implemented Function type for *restype* and *argtypes*.
+                    """
+                    arginfo = self._get_arg_packer(argtypes)
+                    argtypes = list(arginfo.argument_types)
+                    #resptr = self.get_return_type(restype)
+                    #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
+                    fnty = lir.FunctionType(errcode_t, argtypes)
+                    return fnty
+
+                def decorate_function(self, fn, args, fe_argtypes, noalias=False):
+                    """
+                    Set names and attributes of function arguments.
+                    """
+                    assert not noalias
+                    arginfo = self._get_arg_packer(fe_argtypes)
+                    arginfo.assign_names(self.get_arguments(fn),
+                                         ['arg.' + a for a in args])
+                    return fn
+
             if selected_device == 0:
                 flags = Flags()
 
-                subtarget = targetctx.subtarget(_registries=dict())
+                class OpenmpCPUTargetContext(cpu.CPUContext):
+                    @cached_property
+                    def call_conv(self):
+                        return OpenmpCallConv(self)
+
+                subtarget = OpenmpCPUTargetContext(targetctx.typing_context)
+                #subtarget = targetctx.subtarget(_registries=dict(), target=device_cpu_target)
                 # Turn off the Numba runtime (incref and decref mostly) for the
                 # target compilation.
                 subtarget.enable_nrt = False
@@ -1116,62 +1225,11 @@ class openmp_region_start(ir.Stmt):
                 from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
                 flags = cuda_compiler.CUDAFlags()
                 #class OpenmpCUDACallConv(BaseCallConv):
-                class OpenmpCUDACallConv(MinimalCallConv):
-                    def return_value(self, builder, retval):
-                        self._return_errcode_raw(builder, RETCODE_OK)
-
-                    def return_user_exc(self, builder, exc, exc_args=None, loc=None,
-                                        func_name=None):
-                        assert False
-
-                    def get_arguments(self, func):
-                        return func.args
-
-                    def call_function(self, builder, callee, resty, argtys, args):
-                        assert False
-
-                        """
-                        Call the Numba-compiled *callee*.
-                        """
-                        retty = callee.args[0].type.pointee
-                        retvaltmp = cgutils.alloca_once(builder, retty)
-                        # initialize return value
-                        builder.store(cgutils.get_null_value(retty), retvaltmp)
-
-                        arginfo = self._get_arg_packer(argtys)
-                        args = arginfo.as_arguments(builder, args)
-                        realargs = [retvaltmp] + list(args)
-                        code = builder.call(callee, realargs)
-                        status = self._get_return_status(builder, code)
-                        retval = builder.load(retvaltmp)
-                        out = self.context.get_returned_value(builder, resty, retval)
-                        return status, out
-
-                    def get_function_type(self, restype, argtypes):
-                        """
-                        Get the implemented Function type for *restype* and *argtypes*.
-                        """
-                        arginfo = self._get_arg_packer(argtypes)
-                        argtypes = list(arginfo.argument_types)
-                        #resptr = self.get_return_type(restype)
-                        #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
-                        fnty = lir.FunctionType(errcode_t, argtypes)
-                        return fnty
-
-                    def decorate_function(self, fn, args, fe_argtypes, noalias=False):
-                        """
-                        Set names and attributes of function arguments.
-                        """
-                        assert not noalias
-                        arginfo = self._get_arg_packer(fe_argtypes)
-                        arginfo.assign_names(self.get_arguments(fn),
-                                             ['arg.' + a for a in args])
-                        return fn
 
                 class OpenmpCUDATargetContext(cuda_descriptor.CUDATargetContext):
                     @cached_property
                     def call_conv(self):
-                        return OpenmpCUDACallConv(self)
+                        return OpenmpCallConv(self)
 
                 device_target = OpenmpCUDATargetContext(cuda_descriptor.cuda_target.typing_context)
                 #device_target = cuda_descriptor.cuda_target.target_context
@@ -1399,7 +1457,6 @@ class openmp_region_start(ir.Stmt):
                 ])
             add_offload_info(lowerer, self.omp_metadata)
         """
-        breakpoint()
         if self.acq_res:
             builder.fence("acquire")
         if self.acq_rel:
@@ -1671,6 +1728,15 @@ class PythonOpenmp:
         pass
 
 
+def iscall(x):
+    if isinstance(x, ir.Assign):
+        return isinstance(x.value, ir.Expr) and x.value.op == "call"
+    elif isinstance(x, ir.Expr):
+        return x.op == "call"
+    else:
+        return False
+
+
 def extract_args_from_openmp(func_ir):
     """ Find all the openmp context calls in the function and then
         use the VarCollector transformer to find all the Python variables
@@ -1683,7 +1749,7 @@ def extract_args_from_openmp(func_ir):
     var_table = get_name_var_table(func_ir.blocks)
     for block in func_ir.blocks.values():
         for inst in block.body:
-            if isinstance(inst, ir.Assign) and isinstance(inst.value, ir.Expr) and inst.value.op == "call":
+            if iscall(inst):
                 func_def = get_definition(func_ir, inst.value.func)
                 if isinstance(func_def, ir.Global) and isinstance(func_def.value, _OpenmpContextType):
                     str_def = get_definition(func_ir, inst.value.args[0])
