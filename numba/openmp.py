@@ -3417,10 +3417,10 @@ class OpenmpVisitor(Transformer):
             for clause in clauses:
                 print("target clause:", clause)
 
-        self.some_data_clause_directive(clauses, start_tags, end_tags, 0, has_loop=has_loop)
+        self.some_data_clause_directive(clauses, start_tags, end_tags, 0, has_loop=has_loop, for_target=True)
         #self.some_data_clause_directive(args, start_tags, end_tags, lexer_count, has_loop=has_loop)
 
-    def some_data_clause_directive(self, args, start_tags, end_tags, lexer_count, has_loop=False):
+    def some_data_clause_directive(self, args, start_tags, end_tags, lexer_count, has_loop=False, for_target=False):
         if config.DEBUG_OPENMP >= 1:
             print("visit some_data_clause_directive", args, type(args), self.blk_start, self.blk_end)
 
@@ -3491,7 +3491,10 @@ class OpenmpVisitor(Transformer):
                 print("vars_in_explicit before:", k, v)
             for v in clauses:
                 print("vars_in_explicit clauses before:", v)
-        self.make_implicit_explicit_target(scope, vars_in_explicit_clauses, clauses, True, inputs_to_region, def_but_live_out, private_to_region)
+        if for_target:
+            self.make_implicit_explicit_target(scope, vars_in_explicit_clauses, clauses, True, inputs_to_region, def_but_live_out, private_to_region)
+        else:
+            self.make_implicit_explicit(scope, vars_in_explicit_clauses, clauses, True, inputs_to_region, def_but_live_out, private_to_region)
         if config.DEBUG_OPENMP >= 1:
             for k,v in vars_in_explicit_clauses.items():
                 print("vars_in_explicit after:", k, v)
@@ -3503,7 +3506,7 @@ class OpenmpVisitor(Transformer):
             for k,v in vars_in_explicit_clauses.items():
                 print("vars_in_explicit post:", k, v)
         if config.DEBUG_OPENMP >= 1:
-            print(1, "blocks_in_region:", blocks_in_region)
+            print("blocks_in_region:", blocks_in_region)
         replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region, for_target=True)
         assert(len(lastprivate_copying) == 0)
         before_start.extend(copying_ir_before)
