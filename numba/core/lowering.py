@@ -1417,6 +1417,9 @@ class Lower(BaseLower):
             if name in self._singly_assigned_vars:
                 self._singly_assigned_vars.discard(name)
 
+        if hasattr(fetype, "cpointer") and fetype.cpointer:
+            return
+
         # Define if not already (may happen if the variable is deleted
         # at the beginning of a loop, but only set later in the loop)
         self._alloca_var(name, fetype)
