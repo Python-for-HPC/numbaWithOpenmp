@@ -1354,8 +1354,7 @@ class openmp_region_start(ir.Stmt):
                 print('libomptarget_arch', libomptarget_arch)
                 subprocess.run(['llvm-link', '-S', libomptarget_arch, filename_prefix + '-intrinsics_omp-opt.ll',
                     '-o', filename_prefix + '-intrinsics_omp-opt-linked.ll'], check=True)
-                subprocess.run(['clang', '-cc1', '-triple', 'nvptx64-nvidia-cuda',
-                    '-target-cpu', cc, '-target-feature', '+ptx64', '-S',
+                subprocess.run(['llc', '-O3', '-march=nvptx64', f'-mcpu={cc}', f'-mattr=+ptx64,+{cc}',
                     filename_prefix + '-intrinsics_omp-opt-linked.ll',
                     '-o', filename_prefix + '-intrinsics_omp-opt-linked.s'], check=True)
                 subprocess.run(['ptxas', '-m64', '--gpu-name', cc,
