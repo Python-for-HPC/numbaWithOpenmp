@@ -2988,6 +2988,7 @@ class OpenmpVisitor(Transformer):
             self.blocks[new_exit_block_num] = new_exit_block
             evar_copy = scope.redefine("evar_copy_sfd", self.loc)
             keep_alive.append(ir.Assign(size_var, evar_copy, self.loc))
+            or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", evar_copy))
             #keep_alive.append(ir.Assign(size_var_copy, evar_copy, self.loc))
             new_exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
 
