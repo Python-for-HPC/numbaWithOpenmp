@@ -2311,9 +2311,10 @@ class OpenmpVisitor(Transformer):
         for var in vars_in_explicit:
             if not is_private(vars_in_explicit[var].name):
                 evar = ir.Var(scope, var, self.loc)
-                evar_copy = scope.redefine("evar_copy", self.loc)
+                evar_copy = scope.redefine("evar_copy_aets", self.loc)
                 keep_alive.append(ir.Assign(evar, evar_copy, self.loc))
                 #keep_alive.append(ir.Assign(evar, evar, self.loc))
+                start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", evar_copy))
 
     def flatten(self, all_clauses, start_block):
         if config.DEBUG_OPENMP >= 1:
@@ -2985,7 +2986,7 @@ class OpenmpVisitor(Transformer):
             new_exit_block = ir.Block(scope, inst.loc)
             new_exit_block_num = max(self.blocks.keys()) + 1
             self.blocks[new_exit_block_num] = new_exit_block
-            evar_copy = scope.redefine("evar_copy", self.loc)
+            evar_copy = scope.redefine("evar_copy_sfd", self.loc)
             keep_alive.append(ir.Assign(size_var, evar_copy, self.loc))
             #keep_alive.append(ir.Assign(size_var_copy, evar_copy, self.loc))
             new_exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
