@@ -577,13 +577,13 @@ def copy_ir(input_ir, calltypes, depth=1):
             for i in range(len(blk.body)):
                 if not isinstance(blk.body[i], (openmp_region_start, openmp_region_end)):
                     if isinstance(blk.body[i], ir.Print):
-                        ctyp = calltypes[blk.body[i]] 
+                        ctyp = calltypes[blk.body[i]]
                         blk.body[i] = copy.copy(blk.body[i])
                         calltypes[blk.body[i]] = ctyp
                         continue
-                        
+
                     if iscall(blk.body[i]):
-                        ctyp = calltypes[blk.body[i].value] 
+                        ctyp = calltypes[blk.body[i].value]
                     else:
                         ctyp = None
 
@@ -1022,6 +1022,7 @@ class openmp_region_start(ir.Stmt):
                 print("outs:", outs)
                 print("args:", state.args)
                 print("rettype:", state.return_type, type(state.return_type))
+            target_args = ins + outs
             # Re-use Numba loop lifting code to extract the target region as
             # its own function.
             region_info = transforms._loop_lift_info(loop=None,
@@ -1031,6 +1032,9 @@ class openmp_region_start(ir.Stmt):
                                                      returnto=end_block)
 
             region_blocks = dict((k, func_ir.blocks[k]) for k in blocks_in_region)
+
+            if config.DEBUG_OPENMP >= 1:
+                print("region_info:", region_info)
             transforms._loop_lift_prepare_loop_func(region_info, region_blocks)
 
             if remove_openmp_nodes_from_target:
@@ -1042,19 +1046,21 @@ class openmp_region_start(ir.Stmt):
             # transfer_scope?
             # core/untyped_passes/versioning_loop_bodies
 
-            target_args = []
-            outline_arg_typs = []
+            #target_args = []
+            outline_arg_typs = [None] * len(target_args)
             for tag in self.tags:
                 if config.DEBUG_OPENMP >= 1:
                     print(1, "target_arg?", tag)
                 if not tag.non_arg and is_target_arg(tag.name):
-                    target_args.append(tag.arg)
+                    #target_args.append(tag.arg)
+                    target_arg_index = target_args.index(tag.arg)
                     atyp = get_dotted_type(tag.arg, typemap, lowerer)
-                    #atyp = typemap[tag.arg]
                     if is_pointer_target_arg(tag.name, atyp):
-                        outline_arg_typs.append(types.CPointer(atyp))
+                        outline_arg_typs[target_arg_index] = types.CPointer(atyp)
+                        #outline_arg_typs.append(types.CPointer(atyp))
                     else:
-                        outline_arg_typs.append(atyp)
+                        outline_arg_typs[target_arg_index] = atyp
+                        #outline_arg_typs.append(atyp)
                     if config.DEBUG_OPENMP >= 1:
                         print(1, "found target_arg", tag)
 
@@ -1062,6 +1068,9 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 print("target_args:", target_args)
                 print("outline_arg_typs:", outline_arg_typs)
+                print("extras_before:", extras_before, start_block)
+                for eb in extras_before:
+                    print(eb)
 
             # Create the outlined IR from the blocks in the region, making the
             # variables crossing into the regions argument.
@@ -1070,16 +1079,18 @@ class openmp_region_start(ir.Stmt):
                                          arg_count=len(target_args),
                                          force_non_generator=True)
             outlined_ir.blocks[start_block].body = extras_before + outlined_ir.blocks[start_block].body
-            # Change the name of the outlined function to prepend the
-            # word "device" to the function name.
-            fparts = outlined_ir.func_id.func_qualname.split('.')
-            fparts[-1] = "device" + str(target_num) + fparts[-1]
-            outlined_ir.func_id.func_qualname = ".".join(fparts)
-            outlined_ir.func_id.func_name = fparts[-1]
-            uid = next(bytecode.FunctionIdentity._unique_ids)
-            outlined_ir.func_id.unique_name = '{}${}'.format(outlined_ir.func_id.func_qualname, uid)
+            def prepend_device_to_func_name(outlined_ir):
+                # Change the name of the outlined function to prepend the
+                # word "device" to the function name.
+                fparts = outlined_ir.func_id.func_qualname.split('.')
+                fparts[-1] = "device" + str(target_num) + fparts[-1]
+                outlined_ir.func_id.func_qualname = ".".join(fparts)
+                outlined_ir.func_id.func_name = fparts[-1]
+                uid = next(bytecode.FunctionIdentity._unique_ids)
+                outlined_ir.func_id.unique_name = '{}${}'.format(outlined_ir.func_id.func_qualname, uid)
+            prepend_device_to_func_name(outlined_ir)
             if config.DEBUG_OPENMP >= 1:
-                print("outlined_ir:", type(outlined_ir), type(outlined_ir.func_id), fparts, outlined_ir.arg_names)
+                print("outlined_ir:", type(outlined_ir), type(outlined_ir.func_id), outlined_ir.arg_names)
                 dprint_func_ir(outlined_ir, "outlined_ir")
 
             # Create a copy of the state and the typemap inside of it so that changes
@@ -1102,7 +1113,7 @@ class openmp_region_start(ir.Stmt):
             for idx, zipvar in enumerate(zip(target_args, outline_arg_typs)):
                 var_in, vtyp = zipvar
                 arg_name = "arg." + var_in
-                print("todd typemap:", var_in, vtyp, id(vtyp), state_copy.typemap)
+                #print("todd typemap:", var_in, vtyp, id(vtyp), state_copy.typemap)
                 state_copy.typemap.pop(arg_name, None)
                 state_copy.typemap[arg_name] = vtyp
 
@@ -1116,7 +1127,7 @@ class openmp_region_start(ir.Stmt):
                             #super().__init__(*args)
                     model_register(cpointer_wrap)(type(model_manager[vtyp.dtype]))
                     cvtyp = cpointer_wrap(vtyp.dtype)
-                    print("vtyp.dtype:", vtyp.dtype, id(vtyp.dtype), id(cvtyp))
+                    print("vtyp.dtype:", var_in, vtyp.dtype, id(vtyp.dtype), id(cvtyp))
                     state_copy.typemap.pop(arg_name, None)
                     state_copy.typemap[arg_name] = cvtyp
                     cpointer_args.append(var_in)
@@ -1817,7 +1828,8 @@ class _OpenmpContextType(WithContext):
             flags.release_gil = True
             flags.noalias = True
             _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra, state)
-            func_ir._definitions = build_definitions(func_ir.blocks)
+            func_ir._definitions = build_definitions(blocks)
+            #func_ir._definitions = build_definitions(func_ir.blocks)
             if config.DEBUG_OPENMP >= 1:
                 print("post-with-removal")
                 dump_blocks(blocks)
@@ -1886,7 +1898,10 @@ def is_target_arg(name):
 
 def is_pointer_target_arg(name, typ):
     if name.startswith("QUAL.OMP.MAP"):
-        return True
+        if isinstance(typ, types.npytypes.Array):
+            return False
+        else:
+            return True
     if name in ["QUAL.OMP.FIRSTPRIVATE"]:
         return False
     if name in ["QUAL.OMP.TARGET.IMPLICIT"]:
@@ -2035,6 +2050,14 @@ class VarCollector(Transformer):
                 if isinstance(c[0], OnlyClauseVar):
                     ret.extend(c)
         return ret
+
+
+def add_tags_to_enclosing(func_ir, cur_block, tags):
+    enclosing_region = get_enclosing_region(func_ir, cur_block)
+    if enclosing_region:
+        for region in enclosing_region:
+            for tag in tags:
+                region.add_tag(tag)
 
 
 def add_enclosing_region(func_ir, blocks, openmp_node):
@@ -2307,6 +2330,7 @@ class OpenmpVisitor(Transformer):
                 start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", itr_var))
 
     def add_explicits_to_start(self, scope, vars_in_explicit, explicit_clauses, gen_shared, start_tags, keep_alive):
+        tags_for_enclosing = []
         start_tags.extend(explicit_clauses)
         for var in vars_in_explicit:
             if not is_private(vars_in_explicit[var].name):
@@ -2314,7 +2338,8 @@ class OpenmpVisitor(Transformer):
                 evar_copy = scope.redefine("evar_copy_aets", self.loc)
                 keep_alive.append(ir.Assign(evar, evar_copy, self.loc))
                 #keep_alive.append(ir.Assign(evar, evar, self.loc))
-                start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", evar_copy))
+                tags_for_enclosing.append(openmp_tag("QUAL.OMP.PRIVATE", evar_copy))
+        return tags_for_enclosing
 
     def flatten(self, all_clauses, start_block):
         if config.DEBUG_OPENMP >= 1:
@@ -2959,7 +2984,8 @@ class OpenmpVisitor(Transformer):
             for c in copying_ir_before:
                 print(c)
 
-        self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, gen_shared, start_tags, keep_alive)
+        tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, gen_shared, start_tags, keep_alive)
+        add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
 
         or_start = openmp_region_start(start_tags, 0, self.loc)
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
@@ -3547,7 +3573,8 @@ class OpenmpVisitor(Transformer):
             priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
 
         keep_alive = []
-        self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
+        tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
+        add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
 
         #or_start = openmp_region_start([openmp_tag("DIR.OMP.TARGET", target_num)] + clauses, 0, self.loc)
         #or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TARGET", target_num)], self.loc)
@@ -3857,7 +3884,8 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             print("visit task_directive", args, type(args), clauses)
 
-        self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
+        tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
+        add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
         or_start = openmp_region_start(start_tags, 0, self.loc)
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
         sblk.body = priv_saves + before_start + [or_start] + after_start + sblk.body[:]
@@ -4139,7 +4167,8 @@ class OpenmpVisitor(Transformer):
         start_tags = [openmp_tag("DIR.OMP.PARALLEL")]
         end_tags = [openmp_tag("DIR.OMP.END.PARALLEL")]
         keep_alive = []
-        self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
+        tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
+        add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
         #self.add_variables_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive, inputs_to_region, def_but_live_out, private_to_region)
 
         or_start = openmp_region_start(start_tags, 0, self.loc)
@@ -5127,7 +5156,7 @@ for fname, retinfo, arginfo in omp_runtime_funcs:
     return builder.call(goif, args)
     """
     overload_list = tuple(get_overload_list(retinfo, arginfo))
-    print("cdef:", overload_list, "\n", cdef)
+#    print("cdef:", overload_list, "\n", cdef)
     exec(cdef, gdict, ldict)
     cout = ldict[f"cuda_{fname}"]
     cudaimpl_lower(fout, *overload_list)(cout)
