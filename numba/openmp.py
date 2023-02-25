@@ -1113,7 +1113,6 @@ class openmp_region_start(ir.Stmt):
             for idx, zipvar in enumerate(zip(target_args, outline_arg_typs)):
                 var_in, vtyp = zipvar
                 arg_name = "arg." + var_in
-                #print("todd typemap:", var_in, vtyp, id(vtyp), state_copy.typemap)
                 state_copy.typemap.pop(arg_name, None)
                 state_copy.typemap[arg_name] = vtyp
 
@@ -1127,7 +1126,6 @@ class openmp_region_start(ir.Stmt):
                             #super().__init__(*args)
                     model_register(cpointer_wrap)(type(model_manager[vtyp.dtype]))
                     cvtyp = cpointer_wrap(vtyp.dtype)
-                    print("vtyp.dtype:", var_in, vtyp.dtype, id(vtyp.dtype), id(cvtyp))
                     state_copy.typemap.pop(arg_name, None)
                     state_copy.typemap[arg_name] = cvtyp
                     cpointer_args.append(var_in)
