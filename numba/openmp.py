@@ -680,7 +680,7 @@ class openmp_region_start(ir.Stmt):
 
     def has_target(self):
         for t in self.tags:
-            if t.name == "DIR.OMP.TARGET" or t.name == "DIR.OMP.TARGET.TEAMS":
+            if t.name.startswith("DIR.OMP.TARGET"):
                 return t.arg
         return None
 
@@ -1051,7 +1051,8 @@ class openmp_region_start(ir.Stmt):
             for tag in self.tags:
                 if config.DEBUG_OPENMP >= 1:
                     print(1, "target_arg?", tag)
-                if not tag.non_arg and is_target_arg(tag.name):
+                if tag.arg in target_args:
+                #if not tag.non_arg and is_target_arg(tag.name):
                     #target_args.append(tag.arg)
                     target_arg_index = target_args.index(tag.arg)
                     atyp = get_dotted_type(tag.arg, typemap, lowerer)
@@ -1539,7 +1540,7 @@ class openmp_region_end(ir.Stmt):
 
     def has_target(self):
         for t in self.tags:
-            if t.name == "DIR.OMP.TARGET":
+            if t.name.startswith("DIR.OMP.TARGET"):
                 return t.arg
         return None
 
