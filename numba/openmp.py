@@ -680,7 +680,7 @@ class openmp_region_start(ir.Stmt):
 
     def has_target(self):
         for t in self.tags:
-            if t.name == "DIR.OMP.TARGET":
+            if t.name == "DIR.OMP.TARGET" or t.name == "DIR.OMP.TARGET.TEAMS":
                 return t.arg
         return None
 
