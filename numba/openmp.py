@@ -2287,10 +2287,12 @@ class OpenmpVisitor(Transformer):
                 temp_var = ir.Var(scope, var_name, self.loc)
                 if not is_internal_var(temp_var):
                     if config.OPENMP_SHARED_PRIVATE_REGION == 0:
-                        explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
+                        explicit_clauses.append(openmp_tag("QUAL.OMP.PRIVATE", var_name))
+                        #explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
                         vars_in_explicit[var_name] = explicit_clauses[-1]
                     else:
-                        explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
+                        explicit_clauses.append(openmp_tag("QUAL.OMP.PRIVATE", var_name))
+                        #explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
                         vars_in_explicit[var_name] = explicit_clauses[-1]
 
         for var_name in private_to_region:
@@ -2790,15 +2792,15 @@ class OpenmpVisitor(Transformer):
                     latch_iv = omp_iv_var
 
                     latch_block = ir.Block(scope, inst.loc)
-                    const1_var = loop_index.scope.redefine("$const1", inst.loc)
-                    start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", const1_var))
-                    const1_assign = ir.Assign(ir.Const(1, inst.loc), const1_var, inst.loc)
+                    const1_latch_var = loop_index.scope.redefine("$const1_latch", inst.loc)
+                    start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", const1_latch_var))
+                    const1_assign = ir.Assign(ir.Const(1, inst.loc), const1_latch_var, inst.loc)
                     latch_block.body.append(const1_assign)
                     latch_assign = ir.Assign(
                         ir.Expr.binop(
                             operator.add,
                             omp_iv_var,
-                            const1_var,
+                            const1_latch_var,
                             inst.loc
                         ),
                         latch_iv,
@@ -2863,6 +2865,9 @@ class OpenmpVisitor(Transformer):
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.UB", omp_ub_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_lb_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_start_var.name))
+                    tags_for_enclosing = [omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
+                    tags_for_enclosing = [openmp_tag("QUAL.OMP.PRIVATE", x) for x in tags_for_enclosing]
+                    add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
                     #start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.IV", loop_index.name))
                     #start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.UB", size_var.name))
                     return True, loop_blocks_for_io, loop_blocks_for_io_minus_entry, entry_pred, exit_block, inst, size_var, step_var, latest_index, loop_index
