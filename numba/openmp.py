@@ -584,16 +584,24 @@ def copy_ir(input_ir, calltypes, depth=1):
 
                     if iscall(blk.body[i]):
                         ctyp = calltypes[blk.body[i].value]
+                        blk.body[i] = copy.copy(blk.body[i])
+                        if blk.body[i].value not in calltypes:
+                            calltypes[blk.body[i].value] = ctyp
+                    elif blk.body[i] in calltypes:
+                        ctyp = calltypes[blk.body[i]]
+                        blk.body[i] = copy.copy(blk.body[i])
+                        if blk.body[i] not in calltypes:
+                            calltypes[blk.body[i]] = ctyp
                     else:
                         ctyp = None
+                        blk.body[i] = copy.copy(blk.body[i])
 
-                    blk.body[i] = copy.copy(blk.body[i])
-
-                    if ctyp:
-                       if blk.body[i].value not in calltypes:
-                           calltypes[blk.body[i].value] = ctyp
 
     return cur_ir
+
+
+def is_target_tag(x):
+    return x.startswith("DIR.OMP.TARGET") and x not in ["DIR.OMP.TARGET.DATA", "DIR.OMP.TARGET.ENTER.DATA", "DIR.OMP.TARGET.EXIT.DATA"]
 
 
 class openmp_region_start(ir.Stmt):
@@ -680,7 +688,7 @@ class openmp_region_start(ir.Stmt):
 
     def has_target(self):
         for t in self.tags:
-            if t.name.startswith("DIR.OMP.TARGET"):
+            if is_target_tag(t.name):
                 return t.arg
         return None
 
@@ -1169,11 +1177,51 @@ class openmp_region_start(ir.Stmt):
                 def get_arguments(self, func):
                     return func.args
 
-                def call_function(self, builder, callee, resty, argtys, args):
-                    assert False
-
+                def call_function(self, builder, callee, resty, argtys, args, attrs=None):
                     """
                     Call the Numba-compiled *callee*.
+                    """
+                    if isinstance(callee.function_type, lir.FunctionType):
+                        ft = callee.function_type
+                        retty = ft.return_type
+                        arginfo = self._get_arg_packer(argtys)
+                        args = list(arginfo.as_arguments(builder, args))
+                        realargs = args
+                        code = builder.call(callee, realargs) #, attrs=_attrs)
+                        retvaltmp = cgutils.alloca_once(builder, errcode_t)
+                        builder.store(RETCODE_OK, retvaltmp)
+                        return retvaltmp, code
+
+                    """
+                    retty = self._get_return_argument(callee.function_type).pointee
+
+                    retvaltmp = cgutils.alloca_once(builder, retty)
+                    # initialize return value to zeros
+                    builder.store(cgutils.get_null_value(retty), retvaltmp)
+
+                    excinfoptr = cgutils.alloca_once(builder, ir.PointerType(excinfo_t),
+                                                     name="excinfo")
+
+                    arginfo = self._get_arg_packer(argtys)
+                    args = list(arginfo.as_arguments(builder, args))
+                    realargs = [retvaltmp, excinfoptr] + args
+                    # deal with attrs, it's fine to specify a load in a string like
+                    # "noinline fast" as per LLVM or equally as an iterable of individual
+                    # attributes.
+                    if attrs is None:
+                        _attrs = ()
+                    elif isinstance(attrs, Iterable) and not isinstance(attrs, str):
+                        _attrs = tuple(attrs)
+                    else:
+                        raise TypeError("attrs must be an iterable of strings or None")
+                    code = builder.call(callee, realargs, attrs=_attrs)
+                    status = self._get_return_status(builder, code,
+                                                     builder.load(excinfoptr))
+                    retval = builder.load(retvaltmp)
+                    out = self.context.get_returned_value(builder, resty, retval)
+                    return status, out
+                    """
+
                     """
                     retty = callee.args[0].type.pointee
                     retvaltmp = cgutils.alloca_once(builder, retty)
@@ -1188,6 +1236,7 @@ class openmp_region_start(ir.Stmt):
                     retval = builder.load(retvaltmp)
                     out = self.context.get_returned_value(builder, resty, retval)
                     return status, out
+                    """
 
                 def get_function_type(self, restype, argtypes):
                     """
@@ -1219,9 +1268,10 @@ class openmp_region_start(ir.Stmt):
                         return OpenmpCallConv(self)
 
                 subtarget = OpenmpCPUTargetContext(targetctx.typing_context)
-                #subtarget = targetctx.subtarget(_registries=dict(), target=device_cpu_target)
-                # Turn off the Numba runtime (incref and decref mostly) for the
-                # target compilation.
+                # Copy everything (like registries) from cpu context into the new OpenMPCPUTargetContext subtarget
+                # except call_conv which is the whole point of that class so that the minimal call convention is used.
+                subtarget.__dict__.update({k: targetctx.__dict__[k] for k in targetctx.__dict__.keys() - {'call_conv'}})
+                # Turn off the Numba runtime (incref and decref mostly) for the target compilation.
                 subtarget.enable_nrt = False
                 printreg = imputils.Registry()
                 @printreg.lower(print, types.VarArg(types.Any))
@@ -1540,7 +1590,7 @@ class openmp_region_end(ir.Stmt):
 
     def has_target(self):
         for t in self.tags:
-            if t.name.startswith("DIR.OMP.TARGET"):
+            if is_target_tag(t.name):
                 return t.arg
         return None
 
@@ -1908,6 +1958,8 @@ def is_pointer_target_arg(name, typ):
             return True
         else:
             return False
+    return False
+    #print("is_pointer_target_arg:", name, typ, type(typ))
     assert False
 
 
@@ -3334,6 +3386,23 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for target_construct.
     # Don't need a rule for target_teams_distribute_parallel_for_simd_construct.
 
+    def teams_back_prop(self, tags, clauses):
+        nt_tag = self.get_clauses_by_name(tags, "QUAL.OMP.NUM_TEAMS")
+        assert len(nt_tag) > 0
+        cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS")
+        if len(cur_num_team_clauses) >= 1:
+            nt_tag[-1].arg = cur_num_team_clauses[-1].arg
+        else:
+            nt_tag[-1].arg = 0
+
+        nt_tag = self.get_clauses_by_name(tags, "QUAL.OMP.THREAD_LIMIT")
+        assert len(nt_tag) > 0
+        cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")
+        if len(cur_num_team_clauses) >= 1:
+            nt_tag[-1].arg = cur_num_team_clauses[-1].arg
+        else:
+            nt_tag[-1].arg = 0
+
     def teams_directive(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit teams_directive", args, type(args), self.blk_start, self.blk_end)
@@ -3347,22 +3416,7 @@ class OpenmpVisitor(Transformer):
         if enclosing_regions:
             for enclosing_region in enclosing_regions[::-1]:
                 if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
-                    nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.NUM_TEAMS")
-                    assert len(nt_tag) > 0
-                    cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS")
-                    if len(cur_num_team_clauses) >= 1:
-                        nt_tag[-1].arg = cur_num_team_clauses[-1].arg
-                    else:
-                        nt_tag[-1].arg = 0
-
-                    nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.THREAD_LIMIT")
-                    assert len(nt_tag) > 0
-                    cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")
-                    if len(cur_num_team_clauses) >= 1:
-                        nt_tag[-1].arg = cur_num_team_clauses[-1].arg
-                    else:
-                        nt_tag[-1].arg = 0
-
+                    self.teams_back_prop(enclosing_region.tags, clauses)
                     break
 
         """
@@ -3419,8 +3473,15 @@ class OpenmpVisitor(Transformer):
     def target_teams_distribute_parallel_for_simd_directive(self, args):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 6, has_loop=True)
 
-    def get_clauses_by_name(self, clauses, name):
-        return list(filter(lambda x: x.name == name, clauses))
+    def get_clauses_by_name(self, clauses, names):
+        if not isinstance(names, list):
+            names = [names]
+        return list(filter(lambda x: x.name in names, clauses))
+
+    def get_clauses_by_start(self, clauses, names):
+        if not isinstance(names, list):
+            names = [names]
+        return list(filter(lambda x: any([x.name.startswith(y) for y in names]), clauses))
 
     def some_target_directive(self, args, dir_tag, lexer_count, has_loop=False):
         if config.DEBUG_OPENMP >= 1:
@@ -3443,6 +3504,11 @@ class OpenmpVisitor(Transformer):
             if config.DEBUG_OPENMP >= 1:
                 print("Adding THREAD_LIMIT implicit clause.")
             start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
+
+        if "TEAMS" in dir_tag:
+            self.teams_back_prop(start_tags, clauses)
+        if "PARALLEL" in dir_tag:
+            self.parallel_back_prop(start_tags, clauses)
 
         if config.DEBUG_OPENMP >= 1:
             for clause in clauses:
@@ -4046,6 +4112,15 @@ class OpenmpVisitor(Transformer):
 
     # Don't need a rule for parallel_construct.
 
+    def parallel_back_prop(self, tags, clauses):
+        nt_tag = self.get_clauses_by_name(tags, "QUAL.OMP.THREAD_LIMIT")
+        assert len(nt_tag) > 0
+        cur_thread_limit_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_THREADS")
+        if len(cur_thread_limit_clauses) >= 1:
+            nt_tag[-1].arg = cur_thread_limit_clauses[-1].arg
+        else:
+            nt_tag[-1].arg = 0
+
     def parallel_directive(self, args):
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
@@ -4070,17 +4145,12 @@ class OpenmpVisitor(Transformer):
             print("parallel enclosing_regions:", enclosing_regions)
         if enclosing_regions:
             for enclosing_region in enclosing_regions[::-1]:
-                if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TEAMS")) == 1:
+                if len(self.get_clauses_by_start(enclosing_region.tags, "DIR.OMP.TEAMS")) == 1:
                     break
-                if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
-                    nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.THREAD_LIMIT")
-                    assert len(nt_tag) > 0
-                    cur_thread_limit_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_THREADS")
-                    if len(cur_thread_limit_clauses) >= 1:
-                        nt_tag[-1].arg = cur_thread_limit_clauses[-1].arg
-                    else:
-                        nt_tag[-1].arg = 0
+                if len(self.get_clauses_by_start(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
+                    self.parallel_back_prop(enclosing_region.tags, clauses)
                     break
+
         # DONE ---- Back propagate THREAD_LIMIT to enclosed target region ----
 
         inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
@@ -5129,7 +5199,7 @@ for fname, retinfo, arginfo in omp_runtime_funcs:
     ldict = {}
     gdict = globals()
 
-    #print("fdef:\n", fdef)
+#    print("fdef:\n", fdef)
     exec(fdef, gdict, ldict)
     fout = ldict[fname]
     gdict[fname] = fout
@@ -5141,7 +5211,7 @@ for fname, retinfo, arginfo in omp_runtime_funcs:
         return fnty({argstr})
     return impl
     """
-    #print("odef:\n", odef)
+#    print("odef:\n", odef)
     exec(odef, gdict, ldict)
     oout = ldict[f"ol_{fname}"]
     overload(fout)(oout)
