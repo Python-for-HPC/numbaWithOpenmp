@@ -5088,7 +5088,7 @@ def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra
     args = extra["args"]
     arg = args[0]
     # If OpenMP argument is not a constant or not a string then raise exception
-    if not isinstance(arg, ir.Const):
+    if not isinstance(arg, (ir.Const, ir.FreeVar)):
         raise NonconstantOpenmpSpecification(f"Non-constant OpenMP specification at line {arg.loc}")
     if not isinstance(arg.value, str):
         raise NonStringOpenmpSpecification(f"Non-string OpenMP specification at line {arg.loc}")
