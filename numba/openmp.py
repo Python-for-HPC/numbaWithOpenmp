@@ -624,7 +624,6 @@ def copy_one(x, calltypes):
         calltypes[ret] = ctyp
         return ret
     print("Failed to handle the following type when copying target IR.", type(x))
-    #breakpoint()
     assert False
 
 
@@ -1400,7 +1399,6 @@ class openmp_region_start(ir.Stmt):
                 print("===================================================================================")
 
 
-            breakpoint()
             cres = compiler.compile_ir(typingctx,
                                        device_target,
                                        outlined_ir,
