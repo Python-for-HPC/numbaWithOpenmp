@@ -41,6 +41,7 @@ from numba.core.analysis import compute_use_defs, compute_live_map, compute_cfg_
 import subprocess
 import tempfile
 from numba.cuda.cudaimpl import lower as cudaimpl_lower
+import types as python_types
 
 library_missing = False
 
@@ -556,6 +557,8 @@ def find_target_start_end(func_ir, target_num):
                 if start_block is not None and end_block is not None:
                     return start_block, end_block
 
+    dprint_func_ir(func_ir, "find_target_start_end")
+    print("target_num:", target_num)
     assert False
 
 
@@ -567,6 +570,64 @@ def get_tags_of_type(clauses, ctype):
     return ret
 
 
+def copy_one(x, calltypes):
+    if config.DEBUG_OPENMP >= 2:
+        print("copy_one:", x, type(x))
+    if isinstance(x, ir.Loc):
+        return copy.copy(x)
+    elif isinstance(x, ir.Expr):
+        if x in calltypes:
+            ctyp = calltypes[x]
+        else:
+            ctyp = None
+        ret = ir.Expr(copy_one(x.op, calltypes), copy_one(x.loc, calltypes), **copy_one(x._kws, calltypes))
+        if ctyp and ret not in calltypes:
+            calltypes[ret] = ctyp
+        return ret
+    elif isinstance(x, dict):
+        return {k: copy_one(v, calltypes) for k,v in x.items()}
+    elif isinstance(x, list):
+        return [copy_one(v, calltypes) for v in x]
+    elif isinstance(x, tuple):
+        return tuple([copy_one(v, calltypes) for v in x])
+    elif isinstance(x, ir.Const):
+        return ir.Const(copy_one(x.value, calltypes), copy_one(x.loc, calltypes), x.use_literal_type)
+    elif isinstance(x, (int,str,ir.Global,python_types.BuiltinFunctionType,ir.UndefinedType,type(None))):
+        return x
+    elif isinstance(x, ir.Var):
+        return ir.Var(x.scope, copy_one(x.name, calltypes), copy_one(x.loc, calltypes))
+    elif isinstance(x, ir.Del):
+        return ir.Del(copy_one(x.value, calltypes), copy_one(x.loc, calltypes))
+    elif isinstance(x, ir.Jump):
+        return ir.Jump(copy_one(x.target, calltypes), copy_one(x.loc, calltypes))
+    elif isinstance(x, ir.Return):
+        return ir.Return(copy_one(x.value, calltypes), copy_one(x.loc, calltypes))
+    elif isinstance(x, ir.Branch):
+        return ir.Branch(copy_one(x.cond, calltypes), copy_one(x.truebr, calltypes), copy_one(x.falsebr, calltypes), copy_one(x.loc, calltypes))
+    elif isinstance(x, ir.Print):
+        ctyp = calltypes[x]
+        ret = copy.copy(x)
+        calltypes[ret] = ctyp
+        return ret
+    elif isinstance(x, ir.Assign):
+        return ir.Assign(copy_one(x.value, calltypes), copy_one(x.target, calltypes), copy_one(x.loc, calltypes))
+    elif isinstance(x, ir.Arg):
+        return ir.Arg(copy_one(x.name, calltypes), copy_one(x.index, calltypes), copy_one(x.loc, calltypes), x.openmp_ptr, x.reverse)
+    elif isinstance(x, ir.SetItem):
+        ctyp = calltypes[x]
+        ret = ir.SetItem(copy_one(x.target, calltypes), copy_one(x.index, calltypes), copy_one(x.value, calltypes), copy_one(x.loc, calltypes))
+        calltypes[ret] = ctyp
+        return ret
+    elif isinstance(x, ir.StaticSetItem):
+        ctyp = calltypes[x]
+        ret = ir.StaticSetItem(copy_one(x.target, calltypes), copy_one(x.index, calltypes), copy_one(x.index_var, calltypes), copy_one(x.value, calltypes), copy_one(x.loc, calltypes))
+        calltypes[ret] = ctyp
+        return ret
+    print("Failed to handle the following type when copying target IR.", type(x))
+    #breakpoint()
+    assert False
+
+
 def copy_ir(input_ir, calltypes, depth=1):
     assert depth >= 0 and depth <= 1
 
@@ -576,12 +637,9 @@ def copy_ir(input_ir, calltypes, depth=1):
         for blk in cur_ir.blocks.values():
             for i in range(len(blk.body)):
                 if not isinstance(blk.body[i], (openmp_region_start, openmp_region_end)):
-                    if isinstance(blk.body[i], ir.Print):
-                        ctyp = calltypes[blk.body[i]]
-                        blk.body[i] = copy.copy(blk.body[i])
-                        calltypes[blk.body[i]] = ctyp
-                        continue
+                    blk.body[i] = copy_one(blk.body[i], calltypes)
 
+                    """
                     if iscall(blk.body[i]):
                         ctyp = calltypes[blk.body[i].value]
                         blk.body[i] = copy.copy(blk.body[i])
@@ -594,14 +652,21 @@ def copy_ir(input_ir, calltypes, depth=1):
                             calltypes[blk.body[i]] = ctyp
                     else:
                         ctyp = None
-                        blk.body[i] = copy.copy(blk.body[i])
+                        stmt = blk.body[i]
+                        if isinstance(stmt, ir.Assign):
+                            blk.body[i] = ir.Assign(copy_one(stmt.value, calltypes), copy_one(stmt.target, calltypes), copy_one(stmt.loc, calltypes))
+                        else:
+                            blk.body[i] = copy.copy(stmt)
+                    """
 
 
     return cur_ir
 
 
 def is_target_tag(x):
-    return x.startswith("DIR.OMP.TARGET") and x not in ["DIR.OMP.TARGET.DATA", "DIR.OMP.TARGET.ENTER.DATA", "DIR.OMP.TARGET.EXIT.DATA"]
+    ret = x.startswith("DIR.OMP.TARGET") and x not in ["DIR.OMP.TARGET.DATA", "DIR.OMP.TARGET.ENTER.DATA", "DIR.OMP.TARGET.EXIT.DATA"]
+    #print("is_target_tag:", x, ret)
+    return ret
 
 
 class openmp_region_start(ir.Stmt):
@@ -908,7 +973,9 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 print("openmp start region lower has target", type(lowerer.func_ir))
             # Make a copy of the host IR being lowered.
+            dprint_func_ir(lowerer.func_ir, "original func_ir")
             func_ir = copy_ir(lowerer.func_ir, calltypes)
+            dprint_func_ir(func_ir, "copied func_ir")
             if config.DEBUG_OPENMP >= 1:
                 for k,v in lowerer.func_ir.blocks.items():
                     print("region ids block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
@@ -1059,19 +1126,21 @@ class openmp_region_start(ir.Stmt):
             for tag in self.tags:
                 if config.DEBUG_OPENMP >= 1:
                     print(1, "target_arg?", tag)
-                if tag.arg in target_args:
-                #if not tag.non_arg and is_target_arg(tag.name):
+                #if tag.arg in target_args:
+                if tag.arg in target_args and not tag.non_arg and is_target_arg(tag.name):
                     #target_args.append(tag.arg)
                     target_arg_index = target_args.index(tag.arg)
                     atyp = get_dotted_type(tag.arg, typemap, lowerer)
                     if is_pointer_target_arg(tag.name, atyp):
                         outline_arg_typs[target_arg_index] = types.CPointer(atyp)
                         #outline_arg_typs.append(types.CPointer(atyp))
+                        if config.DEBUG_OPENMP >= 1:
+                            print(1, "found cpointer target_arg", tag)
                     else:
                         outline_arg_typs[target_arg_index] = atyp
                         #outline_arg_typs.append(atyp)
-                    if config.DEBUG_OPENMP >= 1:
-                        print(1, "found target_arg", tag)
+                        if config.DEBUG_OPENMP >= 1:
+                            print(1, "found target_arg", tag)
 
             #outline_arg_typs = tuple([typemap[x] for x in target_args])
             if config.DEBUG_OPENMP >= 1:
@@ -1331,6 +1400,7 @@ class openmp_region_start(ir.Stmt):
                 print("===================================================================================")
 
 
+            breakpoint()
             cres = compiler.compile_ir(typingctx,
                                        device_target,
                                        outlined_ir,
@@ -1345,6 +1415,10 @@ class openmp_region_start(ir.Stmt):
                                        #pipeline_class=Compiler,
                                        is_lifted_loop=False,  # tried this as True since code derived from loop lifting code but it goes through the pipeline twice and messes things up
                                        parent_state=state_copy)
+
+            if selected_device == 0:
+                from numba.cpython import printimpl
+                subtarget.install_registry(printimpl.registry)
 
             if config.DEBUG_OPENMP >= 2:
                 print("cres:", type(cres))
@@ -3496,14 +3570,16 @@ class OpenmpVisitor(Transformer):
 
         sblk = self.blocks[self.blk_start]
         clauses, _ = self.flatten(args[lexer_count:], sblk)
-        if len(self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS")) == 0:
-            if config.DEBUG_OPENMP >= 1:
-                print("Adding NUM_TEAMS implicit clause.")
-            start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
-        if len(self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")) == 0:
-            if config.DEBUG_OPENMP >= 1:
-                print("Adding THREAD_LIMIT implicit clause.")
-            start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
+        #if len(self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS")) == 0:
+        #    if config.DEBUG_OPENMP >= 1:
+        #        print("Adding NUM_TEAMS implicit clause.")
+        #    start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
+        start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
+        #if len(self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")) == 0:
+        #    if config.DEBUG_OPENMP >= 1:
+        #        print("Adding THREAD_LIMIT implicit clause.")
+        #    start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
+        start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
 
         if "TEAMS" in dir_tag:
             self.teams_back_prop(start_tags, clauses)
@@ -3652,14 +3728,18 @@ class OpenmpVisitor(Transformer):
 
         or_start = openmp_region_start(start_tags, 0, self.loc)
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
-        target_block = ir.Block(scope, self.loc)
-        target_block.body = [or_start] + after_start + sblk.body[:]
-        self.blocks[new_target_block_num] = target_block
 
         if has_loop:
-            entry_pred.body = entry_pred.body[:-1] + before_start + for_before_start + [or_start] + after_start + for_after_start + [entry_pred.body[-1]]
+            target_block = ir.Block(scope, self.loc)
+            target_block.body = [or_start] + after_start + for_after_start + [entry_pred.body[-1]]
+            self.blocks[new_target_block_num] = target_block
+            entry_pred.body = entry_pred.body[:-1] + before_start + for_before_start + [ir.Jump(new_target_block_num, self.loc)]
+            #entry_pred.body = entry_pred.body[:-1] + before_start + for_before_start + [or_start] + after_start + for_after_start + [entry_pred.body[-1]]
             exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
         else:
+            target_block = ir.Block(scope, self.loc)
+            target_block.body = [or_start] + after_start + sblk.body[:]
+            self.blocks[new_target_block_num] = target_block
             sblk.body = priv_saves + before_start + [ir.Jump(new_target_block_num, self.loc)]
             eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
 
