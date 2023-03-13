@@ -61,8 +61,10 @@ class FunctionDescriptor(object):
             # (note the "arg.FOO" convention as used in typeinfer
             def cpointer_check(a):
                 ty = self.typemap['arg.' + a]
-                if hasattr(ty, "cpointer") and ty.cpointer:
+                if a.startswith("cpointer."):
                     ty = types.CPointer(ty)
+                #if hasattr(ty, "cpointer") and ty.cpointer:
+                #    ty = types.CPointer(ty)
                 return ty
 
             self.argtypes = tuple(cpointer_check(a) for a in args)

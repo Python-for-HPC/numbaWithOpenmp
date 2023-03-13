@@ -20,6 +20,7 @@ from numba.core.ir_utils import (
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, find_top_level_loops
 from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils, typing, cpu
+from numba import np as numba_np
 from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
 from numba.extending import overload
@@ -231,7 +232,7 @@ class openmp_tag(object):
             else:
                 arg_str = lowerer.getvar(x.name)
                 if isinstance(arg_str, lir.values.Argument):
-                    pass
+                    decl = str(arg_str)
                 else:
                     decl = arg_str.get_decl()
         elif isinstance(x, lir.instructions.AllocaInstr):
@@ -257,7 +258,10 @@ class openmp_tag(object):
                 else:
                     arg_str = lowerer.getvar(xsplit[0])
                     #arg_str = lowerer.getvar(x)
-                    decl = arg_str.get_decl()
+                    if isinstance(arg_str, lir.Argument):
+                        decl = str(arg_str)
+                    else:
+                        decl = arg_str.get_decl()
                     if len(xsplit) > 1:
                         cur_typ = xtyp
                         field_indices = []
@@ -592,7 +596,7 @@ def copy_one(x, calltypes):
         return tuple([copy_one(v, calltypes) for v in x])
     elif isinstance(x, ir.Const):
         return ir.Const(copy_one(x.value, calltypes), copy_one(x.loc, calltypes), x.use_literal_type)
-    elif isinstance(x, (int,str,ir.Global,python_types.BuiltinFunctionType,ir.UndefinedType,type(None))):
+    elif isinstance(x, (int,float,str,ir.Global,python_types.BuiltinFunctionType,ir.UndefinedType,type(None))):
         return x
     elif isinstance(x, ir.Var):
         return ir.Var(x.scope, copy_one(x.name, calltypes), copy_one(x.loc, calltypes))
@@ -702,8 +706,14 @@ class openmp_region_start(ir.Stmt):
                     var = self.tags[i].arg
                     self.tags[i].arg = ir.Var(var.scope, namedict[var.name], var.log)
             elif isinstance(self.tags[i].arg, str):
-                if self.tags[i].arg in namedict:
-                    self.tags[i].arg = namedict[self.tags[i].arg]
+                if "*" in self.tags[i].arg:
+                    xsplit = self.tags[i].arg.split("*")
+                    assert len(xsplit) == 2
+                    if xsplit[0] in namedict:
+                        self.tags[i].arg = namedict[xsplit[0]] + "*" + xsplit[1]
+                else:
+                    if self.tags[i].arg in namedict:
+                        self.tags[i].arg = namedict[self.tags[i].arg]
 
     def add_tag(self, tag):
         tag_arg_str = None
@@ -956,9 +966,6 @@ class openmp_region_start(ir.Stmt):
                         loaded_pointee = loaded_op.type.pointee
                         loaded_str = str(loaded_pointee) + " * " + loaded_size._get_reference()
                         struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
-                        #struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, loaded_str)))
-                        #struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, lowerer.getvar(size_var.name).get_decl())))
-                        #struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, lowerer.loadvar(size_var.name))))
                         struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, cur_tag_ndim)))
                         struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, cur_tag_ndim)))
                         cur_tag.name = "QUAL.OMP.MAP.TOFROM"
@@ -1134,12 +1141,12 @@ class openmp_region_start(ir.Stmt):
                         outline_arg_typs[target_arg_index] = types.CPointer(atyp)
                         #outline_arg_typs.append(types.CPointer(atyp))
                         if config.DEBUG_OPENMP >= 1:
-                            print(1, "found cpointer target_arg", tag)
+                            print(1, "found cpointer target_arg", tag, atyp, id(atyp))
                     else:
                         outline_arg_typs[target_arg_index] = atyp
                         #outline_arg_typs.append(atyp)
                         if config.DEBUG_OPENMP >= 1:
-                            print(1, "found target_arg", tag)
+                            print(1, "found target_arg", tag, atyp, id(atyp))
 
             #outline_arg_typs = tuple([typemap[x] for x in target_args])
             if config.DEBUG_OPENMP >= 1:
@@ -1196,19 +1203,67 @@ class openmp_region_start(ir.Stmt):
                 #atyp = typemap[tag.arg]
                 #state_copy.typemap[arg_name] = typemap[var_in]
                 if isinstance(vtyp, types.CPointer):
+                    new_vtyp = vtyp.dtype
+                    arg_name = "arg.cpointer." + var_in
+                    state_copy.typemap.pop(arg_name, None)
+                    state_copy.typemap[arg_name] = new_vtyp
+                    arg_index = outlined_ir.arg_names.index(var_in)
+                    outlined_ir.arg_names = tuple([outlined_ir.arg_names[i] if i != arg_index else "cpointer." + var_in for i in range(len(outlined_ir.arg_names))])
+                    """
+                    new_vtyp = copy.copy(vtyp.dtype)
+                    new_vtyp.cpointer = True
+                    new_vtyp.target_arg = True
+                    state_copy.typemap.pop(arg_name, None)
+                    state_copy.typemap[arg_name] = new_vtyp
+                    print("adding cpointer to type:", vtyp, vtyp.dtype, id(vtyp.dtype), new_vtyp, id(new_vtyp))
+                    """
+
+                    """
+                    #class cpointer_wrap(type(vtyp)):
                     class cpointer_wrap(type(vtyp.dtype)):
                         def __init__(self, base):
-                            self.cpointer = True
-                            self.__dict__.update(vtyp.dtype.__dict__)
+                            self.cpointer = isinstance(vtyp, types.CPointer)
+                            self.target_arg = True
+                            self.base = base
+                            #self.__dict__.update(vtyp.__dict__)
+                            self.__dict__.update(base.__dict__)
+                            #self.__dict__.update(vtyp.dtype.__dict__)
                             #super().__init__(*args)
+                    #model_register(cpointer_wrap)(type(model_manager[vtyp]))
                     model_register(cpointer_wrap)(type(model_manager[vtyp.dtype]))
+                    #cvtyp = cpointer_wrap(vtyp)
                     cvtyp = cpointer_wrap(vtyp.dtype)
                     state_copy.typemap.pop(arg_name, None)
                     state_copy.typemap[arg_name] = cvtyp
-                    cpointer_args.append(var_in)
-                    new_cpointer_arg_var_dict[var_in] = arg_name
+                    if isinstance(vtyp.dtype, types.npytypes.Array):
+                        breakpoint()
+                        pass
+                        @imputils.lower_getattr(cpointer_wrap, "size")
+                        def cpointer_array_size(context, builder, typ, value):
+                            breakpoint()
+                            arrayty = numba_np.arrayobj.make_array(typ.base)
+                            array = arrayty(context, builder, value)
+                            #array = arrayty(context, builder, builder.load(value))
+                            res = array.nitems
+                            return imputils.impl_ret_untracked(context, builder, typ, res)
+                        @typing.templates.infer_getattr
+                        class cpointer_wrap_arrayattribute(typing.templates.AttributeTemplate):
+                            key = cpointer_wrap
+
+                            def resolve_size(self, any):
+                                return types.intp
+
+                        @imputils.lower_builtin('static_setitem', cpointer_wrap, types.IntegerLiteral, types.Any)
+                        def cpointer_wrap_static_setitem_int(context, builder, sig, args):
+                            breakpoint()
+                    """
+
+                    if isinstance(vtyp, types.CPointer):
+                        cpointer_args.append(var_in)
+                        new_cpointer_arg_var_dict[var_in] = arg_name
                     #arg_assigns.append(ir.Assign(ir.Arg(var_in, idx, self.loc, openmp_ptr=True), ir.Var(None, var_in, self.loc), self.loc))
                     #rev_arg_assigns.append(ir.RevArgAssign(ir.Var(None, var_in, self.loc), ir.Arg(var_in, idx, self.loc, openmp_ptr=True, reverse=True), self.loc))
+
             if len(new_cpointer_arg_var_dict) > 0:
                 replace_var_names(outlined_ir.blocks, new_cpointer_arg_var_dict)
                 for blk in outlined_ir.blocks.values():
@@ -1310,22 +1365,41 @@ class openmp_region_start(ir.Stmt):
                     """
                     Get the implemented Function type for *restype* and *argtypes*.
                     """
-                    arginfo = self._get_arg_packer(argtypes)
-                    argtypes = list(arginfo.argument_types)
-                    #resptr = self.get_return_type(restype)
-                    #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
-                    fnty = lir.FunctionType(errcode_t, argtypes)
-                    return fnty
+                    if True:
+                        argtypes = [self.context.get_value_type(x) for x in argtypes]
+                        #argtypes = [self.context.get_value_type(x).as_pointer() for x in argtypes]
+                        #resptr = self.get_return_type(restype)
+                        #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
+                        fnty = lir.FunctionType(errcode_t, argtypes)
+                        return fnty
+                    else:
+                        arginfo = self._get_arg_packer(argtypes)
+                        argtypes = list(arginfo.argument_types)
+                        #resptr = self.get_return_type(restype)
+                        #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
+                        fnty = lir.FunctionType(errcode_t, argtypes)
+                        return fnty
 
                 def decorate_function(self, fn, args, fe_argtypes, noalias=False):
                     """
                     Set names and attributes of function arguments.
                     """
                     assert not noalias
-                    arginfo = self._get_arg_packer(fe_argtypes)
-                    arginfo.assign_names(self.get_arguments(fn),
-                                         ['arg.' + a for a in args])
+                    if True:
+                        arg_names = ['arg.' + a for a in args]
+                        for fnarg, arg_name in zip(fn.args, arg_names):
+                            fnarg.name = arg_name
+                    else:
+                        arginfo = self._get_arg_packer(fe_argtypes)
+                        arginfo.assign_names(self.get_arguments(fn),
+                                             ['arg.' + a for a in args])
                     return fn
+
+                def decode_arguments(self, builder, argtypes, func):
+                    raw_args = self.get_arguments(func)
+                    return raw_args
+                    #arginfo = self._get_arg_packer(argtypes)
+                    #return arginfo.from_arguments(builder, raw_args)
 
             if selected_device == 0:
                 flags = Flags()
@@ -2020,10 +2094,11 @@ def is_target_arg(name):
 def is_pointer_target_arg(name, typ):
     if name.startswith("QUAL.OMP.MAP"):
         if isinstance(typ, types.npytypes.Array):
-            return False
+            return True
+            #return False
         else:
             return True
-    if name in ["QUAL.OMP.FIRSTPRIVATE"]:
+    if name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.PRIVATE"]:
         return False
     if name in ["QUAL.OMP.TARGET.IMPLICIT"]:
         if isinstance(typ, types.npytypes.Array):
@@ -3328,7 +3403,15 @@ class OpenmpVisitor(Transformer):
     def target_data_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit target_data_clause", args, type(args), args[0])
-        return args[0]
+        (val,) = args
+        if isinstance(val, openmp_tag):
+            return [val]
+        elif isinstance(val, list):
+            return val
+        elif val == 'nowait':
+            return openmp_tag("QUAL.OMP.NOWAIT")
+        else:
+            return val
 
     def device_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
@@ -3348,6 +3431,17 @@ class OpenmpVisitor(Transformer):
         ret = []
         for var in var_list:
             ret.append(openmp_tag("QUAL.OMP.MAP." + map_type, var))
+        return ret
+
+    def depend_with_modifier_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit depend_with_modifier_clause", args, type(args), args[0])
+        dep_type = args[1].upper()
+        var_list = args[2]
+        assert(len(args) == 3)
+        ret = []
+        for var in var_list:
+            ret.append(openmp_tag("QUAL.OMP.DEPEND." + dep_type, var))
         return ret
 
     def map_type(self, args):
@@ -3555,6 +3649,18 @@ class OpenmpVisitor(Transformer):
             names = [names]
         return list(filter(lambda x: any([x.name.startswith(y) for y in names]), clauses))
 
+    def target_enter_data_directive(self, args):
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_enter_data_directive", args, type(args))
+
+        clauses, _ = self.flatten(args[3:], sblk)
+        or_start = openmp_region_start([openmp_tag("DIR.OMP.TARGET.ENTER.DATA")] + clauses, 0, self.loc)
+        or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TARGET.ENTER.DATA")], self.loc)
+        sblk.body = [or_start] + [or_end] + sblk.body[:]
+
     def some_target_directive(self, args, dir_tag, lexer_count, has_loop=False):
         if config.DEBUG_OPENMP >= 1:
             print("visit some_target_directive", args, type(args), self.blk_start, self.blk_end)
@@ -3710,11 +3816,18 @@ class OpenmpVisitor(Transformer):
         # before entering the region and then restore it afterwards but we have to restore it to the SSA
         # version of the variable at that point.
         for cp in clause_privates:
-            cpvar = ir.Var(scope, cp, self.loc)
-            cplovar = ir.Var(scope, clause_privates[cp], self.loc)
-            save_var = scope.redefine("$"+cp, self.loc)
-            priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
-            priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
+            if cp in replace_vardict:
+                cpvar = ir.Var(scope, cp, self.loc)
+                cplovar = ir.Var(scope, clause_privates[cp], self.loc)
+                save_var = scope.redefine(replace_vardict[cp].name, self.loc)
+                priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
+                priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
+            else:
+                cpvar = ir.Var(scope, cp, self.loc)
+                cplovar = ir.Var(scope, clause_privates[cp], self.loc)
+                save_var = scope.redefine("$"+cp, self.loc)
+                priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
+                priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
 
         keep_alive = []
         tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
@@ -3749,7 +3862,16 @@ class OpenmpVisitor(Transformer):
             print("visit target_clause", args, type(args), args[0])
             if isinstance(args[0], list):
                 print(args[0][0])
-        return args[0]
+        (val,) = args
+        if isinstance(val, openmp_tag):
+            return [val]
+        elif isinstance(val, list):
+            return val
+        elif val == 'nowait':
+            return openmp_tag("QUAL.OMP.NOWAIT")
+        else:
+            return val
+        #return args[0]
 
     def target_teams_clause(self, args):
         if config.DEBUG_OPENMP >= 1:

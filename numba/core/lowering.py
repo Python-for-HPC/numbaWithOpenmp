@@ -394,6 +394,7 @@ class Lower(BaseLower):
             pass
 
     def lower_inst(self, inst):
+        #print("lower_inst:", inst)
         # Set debug location for all subsequent LL instructions
         self.debuginfo.mark_location(self.builder, self.loc.line)
         self.debug_print(str(inst))
@@ -1343,7 +1344,8 @@ class Lower(BaseLower):
             # quit early
             return
 
-        if hasattr(fetype, "cpointer") and fetype.cpointer:
+        #if hasattr(fetype, "cpointer") and fetype.cpointer:
+        if name.startswith("arg.cpointer."):
             llty = self.context.get_value_type(types.CPointer(fetype))
             ptr = values.Argument(self.module, llty, name)
             self.varmap[name] = ptr
@@ -1365,6 +1367,11 @@ class Lower(BaseLower):
         if not self._disable_sroa_like_opt:
             assert name not in self._blk_local_varmap
             assert name not in self._singly_assigned_vars
+
+        if name not in self.varmap:
+            fetype = self.typeof(name)
+            self._alloca_var(name, fetype)
+
         return self.varmap[name]
 
     def loadvar(self, name):
@@ -1417,7 +1424,8 @@ class Lower(BaseLower):
             if name in self._singly_assigned_vars:
                 self._singly_assigned_vars.discard(name)
 
-        if hasattr(fetype, "cpointer") and fetype.cpointer:
+        if name.startswith("arg.cpointer."):
+        #if hasattr(fetype, "cpointer") and fetype.cpointer:
             return
 
         # Define if not already (may happen if the variable is deleted
