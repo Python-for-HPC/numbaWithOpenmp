@@ -380,7 +380,6 @@ class BaseContext(object):
         """
 
     def uninsert_func_defn(self, defns):
-        breakpoint()
         for impl, func, sig in defns:
             self._defns[func].versions = list(filter(lambda x: x[1] != impl, self._defns[func].versions))
             self._defns[func]._cache = {}
