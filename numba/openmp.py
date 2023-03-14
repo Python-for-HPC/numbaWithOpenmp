@@ -1491,8 +1491,11 @@ class openmp_region_start(ir.Stmt):
                                        parent_state=state_copy)
 
             if selected_device == 0:
-                from numba.cpython import printimpl
-                subtarget.install_registry(printimpl.registry)
+                #from numba.cpython import printimpl
+                ##subtarget.install_registry(printimpl.registry)
+                #targetctx.install_registry(printimpl.registry)
+                #targetctx.refresh()
+                subtarget.uninstall_registry(printreg)
 
             if config.DEBUG_OPENMP >= 2:
                 print("cres:", type(cres))

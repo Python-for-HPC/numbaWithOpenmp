@@ -366,6 +366,43 @@ class BaseContext(object):
             obj.cached_internal_func = {}
         return obj
 
+    def uninstall_registry(self, registry):
+        """
+        Install a *registry* (a imputils.Registry instance) of function
+        and attribute implementations.
+        """
+        self.uninsert_func_defn(registry.functions)
+        """
+        self._uninsert_getattr_defn(loader.new_registrations('getattrs'))
+        self._uninsert_setattr_defn(loader.new_registrations('setattrs'))
+        self._uninsert_cast_defn(loader.new_registrations('casts'))
+        self._uninsert_get_constant_defn(loader.new_registrations('constants'))
+        """
+
+    def uninsert_func_defn(self, defns):
+        breakpoint()
+        for impl, func, sig in defns:
+            self._defns[func].versions = list(filter(lambda x: x[1] != impl, self._defns[func].versions))
+            self._defns[func]._cache = {}
+
+    """
+    def _uninsert_getattr_defn(self, defns):
+        for impl, attr, sig in defns:
+            self._getattrs[attr].append(impl, sig)
+
+    def _uninsert_setattr_defn(self, defns):
+        for impl, attr, sig in defns:
+            self._setattrs[attr].append(impl, sig)
+
+    def _uninsert_cast_defn(self, defns):
+        for impl, sig in defns:
+            self._casts.append(impl, sig)
+
+    def _uninsert_get_constant_defn(self, defns):
+        for impl, sig in defns:
+            self._get_constants.append(impl, sig)
+    """
+
     def install_registry(self, registry):
         """
         Install a *registry* (a imputils.Registry instance) of function
