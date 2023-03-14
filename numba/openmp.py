@@ -627,6 +627,8 @@ def copy_one(x, calltypes):
         ret = ir.StaticSetItem(copy_one(x.target, calltypes), copy_one(x.index, calltypes), copy_one(x.index_var, calltypes), copy_one(x.value, calltypes), copy_one(x.loc, calltypes))
         calltypes[ret] = ctyp
         return ret
+    elif isinstance(x, ir.FreeVar):
+        return ir.FreeVar(copy_one(x.index, calltypes), copy_one(x.name, calltypes), copy_one(x.value, calltypes), copy_one(x.loc, calltypes))
     print("Failed to handle the following type when copying target IR.", type(x))
     assert False
 
