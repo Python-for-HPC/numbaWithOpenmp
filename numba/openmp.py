@@ -5122,33 +5122,63 @@ def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra
         sys.exit(-3)
     assert(blocks is visitor.blocks)
 
-omp_set_num_threads = types.ExternalFunction('omp_set_num_threads', types.void(types.int32))
-omp_get_thread_num = types.ExternalFunction('omp_get_thread_num', types.int32())
-omp_get_num_threads = types.ExternalFunction('omp_get_num_threads', types.int32())
-omp_get_wtime = types.ExternalFunction('omp_get_wtime', types.float64())
-omp_set_dynamic = types.ExternalFunction('omp_set_dynamic', types.void(types.int32))
-omp_set_nested = types.ExternalFunction('omp_set_nested', types.void(types.int32))
-omp_set_max_active_levels = types.ExternalFunction('omp_set_max_active_levels', types.void(types.int32))
-omp_get_max_active_levels = types.ExternalFunction('omp_get_max_active_levels', types.int32())
-omp_get_max_threads = types.ExternalFunction('omp_get_max_threads', types.int32())
-omp_get_num_procs = types.ExternalFunction('omp_get_num_procs', types.int32())
-omp_in_parallel = types.ExternalFunction('omp_in_parallel', types.int32())
-omp_get_thread_limit = types.ExternalFunction('omp_get_thread_limit', types.int32())
-omp_get_supported_active_levels = types.ExternalFunction('omp_get_supported_active_levels', types.int32())
-omp_get_level = types.ExternalFunction('omp_get_level', types.int32())
-omp_get_active_level = types.ExternalFunction('omp_get_active_level', types.int32())
-omp_get_ancestor_thread_num = types.ExternalFunction('omp_get_ancestor_thread_num', types.int32(types.int32))
-omp_get_team_size = types.ExternalFunction('omp_get_team_size', types.int32(types.int32))
-omp_in_final = types.ExternalFunction('omp_in_finale', types.int32())
-omp_get_proc_bind = types.ExternalFunction('omp_get_proc_bind', types.int32())
-omp_get_num_places = types.ExternalFunction('omp_get_num_places', types.int32())
-omp_get_place_num_procs = types.ExternalFunction('omp_get_place_num_procs', types.int32(types.int32))
-omp_get_place_num = types.ExternalFunction('omp_get_place_num', types.int32())
-omp_set_default_device = types.ExternalFunction('omp_set_default_device', types.int32(types.int32))
-omp_get_default_device = types.ExternalFunction('omp_get_default_device', types.int32())
-omp_get_num_devices = types.ExternalFunction('omp_get_num_devices', types.int32())
-omp_get_device_num = types.ExternalFunction('omp_get_device_num', types.int32())
-omp_get_team_num = types.ExternalFunction('omp_get_team_num', types.int32())
-omp_get_num_teams = types.ExternalFunction('omp_get_num_teams', types.int32())
-omp_is_initial_device = types.ExternalFunction('omp_is_initial_device', types.int32())
-omp_get_initial_device = types.ExternalFunction('omp_get_initial_device', types.int32())
+
+class OpenmpExternalFunction(types.ExternalFunction):
+    def __call__(self, *args):
+        import inspect
+        frm = inspect.stack()[1]
+        mod = inspect.getmodule(frm[0])
+        if mod.__name__.startswith("numba"):
+            return super(ExternalFunction, self).__call__(*args)
+        
+        from cffi import FFI
+        ffi = FFI()
+        fname = self.symbol
+        ret_typ = str(self.sig.return_type)
+        def numba_to_c(ret_typ):
+            if ret_typ == "int32":
+                return "int"
+            elif ret_typ == "none":
+                return "void"
+            elif ret_typ == "float64":
+                return "double"
+            else:
+                assert False
+        ret_typ = numba_to_c(ret_typ)
+        arg_str = ",".join([numba_to_c(str(x)) for x in self.sig.args])
+        proto = f"{ret_typ} {fname}({arg_str});"
+        ffi.cdef(proto)
+        C = ffi.dlopen(None)
+        return getattr(C, fname)(*args)
+
+
+omp_set_num_threads = OpenmpExternalFunction('omp_set_num_threads', types.void(types.int32))
+omp_get_thread_num = OpenmpExternalFunction('omp_get_thread_num', types.int32())
+omp_get_num_threads = OpenmpExternalFunction('omp_get_num_threads', types.int32())
+omp_get_wtime = OpenmpExternalFunction('omp_get_wtime', types.float64())
+omp_set_dynamic = OpenmpExternalFunction('omp_set_dynamic', types.void(types.int32))
+omp_set_nested = OpenmpExternalFunction('omp_set_nested', types.void(types.int32))
+omp_set_max_active_levels = OpenmpExternalFunction('omp_set_max_active_levels', types.void(types.int32))
+omp_get_max_active_levels = OpenmpExternalFunction('omp_get_max_active_levels', types.int32())
+omp_get_max_threads = OpenmpExternalFunction('omp_get_max_threads', types.int32())
+omp_get_num_procs = OpenmpExternalFunction('omp_get_num_procs', types.int32())
+omp_in_parallel = OpenmpExternalFunction('omp_in_parallel', types.int32())
+omp_get_thread_limit = OpenmpExternalFunction('omp_get_thread_limit', types.int32())
+omp_get_supported_active_levels = OpenmpExternalFunction('omp_get_supported_active_levels', types.int32())
+omp_get_level = OpenmpExternalFunction('omp_get_level', types.int32())
+omp_get_active_level = OpenmpExternalFunction('omp_get_active_level', types.int32())
+omp_get_ancestor_thread_num = OpenmpExternalFunction('omp_get_ancestor_thread_num', types.int32(types.int32))
+omp_get_team_size = OpenmpExternalFunction('omp_get_team_size', types.int32(types.int32))
+omp_in_final = OpenmpExternalFunction('omp_in_finale', types.int32())
+omp_get_proc_bind = OpenmpExternalFunction('omp_get_proc_bind', types.int32())
+omp_get_num_places = OpenmpExternalFunction('omp_get_num_places', types.int32())
+omp_get_place_num_procs = OpenmpExternalFunction('omp_get_place_num_procs', types.int32(types.int32))
+omp_get_place_num = OpenmpExternalFunction('omp_get_place_num', types.int32())
+omp_set_default_device = OpenmpExternalFunction('omp_set_default_device', types.int32(types.int32))
+omp_get_default_device = OpenmpExternalFunction('omp_get_default_device', types.int32())
+omp_get_num_devices = OpenmpExternalFunction('omp_get_num_devices', types.int32())
+omp_get_device_num = OpenmpExternalFunction('omp_get_device_num', types.int32())
+omp_get_team_num = OpenmpExternalFunction('omp_get_team_num', types.int32())
+omp_get_num_teams = OpenmpExternalFunction('omp_get_num_teams', types.int32())
+omp_is_initial_device = OpenmpExternalFunction('omp_is_initial_device', types.int32())
+omp_get_initial_device = OpenmpExternalFunction('omp_get_initial_device', types.int32())
