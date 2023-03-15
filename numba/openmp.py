@@ -596,7 +596,7 @@ def copy_one(x, calltypes):
         return tuple([copy_one(v, calltypes) for v in x])
     elif isinstance(x, ir.Const):
         return ir.Const(copy_one(x.value, calltypes), copy_one(x.loc, calltypes), x.use_literal_type)
-    elif isinstance(x, (int,float,str,ir.Global,python_types.BuiltinFunctionType,ir.UndefinedType,type(None))):
+    elif isinstance(x, (int,float,str,ir.Global,python_types.BuiltinFunctionType,ir.UndefinedType,type(None),types.functions.ExternalFunction)):
         return x
     elif isinstance(x, ir.Var):
         return ir.Var(x.scope, copy_one(x.name, calltypes), copy_one(x.loc, calltypes))
@@ -5420,6 +5420,7 @@ for fname, retinfo, arginfo in omp_runtime_funcs:
     exec(odef, gdict, ldict)
     oout = ldict[f"ol_{fname}"]
     overload(fout)(oout)
+    #overload(fout, jit_options={'forceinline':True})(oout)
 
     # ----- Create Numba cuda overload for this openmp runtime function.
     lirret = tolir(retinfo[1])
