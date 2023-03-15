@@ -315,6 +315,7 @@ _options_mixin = include_default_options(
     "fastmath",
     "error_model",
     "inline",
+    "forceinline",
     "enable_ssa",
     # Add "target_backend" as a accepted option for the CPU in @jit(...)
     "target_backend",
@@ -344,6 +345,8 @@ class CPUTargetOptions(_options_mixin, TargetOptions):
 
         # Add "target_backend" as a option that inherits from the caller
         flags.inherit_if_not_set("target_backend")
+
+        flags.inherit_if_not_set("forceinline")
 
 # ----------------------------------------------------------------------------
 # Internal
