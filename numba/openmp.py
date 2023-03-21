@@ -2584,6 +2584,9 @@ class OpenmpVisitor(Transformer):
                 b.openmp_replace_vardict = []
             b.openmp_replace_vardict.append(replace_vardict)
 
+    def add_private_to_enclosing(self, replace_vardict, enclosing_tags):
+        enclosing_tags.extend([openmp_tag("QUAL.OMP.PRIVATE", v) for v in replace_vardict.values()])
+        
     def replace_private_vars(self, blocks, all_explicits, explicit_privates, clauses, scope, loc, orig_inputs_to_region, for_target=False):
         replace_vardict = {}
         # Generate a new Numba privatized variable for each openmp private variable.
@@ -3071,6 +3074,7 @@ class OpenmpVisitor(Transformer):
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_start_var.name))
                     tags_for_enclosing = [omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
                     tags_for_enclosing = [openmp_tag("QUAL.OMP.PRIVATE", x) for x in tags_for_enclosing]
+                    self.add_private_to_enclosing(replace_vardict, tags_for_enclosing)
                     add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
                     #start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.IV", loop_index.name))
                     #start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.UB", size_var.name))
@@ -3193,6 +3197,7 @@ class OpenmpVisitor(Transformer):
                 print(c)
 
         tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, gen_shared, start_tags, keep_alive)
+        self.add_private_to_enclosing(replace_vardict, tags_for_enclosing)
         add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
 
         or_start = openmp_region_start(start_tags, 0, self.loc)
@@ -3836,6 +3841,7 @@ class OpenmpVisitor(Transformer):
 
         keep_alive = []
         tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
+        self.add_private_to_enclosing(replace_vardict, tags_for_enclosing)
         add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
 
         #or_start = openmp_region_start([openmp_tag("DIR.OMP.TARGET", target_num)] + clauses, 0, self.loc)
@@ -4160,6 +4166,7 @@ class OpenmpVisitor(Transformer):
             print("visit task_directive", args, type(args), clauses)
 
         tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
+        #self.add_private_to_enclosing(replace_vardict, enclosing_tags)
         add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
         or_start = openmp_region_start(start_tags, 0, self.loc)
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
@@ -4447,6 +4454,7 @@ class OpenmpVisitor(Transformer):
         end_tags = [openmp_tag("DIR.OMP.END.PARALLEL")]
         keep_alive = []
         tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
+        self.add_private_to_enclosing(replace_vardict, tags_for_enclosing)
         add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
         #self.add_variables_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive, inputs_to_region, def_but_live_out, private_to_region)
 
@@ -5333,7 +5341,7 @@ class OpenmpExternalFunction(types.ExternalFunction):
         import inspect
         frm = inspect.stack()[1]
         mod = inspect.getmodule(frm[0])
-        if mod.__name__.startswith("numba"):
+        if mod.__name__.startswith("numba") and not mod.__name__.startswith("numba.tests"):
             return super(ExternalFunction, self).__call__(*args)
         
         from cffi import FFI
