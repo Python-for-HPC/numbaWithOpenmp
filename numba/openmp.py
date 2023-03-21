@@ -1101,11 +1101,11 @@ class openmp_region_start(ir.Stmt):
             )
             # Get the types of the variables live-in to the target region.
             if config.DEBUG_OPENMP >= 1:
-                print("ins:", ins)
-                print("outs:", outs)
+                print("ins:", ins, type(ins))
+                print("outs:", outs, type(outs))
                 print("args:", state.args)
                 print("rettype:", state.return_type, type(state.return_type))
-            target_args = ins + outs
+            target_args = ins + list(set(outs) - set(ins))
             # Re-use Numba loop lifting code to extract the target region as
             # its own function.
             region_info = transforms._loop_lift_info(loop=None,
