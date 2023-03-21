@@ -16,7 +16,7 @@ import copy
 from itertools import cycle, chain
 import subprocess as subp
 
-from numba import njit, typeof
+from numba import njit, typeof, literally
 from numba.core import (types, utils, typing, errors, ir, rewrites,
                         typed_passes, inline_closurecall, config, compiler, cpu)
 from numba.extending import (overload_method, register_model,
@@ -149,6 +149,7 @@ class TestOpenmpBase(TestCase):
 
     skip_disabled = int(os.environ.get("OVERRIDE_TEST_SKIP", 0)) != 0
     run_target = int(os.environ.get("RUN_TARGET", 0)) != 0
+    test_device_1 = int(os.environ.get("TEST_DEVICE_1", 0)) != 0
 
     env_vars = {"OMP_NUM_THREADS": omp_get_num_procs(),
                 "OMP_MAX_ACTIVE_LEVELS": 1,
@@ -2565,9 +2566,159 @@ class TestOpenmpTaskloop(TestOpenmpBase):
 @unittest.skipUnless(TestOpenmpBase.skip_disabled or
                     TestOpenmpBase.run_target, "Unimplemented")
 class TestOpenmpTarget(TestOpenmpBase):
+    devices = [0]
+    if TestOpenmpBase.test_device_1:
+        devices.append(1)
 
     def __init__(self, *args):
         TestOpenmpBase.__init__(self, *args)
+
+    def target_map_tofrom_scalar_parallel(self, device):
+        for explicit in [True, False]:
+            with self.subTest(explicit_shared=explicit):
+                target_pragma = f"target device({device}) map(to: n) map(tofrom: a)"
+                parallel_pragma = "parallel" + (" shared(a)" if explicit else "")
+                @njit
+                def test_impl(n):
+                    a = 1
+                    with openmp(target_pragma):
+                        with openmp(parallel_pragma):
+                            a = n
+                    return a
+                n = 123
+                assert(test_impl(n) == n)
+
+    def target_map_tofrom_scalar_teams_nested(self, device):
+        target_pragma = f"target device({device}) map(to: n) map(tofrom: a)"
+        @njit
+        def test_impl(n):
+            a = 1
+            with openmp(target_pragma):
+                with openmp("teams"):
+                    a = n
+            return a
+        n = 123
+        assert(test_impl(n) == n)    
+
+    def target_map_to_var(self, device):
+        target_pragma = f"target device({device}) map(to: x, n2) map(from: xs)"
+        @njit
+        def test_impl(n1, n2):
+            x = n1
+            with openmp(target_pragma):
+                xs = x
+                x = n2
+            return x, xs
+        n1, n2 = 3, 5
+        r = test_impl(n1, n2)
+        assert(r[0] == n1)
+        assert(r[1] == n1)
+
+    def target_map_from_var(self, device):
+        target_pragma = f"target device({device}) map(to: n2) map(from: x)"
+        @njit
+        def test_impl(n1, n2):
+            x = n1
+            with openmp(target_pragma):
+                # x would be undefined at this point
+                # xs = x
+                x = n2
+            return (x, )#xs
+        n1, n2 = 3, 5
+        r = test_impl(n1, n2)
+        assert(r[0] == n2)
+        # assert(r[1] != n1)
+
+    def target_map_tofrom_scalar_var(self, device):
+        target_pragma = f"target device({device}) map(to: n2) map(from: xs) map(tofrom: x)"
+        @njit
+        def test_impl(n1, n2):
+            x = n1
+            with openmp(target_pragma):
+                xs = x
+                x = n2
+            return x, xs
+        n1, n2 = 3, 5
+        r = test_impl(n1, n2)
+        assert(r[0] == n2)
+        assert(r[1] == n1)
+
+    def target_map_tofrom_array(self, device):
+        target_pragma = f"target device({device}) map(tofrom: a)"
+        @njit
+        def test_impl(n1, n2):
+            a = np.zeros(n1)
+            with openmp(target_pragma):
+                for i in range(len(a)):
+                    a[i] = n2
+            return a
+        n1, n2 = 12, 3
+        np.testing.assert_array_equal(test_impl(n1, n2), np.full(n1, n2))
+
+    def target_parallel_for(self, device):
+        target_pragma = f"target device({device}) map(to: iters, nt) map(tofrom: a)"
+        @njit
+        def test_impl(nt, c):
+            iters = nt * c
+            a = np.zeros(iters)
+            with openmp(target_pragma):
+                with openmp("parallel for num_threads(nt)"):
+                    for i in range(iters):
+                        a[i] = i
+            return a
+        nt, c = 8, 3
+        np.testing.assert_array_equal(test_impl(nt), np.arange(nt*c))
+
+    @unittest.skipUnless(TestOpenmpBase.skip_disabled, "Unimplemented")
+    def target_firstprivate(self, device):
+        target_pragma = f"target device({device}) firstprivate(count) map(to: nt) map(from: cs)"
+        @njit
+        def test_impl(nt, n1, n2):
+            count = n1
+            with openmp(target_pragma):
+                count += n2
+                with openmp("parallel num_threads(nt)"):
+                    with openmp("critical"):
+                        count += 1
+                count += n2
+                cs = count
+            return count, cs
+        nt, n1, n2 = 8, 2, 3
+        r = test_impl(nt, n1, n2)
+        assert(r[0] == n1)
+        assert(r[1] == n1 + nt + 2*n2)
+
+    def target_teams_distribute_parallel_for(self, device):
+        nt = 5
+        target_pragma = f"""target teams distribute parallel for
+                        device({device}) num_teams({nt}) map(tofrom: a)"""
+        @njit
+        def test_impl(nt):
+            a = np.zeros(nt)
+            with openmp(target_pragma):
+                for i in range(nt):
+                    a[i] = i
+            return a
+        np.testing.assert_array_equal(test_impl(nt), np.arange(nt))
+
+    def target_teams_distribute_parallel_for_proof(self, device):
+        nt = 5
+        target_pragma = f"""target teams distribute parallel for
+                        device({device}) num_teams({nt}) map(tofrom: team_num_arr, thread_num_arr)""" 
+        @njit
+        def test_impl(nt):
+            team_num_arr = np.ones(nt)
+            thread_num_arr = np.ones(nt)
+            with openmp(target_pragma):
+                for i in range(nt):
+                    team_num_arr[i] = omp_get_team_num()
+                    thread_num_arr[i] = omp_get_thread_num()
+            return team_num_arr, thread_num_arr
+        r = test_impl(nt)
+        np.testing.assert_array_equal(r[0].sort(), np.arange(nt))
+        np.testing.assert_array_equal(r[1], np.zeros(nt))
+
+    """
 
     def test_target_threads(self):
         @njit
@@ -2597,77 +2748,13 @@ class TestOpenmpTarget(TestOpenmpBase):
         np.testing.assert_array_equal(r[1][1], np.ones(nt))
         assert(r[1][2] == 1)
 
-    def test_target_map_to(self):
-        @njit
-        def test_impl(n1, n2):
-            x = n1
-            with openmp("target map(to: x)"):
-                xs = x
-                x = n2
-            return x, xs
-        n1, n2 = 3, 5
-        r = test_impl(n1, n2)
-        assert(r[0] == n1)
-        assert(r[1] == n1)
-
-    def test_target_map_from(self):
-        @njit
-        def test_impl(n1, n2):
-            x = n1
-            with openmp("target map(from: x)"):
-                xs = x
-                x = n2
-            return x, xs
-        n1, n2 = 3, 5
-        r = test_impl(n1, n2)
-        assert(r[0] == n2)
-        assert(r[1] != n1)
-
-    def test_target_map_tofrom_scalar(self):
-        @njit
-        def test_impl(n1, n2):
-            x = n1
-            with openmp("target map(tofrom: x)"):
-                xs = x
-                x = n2
-            return x, xs
-        n1, n2 = 3, 5
-        r = test_impl(n1, n2)
-        assert(r[0] == n2)
-        assert(r[1] == n1)
-
-    def test_target_map_tofrom_array(self):
-        @njit
-        def test_impl(n1, n2):
-            a = np.zeros(n1)
-            with openmp("target map(tofrom: a)"):
-                for i in range(len(a)):
-                    a[i] = n2
-            return a
-        n1, n2 = 12, 3
-        np.testing.assert_array_equal(test_impl(n1, n2), np.full(n1, n2))
-
-    def test_target_parallel_for(self):
-        @njit
-        def test_impl(nt):
-            iters = nt * 2
-            a = np.zeros(iters)
-            with openmp("target map(tofrom: a)"):
-                with openmp("parallel for num_threads(nt)"):
-                    for i in range(iters):
-                        a[i] = i
-            return a
-        nt = 8
-        np.testing.assert_array_equal(test_impl(nt), np.arange(nt))
-
     def test_target_defaultmap(self):
         @njit
         def test_impl(n1, n2, n3):
             x = n1
             xs = -1
             a = np.full(n3, n4)
-            with openmp("""target defaultmap(from: scalar)
-                defaultmap(tofrom: aggregate) map(from: xs) map(to: n2, n3)"""):
+            with openmp("target defaultmap(from: scalar) defaultmap(tofrom: aggregate) map(from: xs) map(to: n2, n3)"):
                 xs = x
                 x = n2
                 for i in range(n3):
@@ -2679,23 +2766,6 @@ class TestOpenmpTarget(TestOpenmpBase):
         assert(r[1] != n1)
         np.testing.assert_array_equal(r[2], np.full(n3, n4+1))
 
-    def test_target_firstprivate(self):
-        @njit
-        def test_impl(nt, n1, n2):
-            count = n1
-            with openmp("target firstprivate(count) map(from: cs)"):
-                count += n2
-                with openmp("parallel num_threads(nt)"):
-                    with openmp("critical"):
-                        count += 1
-                count += n2
-                cs = count
-            return count, cs
-        nt, n1, n2 = 8, 2, 3
-        r = test_impl(nt, n1, n2)
-        assert(r[0] == n1)
-        assert(r[1] == n1 + nt + 2*n2)
-
     def test_target_teams_threads(self):
         @njit
         def test_impl(nt, tl):
@@ -2703,8 +2773,7 @@ class TestOpenmpTarget(TestOpenmpBase):
             tna = np.zeros(nt)
             tia = np.zeros(nt)
             tsa = np.zeros(nt)
-            with openmp("""target teams num_teams(nt) thread_limit(tl)
-                        private(tn)"""):
+            with openmp("target teams num_teams(nt) thread_limit(tl) private(tn)"):
                 tn = omp_get_team_num()
                 nta[tn] = omp_get_num_teams()
                 tna[tn] = tn + 1
@@ -2720,7 +2789,20 @@ class TestOpenmpTarget(TestOpenmpBase):
         np.testing.assert_equal(1, r[2][r[2] != 0])
         assert(1 <= r[3][0] <= tl)
         np.testing.assert_equal(r[3][0], r[3][r[3] != 0])
-
+    """
+    
+for test_func in [TestOpenmpTarget.target_map_tofrom_scalar_parallel, TestOpenmpTarget.target_map_to_var,
+                  TestOpenmpTarget.target_map_from_var, TestOpenmpTarget.target_map_tofrom_scalar_var,
+                  TestOpenmpTarget.target_map_tofrom_array, TestOpenmpTarget.target_map_tofrom_scalar_teams_nested,
+                  TestOpenmpTarget.target_teams_distribute_parallel_for, TestOpenmpTarget.target_firstprivate,
+                  TestOpenmpTarget.target_teams_distribute_parallel_for_proof, TestOpenmpTarget.target_parallel_for]:
+    def make_func_with_subtest(func):
+        def func_with_subtest(self):
+            for device in TestOpenmpTarget.devices:
+                with self.subTest(device=device):
+                    func(self, device)
+        return func_with_subtest
+    setattr(TestOpenmpTarget, "test_" + test_func.__name__, make_func_with_subtest(test_func))
 
 @linux_only
 class TestOpenmpPi(TestOpenmpBase):

@@ -5333,8 +5333,8 @@ class OpenmpExternalFunction(types.ExternalFunction):
         import inspect
         frm = inspect.stack()[1]
         mod = inspect.getmodule(frm[0])
-        if mod.__name__.startswith("numba"):
-            return super(ExternalFunction, self).__call__(*args)
+        if mod.__name__.startswith("numba") and not mod.__name__.startswith("numba.tests"):
+            return super(types.ExternalFunction, self).__call__(*args)
         
         from cffi import FFI
         ffi = FFI()
