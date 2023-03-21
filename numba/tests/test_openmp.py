@@ -16,7 +16,7 @@ import copy
 from itertools import cycle, chain
 import subprocess as subp
 
-from numba import njit, typeof, literally
+from numba import njit, typeof
 from numba.core import (types, utils, typing, errors, ir, rewrites,
                         typed_passes, inline_closurecall, config, compiler, cpu)
 from numba.extending import (overload_method, register_model,
@@ -2667,7 +2667,7 @@ class TestOpenmpTarget(TestOpenmpBase):
                         a[i] = i
             return a
         nt, c = 8, 3
-        np.testing.assert_array_equal(test_impl(nt), np.arange(nt*c))
+        np.testing.assert_array_equal(test_impl(nt, c), np.arange(nt*c))
 
     @unittest.skipUnless(TestOpenmpBase.skip_disabled, "Unimplemented")
     def target_firstprivate(self, device):
