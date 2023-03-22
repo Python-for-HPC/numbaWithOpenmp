@@ -1101,11 +1101,11 @@ class openmp_region_start(ir.Stmt):
             )
             # Get the types of the variables live-in to the target region.
             if config.DEBUG_OPENMP >= 1:
-                print("ins:", ins)
-                print("outs:", outs)
+                print("ins:", ins, type(ins))
+                print("outs:", outs, type(outs))
                 print("args:", state.args)
                 print("rettype:", state.return_type, type(state.return_type))
-            target_args = ins + outs
+            target_args = ins + list(set(outs) - set(ins))
             # Re-use Numba loop lifting code to extract the target region as
             # its own function.
             region_info = transforms._loop_lift_info(loop=None,
@@ -2097,6 +2097,12 @@ def is_target_arg(name):
 
 
 def is_pointer_target_arg(name, typ):
+    """
+    if name.startswith("QUAL.OMP.MAP.TOFROM"):
+        return True
+    if name.startswith("QUAL.OMP.MAP.TO"):
+        return False
+    """
     if name.startswith("QUAL.OMP.MAP"):
         if isinstance(typ, types.npytypes.Array):
             return True
@@ -2587,6 +2593,9 @@ class OpenmpVisitor(Transformer):
     def add_private_to_enclosing(self, replace_vardict, enclosing_tags):
         enclosing_tags.extend([openmp_tag("QUAL.OMP.PRIVATE", v) for v in replace_vardict.values()])
         
+    def priv_saves_to_tags(self, enclosing_tags, priv_saves):
+        enclosing_tags.extend([openmp_tag("QUAL.OMP.PRIVATE", v.target) for v in priv_saves])
+
     def replace_private_vars(self, blocks, all_explicits, explicit_privates, clauses, scope, loc, orig_inputs_to_region, for_target=False):
         replace_vardict = {}
         # Generate a new Numba privatized variable for each openmp private variable.
@@ -3198,6 +3207,7 @@ class OpenmpVisitor(Transformer):
 
         tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, gen_shared, start_tags, keep_alive)
         self.add_private_to_enclosing(replace_vardict, tags_for_enclosing)
+        self.priv_saves_to_tags(tags_for_enclosing, priv_saves)
         add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
 
         or_start = openmp_region_start(start_tags, 0, self.loc)
@@ -3423,6 +3433,32 @@ class OpenmpVisitor(Transformer):
         else:
             return val
 
+    def target_enter_data_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_enter_data_clause", args, type(args), args[0])
+        (val,) = args
+        if isinstance(val, openmp_tag):
+            return [val]
+        elif isinstance(val, list):
+            return val
+        elif val == 'nowait':
+            return openmp_tag("QUAL.OMP.NOWAIT")
+        else:
+            return val
+
+    def target_exit_data_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_exit_data_clause", args, type(args), args[0])
+        (val,) = args
+        if isinstance(val, openmp_tag):
+            return [val]
+        elif isinstance(val, list):
+            return val
+        elif val == 'nowait':
+            return openmp_tag("QUAL.OMP.NOWAIT")
+        else:
+            return val
+
     def device_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit device_clause", args, type(args))
@@ -3443,6 +3479,30 @@ class OpenmpVisitor(Transformer):
             ret.append(openmp_tag("QUAL.OMP.MAP." + map_type, var))
         return ret
 
+    def map_enter_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit map_enter_clause", args, type(args), args[0])
+        assert args[0] in ["to", "alloc"]
+        map_type = args[0].upper()
+        var_list = args[1]
+        assert(len(args) == 2)
+        ret = []
+        for var in var_list:
+            ret.append(openmp_tag("QUAL.OMP.MAP." + map_type, var))
+        return ret
+
+    def map_exit_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit map_exit_clause", args, type(args), args[0])
+        assert args[0] in ["from", "release", "delete"]
+        map_type = args[0].upper()
+        var_list = args[1]
+        assert(len(args) == 2)
+        ret = []
+        for var in var_list:
+            ret.append(openmp_tag("QUAL.OMP.MAP." + map_type, var))
+        return ret
+
     def depend_with_modifier_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit depend_with_modifier_clause", args, type(args), args[0])
@@ -3457,6 +3517,21 @@ class OpenmpVisitor(Transformer):
     def map_type(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit map_type", args, type(args), args[0])
+        return str(args[0])
+
+    def map_enter_type(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit map_enter_type", args, type(args), args[0])
+        return str(args[0])
+
+    def map_exit_type(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit map_exit_type", args, type(args), args[0])
+        return str(args[0])
+
+    def update_motion_type(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit update_motion_type", args, type(args), args[0])
         return str(args[0])
 
     # Don't need a rule for TO.
@@ -3671,6 +3746,18 @@ class OpenmpVisitor(Transformer):
         or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TARGET.ENTER.DATA")], self.loc)
         sblk.body = [or_start] + [or_end] + sblk.body[:]
 
+    def target_exit_data_directive(self, args):
+        sblk = self.blocks[self.blk_start]
+        eblk = self.blocks[self.blk_end]
+
+        if config.DEBUG_OPENMP >= 1:
+            print("visit target_exit_data_directive", args, type(args))
+
+        clauses, _ = self.flatten(args[3:], sblk)
+        or_start = openmp_region_start([openmp_tag("DIR.OMP.TARGET.EXIT.DATA")] + clauses, 0, self.loc)
+        or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TARGET.EXIT.DATA")], self.loc)
+        sblk.body = [or_start] + [or_end] + sblk.body[:]
+
     def some_target_directive(self, args, dir_tag, lexer_count, has_loop=False):
         if config.DEBUG_OPENMP >= 1:
             print("visit some_target_directive", args, type(args), self.blk_start, self.blk_end)
@@ -3842,6 +3929,7 @@ class OpenmpVisitor(Transformer):
         keep_alive = []
         tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
         self.add_private_to_enclosing(replace_vardict, tags_for_enclosing)
+        self.priv_saves_to_tags(tags_for_enclosing, priv_saves)
         add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
 
         #or_start = openmp_region_start([openmp_tag("DIR.OMP.TARGET", target_num)] + clauses, 0, self.loc)
@@ -3915,22 +4003,39 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for target_update_construct.
 
     def target_update_directive(self, args):
-        raise NotImplementedError("Target update currently unsupported.")
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
 
         if config.DEBUG_OPENMP >= 1:
             print("visit target_update_directive", args, type(args))
+        clauses, _ = self.flatten(args[2:], sblk)
+        or_start = openmp_region_start([openmp_tag("DIR.OMP.TARGET.UPDATE")] + clauses, 0, self.loc)
+        or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TARGET.UPDATE")], self.loc)
+        sblk.body = [or_start] + [or_end] + sblk.body[:]
 
     def target_update_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit target_update_clause", args, type(args), args[0])
-        return args[0]
+        #return args[0]
+        (val,) = args
+        if isinstance(val, openmp_tag):
+            return [val]
+        elif isinstance(val, list):
+            return val
+        else:
+            return val
 
     def motion_clause(self, args):
-        raise NotImplementedError("Motion clause currently unsupported.")
         if config.DEBUG_OPENMP >= 1:
             print("visit motion_clause", args, type(args))
+        assert args[0] in ["to", "from"]
+        map_type = args[0].upper()
+        var_list = args[1]
+        assert(len(args) == 2)
+        ret = []
+        for var in var_list:
+            ret.append(openmp_tag("QUAL.OMP.MAP." + map_type, var))
+        return ret
 
     def variable_array_section_list(self, args):
         if config.DEBUG_OPENMP >= 1:
@@ -4167,6 +4272,7 @@ class OpenmpVisitor(Transformer):
 
         tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
         #self.add_private_to_enclosing(replace_vardict, enclosing_tags)
+        self.priv_saves_to_tags(tags_for_enclosing, priv_saves)
         add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
         or_start = openmp_region_start(start_tags, 0, self.loc)
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
@@ -4455,6 +4561,7 @@ class OpenmpVisitor(Transformer):
         keep_alive = []
         tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
         self.add_private_to_enclosing(replace_vardict, tags_for_enclosing)
+        self.priv_saves_to_tags(tags_for_enclosing, priv_saves)
         add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
         #self.add_variables_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive, inputs_to_region, def_but_live_out, private_to_region)
 
@@ -4844,21 +4951,38 @@ openmp_grammar = r"""
     ENTER: "enter"
     EXIT: "exit"
     target_enter_data_construct: target_enter_data_directive
-    target_enter_data_directive: TARGET ENTER DATA [target_data_clause*]
+    target_enter_data_directive: TARGET ENTER DATA [target_enter_data_clause*]
     target_exit_data_construct: target_exit_data_directive
-    target_exit_data_directive: TARGET EXIT DATA [target_data_clause*]
+    target_exit_data_directive: TARGET EXIT DATA [target_exit_data_clause*]
     target_data_clause: device_clause
                       | map_clause
                       | if_clause
                       | NOWAIT
                       | depend_with_modifier_clause
+    target_enter_data_clause: device_clause
+                            | map_enter_clause
+                            | if_clause
+                            | NOWAIT
+                            | depend_with_modifier_clause
+    target_exit_data_clause: device_clause
+                           | map_exit_clause
+                           | if_clause
+                           | NOWAIT
+                           | depend_with_modifier_clause
     device_clause: "device" "(" const_num_or_var ")"
     map_clause: "map" "(" [map_type ":"] var_list ")"
     map_type: ALLOC | TO | FROM | TOFROM
+    map_enter_clause: "map" "(" map_enter_type ":" var_list ")"
+    map_enter_type: ALLOC | TO
+    map_exit_clause: "map" "(" map_exit_type ":" var_list ")"
+    map_exit_type: FROM | RELEASE | DELETE
+    update_motion_type: TO | FROM
     TO: "to"
     FROM: "from"
     ALLOC: "alloc"
     TOFROM: "tofrom"
+    RELEASE: "release"
+    DELETE: "delete"
     parallel_sections_construct: parallel_sections_directive
     parallel_sections_directive: PARALLEL SECTIONS [parallel_sections_clause*]
     parallel_sections_clause: unique_parallel_clause
@@ -5054,8 +5178,7 @@ openmp_grammar = r"""
     target_update_clause: motion_clause
                         | device_clause
                         | if_clause
-    motion_clause: "to" "(" variable_array_section_list ")"
-                 | "from" "(" variable_array_section_list ")"
+    motion_clause: update_motion_type "(" variable_array_section_list ")"
     variable_array_section_list: PYTHON_NAME
                                | array_section
                                | variable_array_section_list "," PYTHON_NAME
