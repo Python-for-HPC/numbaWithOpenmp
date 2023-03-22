@@ -3083,7 +3083,8 @@ class OpenmpVisitor(Transformer):
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_start_var.name))
                     tags_for_enclosing = [omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
                     tags_for_enclosing = [openmp_tag("QUAL.OMP.PRIVATE", x) for x in tags_for_enclosing]
-                    self.add_private_to_enclosing(replace_vardict, tags_for_enclosing)
+                    # Don't blindly copy code here...this isn't doing what the other spots are doing with privatization.
+                    #self.add_private_to_enclosing(replace_vardict, tags_for_enclosing)
                     add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
                     #start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.IV", loop_index.name))
                     #start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.UB", size_var.name))
