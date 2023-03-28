@@ -908,19 +908,8 @@ class openmp_region_start(ir.Stmt):
         host_side_target_tags = []
         target_num = self.has_target()
         tgv = None
-        if target_num is not None and self.target_copy != True:
-            var_table = get_name_var_table(lowerer.func_ir.blocks)
 
-            selected_device = 0
-            device_tags = get_tags_of_type(self.tags, "QUAL.OMP.DEVICE")
-            if len(device_tags) > 0:
-                device_tag = device_tags[-1]
-                if isinstance(device_tag.arg, int):
-                    selected_device = device_tag.arg
-                else:
-                    assert False
-                print("new selected device:", selected_device)
-
+        def add_struct_tags(self, var_table):
             extras_before = []
             struct_tags = []
             for i in range(len(self.tags)):
@@ -971,6 +960,29 @@ class openmp_region_start(ir.Stmt):
                         struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, cur_tag_ndim)))
                         struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, cur_tag_ndim)))
                         cur_tag.name = "QUAL.OMP.MAP.TOFROM"
+            return struct_tags, extras_before
+
+        if self.tags[0].name == "DIR.OMP.TARGET.ENTER.DATA":
+            var_table = get_name_var_table(lowerer.func_ir.blocks)
+            struct_tags, extras_before = add_struct_tags(self, var_table)
+            self.tags.extend(struct_tags)
+            for extra in extras_before:
+                lowerer.lower_inst(extra)
+
+        elif target_num is not None and self.target_copy != True:
+            var_table = get_name_var_table(lowerer.func_ir.blocks)
+
+            selected_device = 0
+            device_tags = get_tags_of_type(self.tags, "QUAL.OMP.DEVICE")
+            if len(device_tags) > 0:
+                device_tag = device_tags[-1]
+                if isinstance(device_tag.arg, int):
+                    selected_device = device_tag.arg
+                else:
+                    assert False
+                print("new selected device:", selected_device)
+
+            struct_tags, extras_before = add_struct_tags(self, var_table)
             self.tags.extend(struct_tags)
             if config.DEBUG_OPENMP >= 1:
                 for otag in self.tags:
@@ -2445,14 +2457,14 @@ class OpenmpVisitor(Transformer):
         #unversioned_privates = set() # we get rid of SSA on the first openmp region so no SSA forms should be here
         if gen_shared:
             for var_name in inputs_to_region:
-                if for_task != False and get_var_from_enclosing(for_task, var_name) != "QUAL.OMP.SHARED":
+                if for_task and get_var_from_enclosing(for_task, var_name) != "QUAL.OMP.SHARED":
                     explicit_clauses.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", var_name))
                 else:
                     explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
                 vars_in_explicit[var_name] = explicit_clauses[-1]
 
             for var_name in def_but_live_out:
-                if for_task != False and get_var_from_enclosing(for_task, var_name) != "QUAL.OMP.SHARED":
+                if for_task and get_var_from_enclosing(for_task, var_name) != "QUAL.OMP.SHARED":
                     explicit_clauses.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", var_name))
                 else:
                     explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
