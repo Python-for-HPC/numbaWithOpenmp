@@ -2790,19 +2790,17 @@ class TestOpenmpTarget(TestOpenmpBase):
         assert(1 <= r[3][0] <= tl)
         np.testing.assert_equal(r[3][0], r[3][r[3] != 0])
     """
-    
-for test_func in [TestOpenmpTarget.target_map_tofrom_scalar_parallel, TestOpenmpTarget.target_map_to_var,
-                  TestOpenmpTarget.target_map_from_var, TestOpenmpTarget.target_map_tofrom_scalar_var,
-                  TestOpenmpTarget.target_map_tofrom_array, TestOpenmpTarget.target_map_tofrom_scalar_teams_nested,
-                  TestOpenmpTarget.target_teams_distribute_parallel_for, TestOpenmpTarget.target_firstprivate,
-                  TestOpenmpTarget.target_teams_distribute_parallel_for_proof, TestOpenmpTarget.target_parallel_for]:
-    def make_func_with_subtest(func):
-        def func_with_subtest(self):
-            for device in TestOpenmpTarget.devices:
-                with self.subTest(device=device):
-                    func(self, device)
-        return func_with_subtest
-    setattr(TestOpenmpTarget, "test_" + test_func.__name__, make_func_with_subtest(test_func))
+
+for memberName in dir(TestOpenmpTarget):
+    if memberName.startswith("target"):
+        test_func = getattr(TestOpenmpTarget, memberName)
+        def make_func_with_subtest(func):
+            def func_with_subtest(self):
+                for device in TestOpenmpTarget.devices:
+                    with self.subTest(device=device):
+                        func(self, device)
+            return func_with_subtest
+        setattr(TestOpenmpTarget, "test_" + test_func.__name__, make_func_with_subtest(test_func))
 
 @linux_only
 class TestOpenmpPi(TestOpenmpBase):
