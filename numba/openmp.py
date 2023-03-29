@@ -3736,7 +3736,7 @@ class OpenmpVisitor(Transformer):
         self.some_target_directive(args, "TARGET.TEAMS", 2)
 
     def target_teams_distribute_directive(self, args):
-        self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE", 3)
+        self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE", 3, has_loop=True)
 
     def target_teams_loop_directive(self, args):
         self.some_target_directive(args, "TARGET.TEAMS.LOOP", 3, has_loop=True)
@@ -3782,7 +3782,7 @@ class OpenmpVisitor(Transformer):
         sblk.body = [or_start] + [or_end] + sblk.body[:]
 
     def distribute_directive(self, args):
-        self.some_distribute_directive(args, "DISTRIBUTE", 1, has_loop=False)
+        self.some_distribute_directive(args, "DISTRIBUTE", 1, has_loop=True)
 
     def distribute_parallel_for_directive(self, args):
         self.some_distribute_directive(args, "DISTRIBUTE.PARALLEL.LOOP", 3, has_loop=True)
