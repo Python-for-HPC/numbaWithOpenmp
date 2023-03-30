@@ -924,7 +924,8 @@ class openmp_region_start(ir.Stmt):
                         array_var = var_table[cur_tag.arg]
                         if config.DEBUG_OPENMP >= 1:
                             print("Found array mapped:", cur_tag.name, cur_tag.arg, cur_tag_typ, type(cur_tag_typ), stride_typ, type(stride_typ), stride_abi_size, array_var, type(array_var))
-                        size_var = ir.Var(None, f"{cur_tag.arg}_size_var{target_num}", array_var.loc)
+                        uniqueness = get_unique()
+                        size_var = ir.Var(None, f"{cur_tag.arg}_size_var{target_num}{uniqueness}", array_var.loc)
                         #size_var = array_var.scope.redefine("size_var", array_var.loc)
                         size_getattr = ir.Expr.getattr(array_var, "size", array_var.loc)
                         size_assign = ir.Assign(size_getattr, size_var, array_var.loc)
@@ -956,13 +957,20 @@ class openmp_region_start(ir.Stmt):
                         loaded_op = loaded_size.operands[0]
                         loaded_pointee = loaded_op.type.pointee
                         loaded_str = str(loaded_pointee) + " * " + loaded_size._get_reference()
-                        struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
-                        struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, cur_tag_ndim)))
-                        struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, cur_tag_ndim)))
-                        cur_tag.name = "QUAL.OMP.MAP.TOFROM"
+                        if "TO" in cur_tag.name:
+                            struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, cur_tag_ndim)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, cur_tag_ndim)))
+                        else:
+                            # Must be QUAL.OMP.MAP.FROM in which case only need to get the data back so rewrite cur_tag.
+                            cur_tag.name = cur_tag.name + ".STRUCT"
+                            cur_tag.arg = cur_tag.arg + "*data"
+                            cur_tag.non_arg = True
+                            cur_tag.omp_slice = (0, size_var)
+                        #cur_tag.name = "QUAL.OMP.MAP.TOFROM"
             return struct_tags, extras_before
 
-        if self.tags[0].name == "DIR.OMP.TARGET.ENTER.DATA":
+        if self.tags[0].name in ["DIR.OMP.TARGET.ENTER.DATA", "DIR.OMP.TARGET.EXIT.DATA"]:
             var_table = get_name_var_table(lowerer.func_ir.blocks)
             struct_tags, extras_before = add_struct_tags(self, var_table)
             self.tags.extend(struct_tags)
@@ -2674,7 +2682,7 @@ class OpenmpVisitor(Transformer):
                     print("c.arg str:", c.arg, type(c.arg))
                 del all_explicits[c.arg]
                 if for_target:
-                    if c.name == "QUAL.OMP.PRIVATE":
+                    if c.name in ["QUAL.OMP.PRIVATE", "QUAL.OMP.TARGET.IMPLICIT"]:
                         # For typing.
                         if c.arg in orig_inputs_to_region:
                             copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
