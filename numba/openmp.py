@@ -2682,7 +2682,7 @@ class OpenmpVisitor(Transformer):
                     print("c.arg str:", c.arg, type(c.arg))
                 del all_explicits[c.arg]
                 if for_target:
-                    if c.name == "QUAL.OMP.PRIVATE":
+                    if c.name in ["QUAL.OMP.PRIVATE", "QUAL.OMP.TARGET.IMPLICIT"]:
                         # For typing.
                         if c.arg in orig_inputs_to_region:
                             copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
