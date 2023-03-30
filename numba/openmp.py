@@ -988,7 +988,8 @@ class openmp_region_start(ir.Stmt):
                     selected_device = device_tag.arg
                 else:
                     assert False
-                print("new selected device:", selected_device)
+                if config.DEBUG_OPENMP >= 1:
+                    print("new selected device:", selected_device)
 
             struct_tags, extras_before = add_struct_tags(self, var_table)
             self.tags.extend(struct_tags)
@@ -1125,7 +1126,7 @@ class openmp_region_start(ir.Stmt):
                 print("outs:", outs, type(outs))
                 print("args:", state.args)
                 print("rettype:", state.return_type, type(state.return_type))
-            target_args = ins + list(set(outs) - set(ins))
+            target_args_unordered = ins + list(set(outs) - set(ins))
             # Re-use Numba loop lifting code to extract the target region as
             # its own function.
             region_info = transforms._loop_lift_info(loop=None,
@@ -1149,28 +1150,30 @@ class openmp_region_start(ir.Stmt):
             # transfer_scope?
             # core/untyped_passes/versioning_loop_bodies
 
-            #target_args = []
-            outline_arg_typs = [None] * len(target_args)
+            target_args = []
+            outline_arg_typs = []
+            #outline_arg_typs = [None] * len(target_args_unordered)
             for tag in self.tags:
                 if config.DEBUG_OPENMP >= 1:
                     print(1, "target_arg?", tag)
-                #if tag.arg in target_args:
-                if tag.arg in target_args and not tag.non_arg and is_target_arg(tag.name):
-                    #target_args.append(tag.arg)
-                    target_arg_index = target_args.index(tag.arg)
+                if tag.arg in target_args_unordered and not tag.non_arg and is_target_arg(tag.name):
+                    target_args.append(tag.arg)
+                    #target_arg_index = target_args.index(tag.arg)
                     atyp = get_dotted_type(tag.arg, typemap, lowerer)
                     if is_pointer_target_arg(tag.name, atyp):
-                        outline_arg_typs[target_arg_index] = types.CPointer(atyp)
-                        #outline_arg_typs.append(types.CPointer(atyp))
+                        #outline_arg_typs[target_arg_index] = types.CPointer(atyp)
+                        outline_arg_typs.append(types.CPointer(atyp))
                         if config.DEBUG_OPENMP >= 1:
                             print(1, "found cpointer target_arg", tag, atyp, id(atyp))
                     else:
-                        outline_arg_typs[target_arg_index] = atyp
-                        #outline_arg_typs.append(atyp)
+                        #outline_arg_typs[target_arg_index] = atyp
+                        outline_arg_typs.append(atyp)
                         if config.DEBUG_OPENMP >= 1:
                             print(1, "found target_arg", tag, atyp, id(atyp))
 
-            #outline_arg_typs = tuple([typemap[x] for x in target_args])
+            assert len(target_args) == len(target_args_unordered)
+            assert len(target_args) == len(outline_arg_typs)
+
             if config.DEBUG_OPENMP >= 1:
                 print("target_args:", target_args)
                 print("outline_arg_typs:", outline_arg_typs)
@@ -3876,9 +3879,10 @@ class OpenmpVisitor(Transformer):
         self.some_data_clause_directive(clauses, start_tags, end_tags, 0, has_loop=has_loop, for_target=True)
         #self.some_data_clause_directive(args, start_tags, end_tags, lexer_count, has_loop=has_loop)
 
-    def some_data_clause_directive(self, args, start_tags, end_tags, lexer_count, has_loop=False, for_target=False):
+    def some_data_clause_directive(self, args, start_tags, end_tags, lexer_count, has_loop=False, for_target=False, for_task=False):
         if config.DEBUG_OPENMP >= 1:
             print("visit some_data_clause_directive", args, type(args), self.blk_start, self.blk_end)
+        assert not (for_target and for_task)
 
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
@@ -3949,6 +3953,8 @@ class OpenmpVisitor(Transformer):
                 print("vars_in_explicit clauses before:", v)
         if for_target:
             self.make_implicit_explicit_target(scope, vars_in_explicit_clauses, clauses, True, inputs_to_region, def_but_live_out, private_to_region)
+        elif for_task:
+            self.make_implicit_explicit(scope, vars_in_explicit_clauses, clauses, True, inputs_to_region, def_but_live_out, private_to_region, for_task=get_enclosing_region(self.func_ir, self.blk_start))
         else:
             self.make_implicit_explicit(scope, vars_in_explicit_clauses, clauses, True, inputs_to_region, def_but_live_out, private_to_region)
         if config.DEBUG_OPENMP >= 1:
@@ -4255,6 +4261,15 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for TASK.
 
     def task_directive(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit task_directive", args, type(args))
+
+        start_tags = [openmp_tag("DIR.OMP.TASK")]
+        end_tags = [openmp_tag("DIR.OMP.END.TASK")]
+        self.some_data_clause_directive(args, start_tags, end_tags, 1, for_task=True)
+        return
+
+        """
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
         scope = sblk.scope
@@ -4337,31 +4352,29 @@ class OpenmpVisitor(Transformer):
             priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
             priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
 
-        """
-        for itr in inputs_to_region:
-            enclosing_dsa = get_var_from_enclosing(enclosing_regions, itr)
-            if config.DEBUG_OPENMP >= 1:
-                print("input_to_region:", itr, enclosing_dsa)
-            if enclosing_dsa == "QUAL.OMP.SHARED":
-                start_tags.append(openmp_tag("QUAL.OMP.SHARED", ir.Var(scope, itr, self.loc)))
-            else:
-                start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", ir.Var(scope, itr, self.loc)))
-        for itr in def_but_live_out:
-            enclosing_dsa = get_var_from_enclosing(enclosing_regions, itr)
-            if config.DEBUG_OPENMP >= 1:
-                print("def_but_live_out:", itr, enclosing_dsa)
-            itr_var = ir.Var(scope, itr, self.loc)
-            if enclosing_dsa == "QUAL.OMP.SHARED":
-                start_tags.append(openmp_tag("QUAL.OMP.SHARED", itr_var))
-                keep_alive.append(ir.Assign(itr_var, itr_var, self.loc))
-            else:
-                start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", itr_var))
-
-        for ptr in private_to_region:
-            if config.DEBUG_OPENMP >= 1:
-                print("private_to_region:", ptr)
-            start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", ir.Var(scope, ptr, self.loc)))
-        """
+#        for itr in inputs_to_region:
+#            enclosing_dsa = get_var_from_enclosing(enclosing_regions, itr)
+#            if config.DEBUG_OPENMP >= 1:
+#                print("input_to_region:", itr, enclosing_dsa)
+#            if enclosing_dsa == "QUAL.OMP.SHARED":
+#                start_tags.append(openmp_tag("QUAL.OMP.SHARED", ir.Var(scope, itr, self.loc)))
+#            else:
+#                start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", ir.Var(scope, itr, self.loc)))
+#        for itr in def_but_live_out:
+#            enclosing_dsa = get_var_from_enclosing(enclosing_regions, itr)
+#            if config.DEBUG_OPENMP >= 1:
+#                print("def_but_live_out:", itr, enclosing_dsa)
+#            itr_var = ir.Var(scope, itr, self.loc)
+#            if enclosing_dsa == "QUAL.OMP.SHARED":
+#                start_tags.append(openmp_tag("QUAL.OMP.SHARED", itr_var))
+#                keep_alive.append(ir.Assign(itr_var, itr_var, self.loc))
+#            else:
+#                start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", itr_var))
+#
+#        for ptr in private_to_region:
+#            if config.DEBUG_OPENMP >= 1:
+#                print("private_to_region:", ptr)
+#            start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", ir.Var(scope, ptr, self.loc)))
 
         if config.DEBUG_OPENMP >= 1:
             print("visit task_directive", args, type(args), clauses)
@@ -4375,6 +4388,7 @@ class OpenmpVisitor(Transformer):
         sblk.body = priv_saves + before_start + [or_start] + after_start + sblk.body[:]
         #eblk.body = [or_end]   + eblk.body[:]
         eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
+        """
 
     def task_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
