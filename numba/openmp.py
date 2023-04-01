@@ -3117,10 +3117,10 @@ class OpenmpVisitor(Transformer):
                     #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", const_start_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.IV", omp_iv_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.UB", omp_ub_var.name))
-                    start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", omp_iv_var.name))
+                    #start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", omp_iv_var.name))
                     #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_lb_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_start_var.name))
-                    start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_ub_var.name))
+                    #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_ub_var.name))
                     tags_for_enclosing = [omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
                     #tags_for_enclosing = [omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
                     tags_for_enclosing = [openmp_tag("QUAL.OMP.PRIVATE", x) for x in tags_for_enclosing]
