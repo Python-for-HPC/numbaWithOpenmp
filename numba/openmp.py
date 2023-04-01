@@ -3140,6 +3140,20 @@ class OpenmpVisitor(Transformer):
             for clause in clauses:
                 print("post-process clauses:", clause)
 
+        if "PARALLEL" in main_start_tag:
+            # ---- Back propagate THREAD_LIMIT to enclosed target region. ----
+            enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
+            if config.DEBUG_OPENMP >= 1:
+                print("parallel_for enclosing_regions:", enclosing_regions)
+            if enclosing_regions:
+                for enclosing_region in enclosing_regions[::-1]:
+                    if len(self.get_clauses_by_start(enclosing_region.tags, "DIR.OMP.TEAMS")) == 1:
+                        break
+                    if len(self.get_clauses_by_start(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
+                        self.parallel_back_prop(enclosing_region.tags, clauses)
+                        break
+
+
         if len(list(filter(lambda x: x.name == "QUAL.OMP.NUM_THREADS", clauses))) > 1:
             raise MultipleNumThreadsClauses(f"Multiple num_threads clauses near line {self.loc} is not allowed in an OpenMP parallel region.")
 
