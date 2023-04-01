@@ -1579,8 +1579,13 @@ class openmp_region_start(ir.Stmt):
                 target_llvm_ir = cres_library.get_llvm_str()
                 with open(filename_prefix + '.ll', 'w') as f:
                     f.write(target_llvm_ir)
-                subprocess.run(['opt', '-S', '--intrinsics-openmp',
-                    filename_prefix + '.ll', '-o', filename_prefix + '-intrinsics_omp.ll'], check=True)
+                if config.DEBUG_OPENMP_LLVM_PASS >= 1:
+                    cmd_list = ['opt', '-S', '--intrinsics-openmp', '-debug-only=intrinsics-openmp',
+                        filename_prefix + '.ll', '-o', filename_prefix + '-intrinsics_omp.ll']
+                else:
+                    cmd_list = ['opt', '-S', '--intrinsics-openmp',
+                        filename_prefix + '.ll', '-o', filename_prefix + '-intrinsics_omp.ll']
+                subprocess.run(cmd_list, check=True)
                 subprocess.run(['opt', '-S', '-O3', filename_prefix + '-intrinsics_omp.ll',
                     '-o', filename_prefix + '-intrinsics_omp-opt.ll'], check=True)
                 omptarget_path = os.path.dirname(omptargetlib)
@@ -2116,7 +2121,8 @@ def get_dotted_type(x, typemap, lowerer):
 
 
 def is_target_arg(name):
-    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP") or name.startswith("QUAL.OMP.NORMALIZED")
+    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
+    #or name.startswith("QUAL.OMP.NORMALIZED")
     #return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
 
 
@@ -2616,7 +2622,7 @@ class OpenmpVisitor(Transformer):
 
     def add_private_to_enclosing(self, replace_vardict, enclosing_tags):
         enclosing_tags.extend([openmp_tag("QUAL.OMP.PRIVATE", v) for v in replace_vardict.values()])
-        
+
     def priv_saves_to_tags(self, enclosing_tags, priv_saves):
         enclosing_tags.extend([openmp_tag("QUAL.OMP.PRIVATE", v.target) for v in priv_saves])
 
@@ -3103,8 +3109,10 @@ class OpenmpVisitor(Transformer):
                     #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", const_start_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.IV", omp_iv_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.UB", omp_ub_var.name))
+                    start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_iv_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_lb_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_start_var.name))
+                    start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_ub_var.name))
                     tags_for_enclosing = [omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
                     tags_for_enclosing = [openmp_tag("QUAL.OMP.PRIVATE", x) for x in tags_for_enclosing]
                     # Don't blindly copy code here...this isn't doing what the other spots are doing with privatization.
@@ -5642,7 +5650,7 @@ class OpenmpExternalFunction(types.ExternalFunction):
         mod = inspect.getmodule(frm[0])
         if mod.__name__.startswith("numba") and not mod.__name__.startswith("numba.tests"):
             return super(ExternalFunction, self).__call__(*args)
-        
+
         from cffi import FFI
         ffi = FFI()
         fname = self.symbol
