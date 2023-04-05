@@ -3120,7 +3120,7 @@ class OpenmpVisitor(Transformer):
                     #start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", omp_iv_var.name))
                     #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_lb_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_start_var.name))
-                    #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_ub_var.name))
+                    start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_ub_var.name))
                     tags_for_enclosing = [omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
                     #tags_for_enclosing = [omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
                     tags_for_enclosing = [openmp_tag("QUAL.OMP.PRIVATE", x) for x in tags_for_enclosing]
@@ -3780,7 +3780,8 @@ class OpenmpVisitor(Transformer):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE", 3, has_loop=True)
 
     def target_teams_loop_directive(self, args):
-        self.some_target_directive(args, "TARGET.TEAMS.LOOP", 3, has_loop=True)
+        self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 3, has_loop=True)
+        #self.some_target_directive(args, "TARGET.TEAMS.LOOP", 3, has_loop=True)
 
     def target_teams_distribute_parallel_for_directive(self, args):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP", 5, has_loop=True)
@@ -5309,7 +5310,8 @@ openmp_grammar = r"""
 
     LOOP: "loop"
 
-    target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_loop_clause*]
+    //target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_loop_clause*]
+    target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_distribute_parallel_for_simd_clause*]
     target_teams_loop_clause: if_clause
                             | device_clause
                             | data_privatization_clause
