@@ -3117,7 +3117,7 @@ class OpenmpVisitor(Transformer):
                     #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", const_start_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.IV", omp_iv_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.UB", omp_ub_var.name))
-                    #start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", omp_iv_var.name))
+                    start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", omp_iv_var.name))
                     #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_lb_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_start_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_ub_var.name))
