@@ -1120,6 +1120,11 @@ class openmp_region_start(ir.Stmt):
                 returnto=end_block,
                 body_block_ids=blocks_in_region
             )
+            normalized_ivs = get_tags_of_type(self.tags, "QUAL.OMP.NORMALIZED.IV")
+            for niv in normalized_ivs:
+                if config.DEBUG_OPENMP >= 1:
+                    print("Removing normalized iv from ins", niv.arg)
+                ins.remove(niv.arg)
             # Get the types of the variables live-in to the target region.
             if config.DEBUG_OPENMP >= 1:
                 print("ins:", ins, type(ins))
@@ -1579,8 +1584,13 @@ class openmp_region_start(ir.Stmt):
                 target_llvm_ir = cres_library.get_llvm_str()
                 with open(filename_prefix + '.ll', 'w') as f:
                     f.write(target_llvm_ir)
-                subprocess.run(['opt', '-S', '--intrinsics-openmp',
-                    filename_prefix + '.ll', '-o', filename_prefix + '-intrinsics_omp.ll'], check=True)
+                if config.DEBUG_OPENMP_LLVM_PASS >= 1:
+                    cmd_list = ['opt', '-S', '--intrinsics-openmp', '-debug-only=intrinsics-openmp',
+                        filename_prefix + '.ll', '-o', filename_prefix + '-intrinsics_omp.ll']
+                else:
+                    cmd_list = ['opt', '-S', '--intrinsics-openmp',
+                        filename_prefix + '.ll', '-o', filename_prefix + '-intrinsics_omp.ll']
+                subprocess.run(cmd_list, check=True)
                 subprocess.run(['opt', '-S', '-O3', filename_prefix + '-intrinsics_omp.ll',
                     '-o', filename_prefix + '-intrinsics_omp-opt.ll'], check=True)
                 omptarget_path = os.path.dirname(omptargetlib)
@@ -2116,7 +2126,8 @@ def get_dotted_type(x, typemap, lowerer):
 
 
 def is_target_arg(name):
-    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP") or name.startswith("QUAL.OMP.NORMALIZED")
+    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
+    #or name.startswith("QUAL.OMP.NORMALIZED")
     #return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
 
 
@@ -2616,7 +2627,7 @@ class OpenmpVisitor(Transformer):
 
     def add_private_to_enclosing(self, replace_vardict, enclosing_tags):
         enclosing_tags.extend([openmp_tag("QUAL.OMP.PRIVATE", v) for v in replace_vardict.values()])
-        
+
     def priv_saves_to_tags(self, enclosing_tags, priv_saves):
         enclosing_tags.extend([openmp_tag("QUAL.OMP.PRIVATE", v.target) for v in priv_saves])
 
@@ -2989,12 +3000,15 @@ class OpenmpVisitor(Transformer):
                     if config.DEBUG_OPENMP >= 1:
                         print("size_var:", size_var, type(size_var))
 
-                    omp_lb_var = loop_index.scope.redefine("$omp_lb", inst.loc)
-                    before_start.append(ir.Assign(ir.Const(0, inst.loc), omp_lb_var, inst.loc))
+                    #omp_lb_var = loop_index.scope.redefine("$omp_lb", inst.loc)
+                    #before_start.append(ir.Assign(ir.Const(0, inst.loc), omp_lb_var, inst.loc))
 
                     omp_iv_var = loop_index.scope.redefine("$omp_iv", inst.loc)
                     #before_start.append(ir.Assign(omp_lb_var, omp_iv_var, inst.loc))
-                    after_start.append(ir.Assign(omp_lb_var, omp_iv_var, inst.loc))
+                    # Don't use omp_lb here because that makes a live-in to the region that
+                    # becomes a parameter to an outlined target region.
+                    after_start.append(ir.Assign(ir.Const(0, inst.loc), omp_iv_var, inst.loc))
+                    #after_start.append(ir.Assign(omp_lb_var, omp_iv_var, inst.loc))
 
                     types_mod_var = loop_index.scope.redefine("$numba_types_mod", inst.loc)
                     types_mod = ir.Global('types', types, inst.loc)
@@ -3103,9 +3117,12 @@ class OpenmpVisitor(Transformer):
                     #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", const_start_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.IV", omp_iv_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.UB", omp_ub_var.name))
-                    start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_lb_var.name))
+                    start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", omp_iv_var.name))
+                    #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_lb_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_start_var.name))
-                    tags_for_enclosing = [omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
+                    start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_ub_var.name))
+                    tags_for_enclosing = [omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
+                    #tags_for_enclosing = [omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
                     tags_for_enclosing = [openmp_tag("QUAL.OMP.PRIVATE", x) for x in tags_for_enclosing]
                     # Don't blindly copy code here...this isn't doing what the other spots are doing with privatization.
                     #self.add_private_to_enclosing(replace_vardict, tags_for_enclosing)
@@ -3131,6 +3148,20 @@ class OpenmpVisitor(Transformer):
             print("visit", main_start_tag, args, type(args), default_shared)
             for clause in clauses:
                 print("post-process clauses:", clause)
+
+        if "PARALLEL" in main_start_tag:
+            # ---- Back propagate THREAD_LIMIT to enclosed target region. ----
+            enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
+            if config.DEBUG_OPENMP >= 1:
+                print("parallel_for enclosing_regions:", enclosing_regions)
+            if enclosing_regions:
+                for enclosing_region in enclosing_regions[::-1]:
+                    if len(self.get_clauses_by_start(enclosing_region.tags, "DIR.OMP.TEAMS")) == 1:
+                        break
+                    if len(self.get_clauses_by_start(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
+                        self.parallel_back_prop(enclosing_region.tags, clauses)
+                        break
+
 
         if len(list(filter(lambda x: x.name == "QUAL.OMP.NUM_THREADS", clauses))) > 1:
             raise MultipleNumThreadsClauses(f"Multiple num_threads clauses near line {self.loc} is not allowed in an OpenMP parallel region.")
@@ -3320,8 +3351,7 @@ class OpenmpVisitor(Transformer):
                 str_const = ir.Const("lastiter check:", inst.loc)
                 str_assign = ir.Assign(str_const, str_var, inst.loc)
                 lastprivate_check_block.body.append(str_assign)
-                str_print = ir.Print([str_var, latest_index, size_var, last_iter_cmp, omp_lb_var, omp_ub_var, did_work_cmp, and_var, size_minus_step, step_var], None, inst.loc)
-                #str_print = ir.Print([str_var, latest_index, size_var_copy, last_iter_cmp, omp_lb_var, omp_ub_var, did_work_cmp, and_var, size_minus_step, step_var], None, inst.loc)
+                str_print = ir.Print([str_var, latest_index, size_var, last_iter_cmp, omp_ub_var, did_work_cmp, and_var, size_minus_step, step_var], None, inst.loc)
                 lastprivate_check_block.body.append(str_print)
 
             lastprivate_check_block.body.append(ir.Branch(and_var, lastprivate_copy_block_num, new_exit_block_num, inst.loc))
@@ -3750,7 +3780,8 @@ class OpenmpVisitor(Transformer):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE", 3, has_loop=True)
 
     def target_teams_loop_directive(self, args):
-        self.some_target_directive(args, "TARGET.TEAMS.LOOP", 3, has_loop=True)
+        self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 3, has_loop=True)
+        #self.some_target_directive(args, "TARGET.TEAMS.LOOP", 3, has_loop=True)
 
     def target_teams_distribute_parallel_for_directive(self, args):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP", 5, has_loop=True)
@@ -5279,7 +5310,8 @@ openmp_grammar = r"""
 
     LOOP: "loop"
 
-    target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_loop_clause*]
+    //target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_loop_clause*]
+    target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_distribute_parallel_for_simd_clause*]
     target_teams_loop_clause: if_clause
                             | device_clause
                             | data_privatization_clause
@@ -5642,7 +5674,7 @@ class OpenmpExternalFunction(types.ExternalFunction):
         mod = inspect.getmodule(frm[0])
         if mod.__name__.startswith("numba") and not mod.__name__.startswith("numba.tests"):
             return super(ExternalFunction, self).__call__(*args)
-        
+
         from cffi import FFI
         ffi = FFI()
         fname = self.symbol
