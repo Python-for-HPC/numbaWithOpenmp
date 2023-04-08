@@ -2598,7 +2598,7 @@ class TestOpenmpTarget(TestOpenmpBase):
                     a = n
             return a
         n = 123
-        assert(test_impl(n) == n)    
+        assert(test_impl(n) == n)
 
     def target_map_to_var(self, device):
         target_pragma = f"target device({device}) map(to: x, n2) map(from: xs)"
@@ -2643,8 +2643,24 @@ class TestOpenmpTarget(TestOpenmpBase):
         assert(r[0] == n2)
         assert(r[1] == n1)
 
-    def target_map_tofrom_array(self, device):
-        target_pragma = f"target device({device}) map(tofrom: a)"
+    def target_multiple_tofrom_scalar(self, device):
+        target_pragma = f"target device({device}) map(tofrom: x)"
+        @njit
+        def test_impl(n1, n2, n3):
+            x = n1
+            with openmp(target_pragma):
+                x = n2
+            xs1 = x
+            with openmp(target_pragma):
+                x = n3
+            return xs1, x
+        n2, n3 = 2, 3
+        r = test_impl(1, n2, n3)
+        assert(r[0] == n2)
+        assert(r[1] == n3)
+
+    def target_map_from_array(self, device):
+        target_pragma = f"target device({device}) map(from: a)"
         @njit
         def test_impl(n1, n2):
             a = np.zeros(n1)
@@ -2652,10 +2668,22 @@ class TestOpenmpTarget(TestOpenmpBase):
                 for i in range(len(a)):
                     a[i] = n2
             return a
-        n1, n2 = 12, 3
+        n1, n2 = 75, 3
         np.testing.assert_array_equal(test_impl(n1, n2), np.full(n1, n2))
 
-    def target_parallel_for(self, device):
+    def target_map_tofrom_array(self, device):
+        target_pragma = f"target device({device}) map(tofrom: a)"
+        @njit
+        def test_impl(s, n1, n2):
+            a = np.full(s, n1)
+            with openmp(target_pragma):
+                for i in range(len(a)):
+                    a[i] += n2
+            return a
+        s, n1, n2 = 75, 3, 13
+        np.testing.assert_array_equal(test_impl(s, n1, n2), np.full(s, n1 + n2))
+
+    def target_parallel_for_index(self, device):
         target_pragma = f"target device({device}) map(to: iters, nt) map(tofrom: a)"
         @njit
         def test_impl(nt, c):
@@ -2669,8 +2697,35 @@ class TestOpenmpTarget(TestOpenmpBase):
         nt, c = 8, 3
         np.testing.assert_array_equal(test_impl(nt, c), np.arange(nt*c))
 
-    @unittest.skipUnless(TestOpenmpBase.skip_disabled, "Unimplemented")
-    def target_firstprivate(self, device):
+    def target_parallel_for_addition(self, device):
+        target_pragma = f"target device({device}) map(to: c) map(tofrom: a, b)"
+        @njit
+        def test_impl(s, v, c):
+            a = np.full(s, v)
+            b = np.empty(a.shape[0])
+            with openmp (target_pragma):
+                with openmp ("parallel for"):
+                    for i in range(len(a)):
+                        b[i] = a[i] + c
+            return b
+        s, v, c = 50000, 2, 5
+        np.testing.assert_array_equal(test_impl(s, v, c), np.full(50000, v + c))
+
+    def target_scalar_firstprivate_default(self, device):
+        for explicit in [True, False]:
+            with self.subTest(explicit_firstprivate=explicit):
+                target_pragma = f"target device({device})" + " firstprivate(a)" if explicit else ""
+                def test_impl(n1, n2):
+                    a = n1
+                    with openmp(target_pragma):
+                        a = n2
+                    return a
+                # Assuming default for scalars is firstprivate
+                n = 5
+                print(test_impl(n, n + 1))
+                assert(test_impl(n, n + 1) == n)
+
+    def target_firstprivate_parallel(self, device):
         target_pragma = f"target device({device}) firstprivate(count) map(to: nt) map(from: cs)"
         @njit
         def test_impl(nt, n1, n2):
@@ -2688,19 +2743,137 @@ class TestOpenmpTarget(TestOpenmpBase):
         assert(r[0] == n1)
         assert(r[1] == n1 + nt + 2*n2)
 
-    def target_teams_distribute_parallel_for(self, device):
-        nt = 5
-        target_pragma = f"""target teams distribute parallel for
-                        device({device}) num_teams({nt}) map(tofrom: a)"""
+    def target_data_nested(self, device):
+        target_pragma = f"""target data device({device}) map(to: a)
+                        map(tofrom: b) map(from: as1, as2, bs1, bs2)"""
         @njit
-        def test_impl(nt):
-            a = np.zeros(nt)
+        def test_impl(s, n1, n2):
+            a = np.full(s, n1)
+            as1 = np.empty(s)
+            as2 = np.empty(s)
+            b = n1
             with openmp(target_pragma):
-                for i in range(nt):
-                    a[i] = i
-            return a
-        np.testing.assert_array_equal(test_impl(nt), np.arange(nt))
+                with openmp("target"):
+                    as1[:] = a
+                    bs1 = b
+                with openmp("target"):
+                    for i in range(s):
+                        a[i] = n2
+                    b = n2
+                with openmp("target"):
+                    as2[:] = a
+                    bs2 = b
+            return a, as1, as2, b, bs1, bs2
 
+        s, n1, n2 = 50, 1, 2
+        ao, a1, a2, bo, b1, b2 = test_impl(s, n1, n2)
+        np.testing.assert_array_equal(ao, np.full(s, n1))
+        np.testing.assert_array_equal(a1, np.full(s, n1))
+        np.testing.assert_array_equal(a2, np.full(s, n2))
+        assert(bo == n2)
+        assert(b1 == n1)
+        assert(b2 == n2)
+
+    def target_enter_data(self, device):
+        target_enter_pragma = f"""target enter data device({device})
+                            map(to: a) map(to: b)"""
+        target_exit_pragma = f"""target exit data device({device})
+                            map(from: b, as1, as2, bs1, bs2)"""
+        @njit
+        def test_impl(s, n1, n2):
+            a = np.full(s, n1)
+            as1 = np.empty(s)
+            as2 = np.empty(s)
+            b = n1
+
+            def setToValueRegion(val):
+                nonlocal a, b
+                with openmp("target"):
+                    for i in range(s):
+                        a[i] = val
+                    b = val
+
+            with openmp(target_enter_pragma):
+                pass
+
+            with openmp("target"):
+                as1[:] = a
+                bs1 = b
+            setToValueRegion(n2)
+            with openmp("target"):
+                as2[:] = a
+                bs2 = b
+
+            with openmp(target_exit_pragma):
+                pass
+
+            return a, as1, as2, b, bs1, bs2
+
+        s, n1, n2 = 50, 1, 2
+        ao, a1, a2, bo, b1, b2 = test_impl(s, n1, n2)
+        np.testing.assert_array_equal(ao, np.full(s, n1))
+        np.testing.assert_array_equal(a1, np.full(s, n1))
+        np.testing.assert_array_equal(a2, np.full(s, n2))
+        assert(bo == n2)
+        assert(b1 == n1)
+        assert(b2 == n2)
+
+    def target_enter_data_alloc(self, device):
+        target_enter_pragma = f"""target enter data device({device})
+                                map(alloc: v1, v2)"""
+        target_exit_pragma = f"target exit data device({device}) map(from: v1, v2)"
+        @njit
+        def test_impl(s, n1, n2):
+            v1 = np.empty(s)
+            v2 = np.empty(s)
+            p = np.empty(s)
+
+            with openmp(target_enter_pragma):
+                pass
+
+            with openmp("target nowait depend(out: v1, v2)"):
+                for i in range(s):
+                    v1[i] = n1
+                    v2[i] = n2
+
+            with openmp("task"): # execute asynchronously on host device
+                sum = 0
+                for _ in range(10000):
+                    sum += 1
+
+            with openmp("target map(from: p) nowait depend(in: v1, v2)"):
+                with openmp("distribute parallel for"):
+                    for i in range(s):
+                        p[i] = v1[i] * v2[i]
+
+            with openmp("taskwait"):
+                pass
+
+            with openmp(target_exit_pragma):
+                pass
+
+            return p
+        
+        s, n1, n2 = 150, 7, 9
+        np.testing.assert_array_equal(test_impl(s, n1, n2), np.full(s, n1 * n2))
+
+    @unittest.skipUnless(TestOpenmpBase.skip_disabled, "Unimplemented")
+    def target_teams_distribute_parallel_for(self, device):
+        for simd in [True, False]:
+            with self.subTest(simd=simd):
+                nt = 125
+                target_pragma = f"""target teams distribute parallel for{" simd" if simd else ""}
+                                device({device}) num_teams(5) map(tofrom: a)"""
+                @njit
+                def test_impl(nt):
+                    a = np.zeros(nt)
+                    with openmp(target_pragma):
+                        for i in range(nt):
+                            a[i] = i
+                    return a
+                np.testing.assert_array_equal(test_impl(nt), np.arange(nt))
+
+    @unittest.skipUnless(TestOpenmpBase.skip_disabled, "Unimplemented")
     def target_teams_distribute_parallel_for_proof(self, device):
         nt = 5
         target_pragma = f"""target teams distribute parallel for
