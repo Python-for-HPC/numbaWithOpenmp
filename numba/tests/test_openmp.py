@@ -2749,8 +2749,8 @@ class TestOpenmpTarget(TestOpenmpBase):
         @njit
         def test_impl(s, n1, n2):
             a = np.full(s, n1)
-            as1 = np.empty(s)
-            as2 = np.empty(s)
+            as1 = np.empty(s, dtype=a.dtype)
+            as2 = np.empty(s, dtype=a.dtype)
             b = n1
             with openmp(target_pragma):
                 with openmp("target"):
@@ -2786,12 +2786,12 @@ class TestOpenmpTarget(TestOpenmpBase):
             as2 = np.empty(s)
             b = n1
 
-            def setToValueRegion(val):
-                nonlocal a, b
-                with openmp("target"):
-                    for i in range(s):
-                        a[i] = val
-                    b = val
+            #def setToValueRegion(val):
+            #    nonlocal a, b
+            #    with openmp("target"):
+            #        for i in range(s):
+            #            a[i] = val
+            #        b = val
 
             with openmp(target_enter_pragma):
                 pass
@@ -2799,7 +2799,11 @@ class TestOpenmpTarget(TestOpenmpBase):
             with openmp("target"):
                 as1[:] = a
                 bs1 = b
-            setToValueRegion(n2)
+            #setToValueRegion(n2)
+            with openmp("target"):
+                for i in range(s):
+                    a[i] = n2
+                b = n2
             with openmp("target"):
                 as2[:] = a
                 bs2 = b
