@@ -629,7 +629,9 @@ def copy_one(x, calltypes):
         return ret
     elif isinstance(x, ir.FreeVar):
         return ir.FreeVar(copy_one(x.index, calltypes), copy_one(x.name, calltypes), copy_one(x.value, calltypes), copy_one(x.loc, calltypes))
-    print("Failed to handle the following type when copying target IR.", type(x))
+    elif isinstance(x, slice):
+        return slice(copy_one(x.start, calltypes), copy_one(x.stop, calltypes), copy_one(x.step, calltypes))
+    print("Failed to handle the following type when copying target IR.", type(x), x)
     assert False
 
 
@@ -962,12 +964,17 @@ class openmp_region_start(ir.Stmt):
                             struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, cur_tag_ndim)))
                             struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, cur_tag_ndim)))
                         else:
-                            # Must be QUAL.OMP.MAP.FROM in which case only need to get the data back so rewrite cur_tag.
-                            cur_tag.name = cur_tag.name + ".STRUCT"
-                            cur_tag.arg = cur_tag.arg + "*data"
-                            cur_tag.non_arg = True
-                            cur_tag.omp_slice = (0, size_var)
-                        #cur_tag.name = "QUAL.OMP.MAP.TOFROM"
+                            # Must be QUAL.OMP.MAP.FROM in which case only need to get the data back but always need the array struct for metadata.
+                            #struct_tags.append(openmp_tag("QUAL.OMP.MAP.TOFROM.STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
+                            struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, cur_tag_ndim)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, cur_tag_ndim)))
+                            #cur_tag.name = cur_tag.name + ".STRUCT"
+                            #cur_tag.arg = cur_tag.arg + "*data"
+                            #cur_tag.non_arg = True
+                            #cur_tag.omp_slice = (0, size_var)
+                            cur_tag.name = "QUAL.OMP.MAP.TO"
+                            #cur_tag.name = "QUAL.OMP.MAP.TOFROM"
             return struct_tags, extras_before
 
         if self.tags[0].name in ["DIR.OMP.TARGET.ENTER.DATA", "DIR.OMP.TARGET.EXIT.DATA"]:
@@ -1109,7 +1116,7 @@ class openmp_region_start(ir.Stmt):
 
             blocks_in_region = get_blocks_between_start_end(func_ir.blocks, start_block, end_block)
             if config.DEBUG_OPENMP >= 1:
-                print("blocks_in_region:", blocks_in_region)
+                print("lower blocks_in_region:", blocks_in_region)
 
             # Find the variables that cross the boundary between the target
             # region and the non-target host-side code.
@@ -1126,12 +1133,13 @@ class openmp_region_start(ir.Stmt):
                     print("Removing normalized iv from ins", niv.arg)
                 ins.remove(niv.arg)
             # Get the types of the variables live-in to the target region.
+            target_args_unordered = ins + list(set(outs) - set(ins))
             if config.DEBUG_OPENMP >= 1:
                 print("ins:", ins, type(ins))
                 print("outs:", outs, type(outs))
                 print("args:", state.args)
                 print("rettype:", state.return_type, type(state.return_type))
-            target_args_unordered = ins + list(set(outs) - set(ins))
+                print("target_args_unordered:", target_args_unordered)
             # Re-use Numba loop lifting code to extract the target region as
             # its own function.
             region_info = transforms._loop_lift_info(loop=None,
@@ -1176,15 +1184,15 @@ class openmp_region_start(ir.Stmt):
                         if config.DEBUG_OPENMP >= 1:
                             print(1, "found target_arg", tag, atyp, id(atyp))
 
-            assert len(target_args) == len(target_args_unordered)
-            assert len(target_args) == len(outline_arg_typs)
-
             if config.DEBUG_OPENMP >= 1:
                 print("target_args:", target_args)
                 print("outline_arg_typs:", outline_arg_typs)
                 print("extras_before:", extras_before, start_block)
                 for eb in extras_before:
                     print(eb)
+
+            assert len(target_args) == len(target_args_unordered)
+            assert len(target_args) == len(outline_arg_typs)
 
             # Create the outlined IR from the blocks in the region, making the
             # variables crossing into the regions argument.
@@ -1193,6 +1201,10 @@ class openmp_region_start(ir.Stmt):
                                          arg_count=len(target_args),
                                          force_non_generator=True)
             outlined_ir.blocks[start_block].body = extras_before + outlined_ir.blocks[start_block].body
+            for stmt in outlined_ir.blocks[min(outlined_ir.blocks.keys())].body:
+                if isinstance(stmt, ir.Assign) and isinstance(stmt.value, ir.Arg):
+                    stmt.value.index = target_args.index(stmt.value.name)
+
             def prepend_device_to_func_name(outlined_ir):
                 # Change the name of the outlined function to prepend the
                 # word "device" to the function name.
@@ -1325,7 +1337,8 @@ class openmp_region_start(ir.Stmt):
 
                 def return_user_exc(self, builder, exc, exc_args=None, loc=None,
                                     func_name=None):
-                    assert False
+                    pass  # Don't generate any exception code
+                    #assert False
 
                 def get_arguments(self, func):
                     return func.args
@@ -4038,12 +4051,16 @@ class OpenmpVisitor(Transformer):
                 save_var = scope.redefine(replace_vardict[cp].name, self.loc)
                 priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
                 priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
+                if config.DEBUG_OPENMP >= 1:
+                    print("clause_privates: cp in replace_vardict:", cpvar, cplovar, save_var)
             else:
                 cpvar = ir.Var(scope, cp, self.loc)
                 cplovar = ir.Var(scope, clause_privates[cp], self.loc)
                 save_var = scope.redefine("$"+cp, self.loc)
                 priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
                 priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
+                if config.DEBUG_OPENMP >= 1:
+                    print("clause_privates: cp not in replace_vardict:", cpvar, cplovar, save_var)
 
         keep_alive = []
         tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
@@ -4058,10 +4075,19 @@ class OpenmpVisitor(Transformer):
         or_start = openmp_region_start(start_tags, 0, self.loc)
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
 
+        if config.DEBUG_OPENMP >= 1:
+            for x in priv_saves:
+                print("priv_save:", x)
+            for x in priv_restores:
+                print("priv_restore:", x)
+            for x in keep_alive:
+                print("keep_alive:", x)
+
         if has_loop:
             target_block = ir.Block(scope, self.loc)
             target_block.body = [or_start] + after_start + for_after_start + [entry_pred.body[-1]]
             self.blocks[new_target_block_num] = target_block
+
             entry_pred.body = entry_pred.body[:-1] + before_start + for_before_start + [ir.Jump(new_target_block_num, self.loc)]
             #entry_pred.body = entry_pred.body[:-1] + before_start + for_before_start + [or_start] + after_start + for_after_start + [entry_pred.body[-1]]
             exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
@@ -4069,6 +4095,7 @@ class OpenmpVisitor(Transformer):
             target_block = ir.Block(scope, self.loc)
             target_block.body = [or_start] + after_start + sblk.body[:]
             self.blocks[new_target_block_num] = target_block
+
             sblk.body = priv_saves + before_start + [ir.Jump(new_target_block_num, self.loc)]
             eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
 
