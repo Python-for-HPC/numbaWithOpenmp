@@ -2663,7 +2663,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         target_pragma = f"target device({device}) map(from: a)"
         @njit
         def test_impl(n1, n2):
-            a = np.zeros(n1)
+            a = np.zeros(n1, dtype=np.int64)
             with openmp(target_pragma):
                 for i in range(len(a)):
                     a[i] = n2
