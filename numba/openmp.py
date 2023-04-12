@@ -1127,6 +1127,13 @@ class openmp_region_start(ir.Stmt):
                 returnto=end_block,
                 body_block_ids=blocks_in_region
             )
+            def add_firstprivate_to_ins(ins, tags):
+                for tag in tags:
+                    if tag.name == "QUAL.OMP.FIRSTPRIVATE" and tag.arg not in ins:
+                        ins.append(tag.arg)
+
+            add_firstprivate_to_ins(ins, self.tags)
+
             normalized_ivs = get_tags_of_type(self.tags, "QUAL.OMP.NORMALIZED.IV")
             for niv in normalized_ivs:
                 if config.DEBUG_OPENMP >= 1:
@@ -4048,7 +4055,9 @@ class OpenmpVisitor(Transformer):
             if cp in replace_vardict:
                 cpvar = ir.Var(scope, cp, self.loc)
                 cplovar = ir.Var(scope, clause_privates[cp], self.loc)
-                save_var = scope.redefine(replace_vardict[cp].name, self.loc)
+                for_typing_var = scope.redefine(replace_vardict[cp].name, self.loc)
+                save_var = scope.redefine("$"+cp, self.loc)
+                priv_saves.append(ir.Assign(cpvar, for_typing_var, self.loc))
                 priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
                 priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
                 if config.DEBUG_OPENMP >= 1:
@@ -5664,10 +5673,11 @@ def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra
     if not isinstance(arg.value, str):
         raise NonStringOpenmpSpecification(f"Non-string OpenMP specification at line {arg.loc}")
 
-    parse_res = openmp_parser.parse(arg.value)
     if config.DEBUG_OPENMP >= 1:
         print("args:", args, type(args))
         print("arg:", arg, type(arg), arg.value, type(arg.value))
+    parse_res = openmp_parser.parse(arg.value)
+    if config.DEBUG_OPENMP >= 1:
         print(parse_res.pretty())
     visitor = OpenmpVisitor(func_ir, blocks, blk_start, blk_end, body_blocks, loc, state)
     try:

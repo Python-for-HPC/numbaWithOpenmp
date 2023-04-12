@@ -2714,7 +2714,8 @@ class TestOpenmpTarget(TestOpenmpBase):
     def target_scalar_firstprivate_default(self, device):
         for explicit in [True, False]:
             with self.subTest(explicit_firstprivate=explicit):
-                target_pragma = f"target device({device})" + " firstprivate(a)" if explicit else ""
+                target_pragma = f"target device({device})" + (" firstprivate(a)" if explicit else "")
+                @njit
                 def test_impl(n1, n2):
                     a = n1
                     with openmp(target_pragma):
@@ -2722,7 +2723,6 @@ class TestOpenmpTarget(TestOpenmpBase):
                     return a
                 # Assuming default for scalars is firstprivate
                 n = 5
-                print(test_impl(n, n + 1))
                 assert(test_impl(n, n + 1) == n)
 
     def target_firstprivate_parallel(self, device):
