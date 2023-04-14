@@ -2651,6 +2651,12 @@ class OpenmpVisitor(Transformer):
     def priv_saves_to_tags(self, enclosing_tags, priv_saves):
         enclosing_tags.extend([openmp_tag("QUAL.OMP.PRIVATE", v.target) for v in priv_saves])
 
+    def make_consts_unliteral_for_privates(self, privates, blocks):
+        for blk in blocks.values():
+            for stmt in blk.body:
+                if isinstance(stmt, ir.Assign) and isinstance(stmt.value, ir.Const) and stmt.target.name in privates:
+                    stmt.value.use_literal_type = False
+
     def replace_private_vars(self, blocks, all_explicits, explicit_privates, clauses, scope, loc, orig_inputs_to_region, for_target=False):
         replace_vardict = {}
         # Generate a new Numba privatized variable for each openmp private variable.
@@ -3155,8 +3161,8 @@ class OpenmpVisitor(Transformer):
 
     def some_for_directive(self, args, main_start_tag, main_end_tag, first_clause, gen_shared):
         sblk = self.blocks[self.blk_start]
-        scope = sblk.scope
-        eblk = self.blocks[self.blk_end]
+        #scope = sblk.scope
+        #eblk = self.blocks[self.blk_end]
 
         #clauses = []
         #default_shared = True
@@ -3186,6 +3192,10 @@ class OpenmpVisitor(Transformer):
         if len(list(filter(lambda x: x.name == "QUAL.OMP.NUM_THREADS", clauses))) > 1:
             raise MultipleNumThreadsClauses(f"Multiple num_threads clauses near line {self.loc} is not allowed in an OpenMP parallel region.")
 
+        start_tags = [openmp_tag(main_start_tag)]
+        end_tags = [openmp_tag(main_end_tag)]
+        self.some_data_clause_directive(args, start_tags, end_tags, first_clause, has_loop=True)
+        """
         # Get a dict mapping variables explicitly mentioned in the data clauses above to their openmp_tag.
         vars_in_explicit_clauses, explicit_privates = self.get_explicit_vars(clauses)
         if config.DEBUG_OPENMP >= 1:
@@ -3289,18 +3299,16 @@ class OpenmpVisitor(Transformer):
         or_start = openmp_region_start(start_tags, 0, self.loc)
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
 
-        """
-        if len(lastprivate_copying) > 0:
-            size_var_copy = scope.redefine("size_var_copy", inst.loc)
-            before_start.append(ir.Assign(size_var, size_var_copy, inst.loc))
-            if True:
-                str_var = scope.redefine("$str_var", inst.loc)
-                str_const = ir.Const("before start:", inst.loc)
-                str_assign = ir.Assign(str_const, str_var, inst.loc)
-                str_print = ir.Print([str_var, size_var_copy], None, inst.loc)
-                before_start.append(str_assign)
-                before_start.append(str_print)
-        """
+        #if len(lastprivate_copying) > 0:
+        #    size_var_copy = scope.redefine("size_var_copy", inst.loc)
+        #    before_start.append(ir.Assign(size_var, size_var_copy, inst.loc))
+        #    if True:
+        #        str_var = scope.redefine("$str_var", inst.loc)
+        #        str_const = ir.Const("before start:", inst.loc)
+        #        str_assign = ir.Assign(str_const, str_var, inst.loc)
+        #        str_print = ir.Print([str_var, size_var_copy], None, inst.loc)
+        #        before_start.append(str_assign)
+        #        before_start.append(str_print)
 
         #new_header_block.body = [or_start] + before_start + new_header_block.body[:]
         #entry_pred.body = entry_pred.body[:-1] + priv_saves + before_start + [or_start] + after_start + [entry_pred.body[-1]]
@@ -3382,6 +3390,7 @@ class OpenmpVisitor(Transformer):
         else:
             entry_pred.body = entry_pred.body[:-1] + priv_saves + before_start + [or_start] + after_start + [entry_pred.body[-1]]
             exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
+        """
 
         return None
 
@@ -4020,37 +4029,42 @@ class OpenmpVisitor(Transformer):
                 print("vars_in_explicit post:", k, v)
         if config.DEBUG_OPENMP >= 1:
             print("blocks_in_region:", blocks_in_region)
-        replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region, for_target=True)
-        assert(len(lastprivate_copying) == 0)
-        before_start.extend(copying_ir_before)
-        after_start.extend(copying_ir)
-        if config.DEBUG_OPENMP >= 1:
-            for ci in copying_ir_before:
-                print("copying_ir_before:", ci)
-            for ci in copying_ir:
-                print("copying_ir:", ci)
 
-        priv_saves = []
-        priv_restores = []
+        self.make_consts_unliteral_for_privates(explicit_privates, self.blocks)
+
+        #replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region, for_target=True)
+        #assert(len(lastprivate_copying) == 0)
+        #before_start.extend(copying_ir_before)
+        #after_start.extend(copying_ir)
+        #if config.DEBUG_OPENMP >= 1:
+        #    for ci in copying_ir_before:
+        #        print("copying_ir_before:", ci)
+        #    for ci in copying_ir:
+        #        print("copying_ir:", ci)
+
+        #priv_saves = []
+        #priv_restores = []
+
         # Returns a dict of private clause variables and their potentially SSA form at the end of the region.
         clause_privates = self.get_clause_privates(clauses, live_out_copy, scope, self.loc)
-        for k,v in replace_vardict.items():
-            if k in orig_inputs_to_region:
-                priv_saves.append(ir.Assign(ir.Var(scope, k, self.loc), v, self.loc))
+        #for k,v in replace_vardict.items():
+        #    if k in orig_inputs_to_region:
+        #        priv_saves.append(ir.Assign(ir.Var(scope, k, self.loc), v, self.loc))
 
         if config.DEBUG_OPENMP >= 1:
-            print("replace_vardict:", replace_vardict)
+            #print("replace_vardict:", replace_vardict)
             print("clause_privates:", clause_privates, type(clause_privates))
             print("inputs_to_region:", inputs_to_region)
             print("def_but_live_out:", def_but_live_out)
             print("live_out_copy:", live_out_copy)
             print("private_to_region:", private_to_region)
-            for ps in priv_saves:
-                print("priv_saves:", ps)
+            #for ps in priv_saves:
+            #    print("priv_saves:", ps)
 
         # Numba typing is not aware of OpenMP semantics, so for private variables we save the value
         # before entering the region and then restore it afterwards but we have to restore it to the SSA
         # version of the variable at that point.
+        """
         for cp in clause_privates:
             if cp in replace_vardict:
                 cpvar = ir.Var(scope, cp, self.loc)
@@ -4070,12 +4084,13 @@ class OpenmpVisitor(Transformer):
                 priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
                 if config.DEBUG_OPENMP >= 1:
                     print("clause_privates: cp not in replace_vardict:", cpvar, cplovar, save_var)
+        """
 
         keep_alive = []
         tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)
-        self.add_private_to_enclosing(replace_vardict, tags_for_enclosing)
-        self.priv_saves_to_tags(tags_for_enclosing, priv_saves)
-        add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
+        #self.add_private_to_enclosing(replace_vardict, tags_for_enclosing)
+        #self.priv_saves_to_tags(tags_for_enclosing, priv_saves)
+        #add_tags_to_enclosing(self.func_ir, self.blk_start, tags_for_enclosing)
 
         #or_start = openmp_region_start([openmp_tag("DIR.OMP.TARGET", target_num)] + clauses, 0, self.loc)
         #or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TARGET", target_num)], self.loc)
@@ -4085,10 +4100,12 @@ class OpenmpVisitor(Transformer):
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
 
         if config.DEBUG_OPENMP >= 1:
+            """
             for x in priv_saves:
                 print("priv_save:", x)
             for x in priv_restores:
                 print("priv_restore:", x)
+            """
             for x in keep_alive:
                 print("keep_alive:", x)
 
@@ -4099,7 +4116,8 @@ class OpenmpVisitor(Transformer):
 
             entry_pred.body = entry_pred.body[:-1] + before_start + for_before_start + [ir.Jump(new_target_block_num, self.loc)]
             #entry_pred.body = entry_pred.body[:-1] + before_start + for_before_start + [or_start] + after_start + for_after_start + [entry_pred.body[-1]]
-            exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
+            exit_block.body = [or_end] + keep_alive + exit_block.body
+            #exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
         else:
             target_block = ir.Block(scope, self.loc)
             target_block.body = [or_start] + after_start + sblk.body[:]
