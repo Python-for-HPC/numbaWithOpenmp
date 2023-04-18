@@ -2496,17 +2496,18 @@ class OpenmpVisitor(Transformer):
         return ret
 
     def make_implicit_explicit(self, scope, vars_in_explicit, explicit_clauses, gen_shared, inputs_to_region, def_but_live_out, private_to_region, for_task=False):
-        #unversioned_privates = set() # we get rid of SSA on the first openmp region so no SSA forms should be here
+        if for_task is None:
+            for_task = []
         if gen_shared:
             for var_name in inputs_to_region:
-                if for_task and get_var_from_enclosing(for_task, var_name) != "QUAL.OMP.SHARED":
+                if for_task != False and get_var_from_enclosing(for_task, var_name) != "QUAL.OMP.SHARED":
                     explicit_clauses.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", var_name))
                 else:
                     explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
                 vars_in_explicit[var_name] = explicit_clauses[-1]
 
             for var_name in def_but_live_out:
-                if for_task and get_var_from_enclosing(for_task, var_name) != "QUAL.OMP.SHARED":
+                if for_task != False and get_var_from_enclosing(for_task, var_name) != "QUAL.OMP.SHARED":
                     explicit_clauses.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", var_name))
                 else:
                     explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
@@ -4004,6 +4005,7 @@ class OpenmpVisitor(Transformer):
                 print("vars_in_explicit before:", k, v)
             for v in clauses:
                 print("vars_in_explicit clauses before:", v)
+
         if for_target:
             self.make_implicit_explicit_target(scope, vars_in_explicit_clauses, clauses, True, inputs_to_region, def_but_live_out, private_to_region)
         elif for_task:
