@@ -1611,20 +1611,20 @@ class openmp_region_start(ir.Stmt):
                     cmd_list = ['opt', '-S', '--intrinsics-openmp',
                         filename_prefix + '.ll', '-o', filename_prefix + '-intrinsics_omp.ll']
                 subprocess.run(cmd_list, check=True)
-                subprocess.run(['opt', '-S', '-O3', filename_prefix + '-intrinsics_omp.ll',
-                    '-o', filename_prefix + '-intrinsics_omp-opt.ll'], check=True)
                 omptarget_path = os.path.dirname(omptargetlib)
-                libomptarget_arch = omptarget_path + '/libomptarget-' + arch + '-' + cc + '.bc'
+                libomptarget_arch = omptarget_path + '/libomptarget-new-' + arch + '-' + cc + '.bc'
                 print('libomptarget_arch', libomptarget_arch)
-                subprocess.run(['llvm-link', '-S', libomptarget_arch, filename_prefix + '-intrinsics_omp-opt.ll',
-                    '-o', filename_prefix + '-intrinsics_omp-opt-linked.ll'], check=True)
+                subprocess.run(['llvm-link', '--internalize', '-S', filename_prefix + '-intrinsics_omp.ll', libomptarget_arch,
+                                '-o', filename_prefix + '-intrinsics_omp-linked.ll'], check=True)
+                subprocess.run(['opt', '-S', '-O3', filename_prefix + '-intrinsics_omp-linked.ll',
+                    '-o', filename_prefix + '-intrinsics_omp-linked-opt.ll'], check=True)
                 subprocess.run(['llc', '-O3', '-march=nvptx64', f'-mcpu={cc}', f'-mattr=+ptx64,+{cc}',
-                    filename_prefix + '-intrinsics_omp-opt-linked.ll',
-                    '-o', filename_prefix + '-intrinsics_omp-opt-linked.s'], check=True)
+                    filename_prefix + '-intrinsics_omp-linked-opt.ll',
+                    '-o', filename_prefix + '-intrinsics_omp-linked-opt.s'], check=True)
                 subprocess.run(['ptxas', '-m64', '--gpu-name', cc,
-                    filename_prefix + '-intrinsics_omp-opt-linked.s',
-                    '-o', filename_prefix + '-intrinsics_omp-opt-linked-opt.o'], check=True)
-                with open(filename_prefix + '-intrinsics_omp-opt-linked-opt.o', 'rb') as f:
+                    filename_prefix + '-intrinsics_omp-linked-opt.s',
+                    '-o', filename_prefix + '-intrinsics_omp-linked-opt.o'], check=True)
+                with open(filename_prefix + '-intrinsics_omp-linked-opt.o', 'rb') as f:
                     target_elf = f.read()
             else:
                 raise NotImplementedError("Unsupported OpenMP device number")
@@ -3020,8 +3020,8 @@ class OpenmpVisitor(Transformer):
                     if config.DEBUG_OPENMP >= 1:
                         print("size_var:", size_var, type(size_var))
 
-                    #omp_lb_var = loop_index.scope.redefine("$omp_lb", inst.loc)
-                    #before_start.append(ir.Assign(ir.Const(0, inst.loc), omp_lb_var, inst.loc))
+                    omp_lb_var = loop_index.scope.redefine("$omp_lb", inst.loc)
+                    before_start.append(ir.Assign(ir.Const(0, inst.loc), omp_lb_var, inst.loc))
 
                     omp_iv_var = loop_index.scope.redefine("$omp_iv", inst.loc)
                     #before_start.append(ir.Assign(omp_lb_var, omp_iv_var, inst.loc))
@@ -3136,12 +3136,14 @@ class OpenmpVisitor(Transformer):
                     #before_start.append(ir.Assign(ir.Const(0, inst.loc), const_start_var, inst.loc))
                     #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", const_start_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.IV", omp_iv_var.name))
+                    start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.START", omp_start_var.name))
+                    start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.LB", omp_lb_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.NORMALIZED.UB", omp_ub_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", omp_iv_var.name))
-                    #start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_lb_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_start_var.name))
+                    start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_lb_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_ub_var.name))
-                    tags_for_enclosing = [omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
+                    tags_for_enclosing = [cmp_var.name, omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
                     #tags_for_enclosing = [omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
                     tags_for_enclosing = [openmp_tag("QUAL.OMP.PRIVATE", x) for x in tags_for_enclosing]
                     # Don't blindly copy code here...this isn't doing what the other spots are doing with privatization.
