@@ -1437,9 +1437,11 @@ class Lower(BaseLower):
             self.decref(fetype, llval)
         else:
             ptr = self.getvar(name)
-            self.decref(fetype, self.builder.load(ptr))
-            # Zero-fill variable to avoid double frees on subsequent dels
-            self.builder.store(Constant.null(ptr.type.pointee), ptr)
+            loaded_ptr = self.builder.load(ptr)
+            self.decref(fetype, loaded_ptr)
+            if self.context.nrt.get_meminfos(self.builder, fetype, loaded_ptr):
+                # Zero-fill variable to avoid double frees on subsequent dels
+                self.builder.store(Constant.null(ptr.type.pointee), ptr)
 
     def alloca(self, name, type):
         lltype = self.context.get_value_type(type)
