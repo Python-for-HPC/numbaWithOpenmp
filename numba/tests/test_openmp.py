@@ -2472,6 +2472,31 @@ class TestOpenmpTask(TestOpenmpBase):
             return a
         self.check(test_impl, 15, 4)
 
+    def test_shared_array(self):
+        def test_impl(mode):
+            if mode == 0:
+                return
+
+            b = np.zeros(100)
+            with openmp("parallel"):
+                with openmp("single"):
+                    a = np.ones(100)
+                    c = 0
+                    d = 0
+                    if mode > 1:
+                        with openmp("task shared(a, c)"):
+                            c = a.sum()
+                        with openmp("task shared(a, d)"):
+                            d = a.sum()
+                        with openmp("taskwait"):
+                            b[:] = c + d
+
+            return b
+
+        self.check(test_impl, 0)
+        self.check(test_impl, 1)
+        self.check(test_impl, 2)
+
 
 @linux_only
 @unittest.skipUnless(TestOpenmpBase.skip_disabled, "Unimplemented")
