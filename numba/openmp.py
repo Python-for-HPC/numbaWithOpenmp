@@ -3948,6 +3948,11 @@ class OpenmpVisitor(Transformer):
         self.some_data_clause_directive(clauses, start_tags, end_tags, 0, has_loop=has_loop, for_target=True)
         #self.some_data_clause_directive(args, start_tags, end_tags, lexer_count, has_loop=has_loop)
 
+    def add_to_returns(self, stmts):
+        for blk in self.blocks.values():
+            if isinstance(blk.body[-1], ir.Return):
+                blk.body = blk.body[:-1] + stmts + [blk.body[-1]]
+
     def some_data_clause_directive(self, args, start_tags, end_tags, lexer_count, has_loop=False, for_target=False, for_task=False):
         if config.DEBUG_OPENMP >= 1:
             print("visit some_data_clause_directive", args, type(args), self.blk_start, self.blk_end)
@@ -4218,7 +4223,11 @@ class OpenmpVisitor(Transformer):
             else:
                 entry_pred.body = entry_pred.body[:-1] + priv_saves + before_start + for_before_start + [ir.Jump(new_header_block_num, self.loc)]
                 #entry_pred.body = entry_pred.body[:-1] + before_start + for_before_start + [or_start] + after_start + for_after_start + [entry_pred.body[-1]]
-                exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
+                if for_task:
+                    exit_block.body = [or_end] + priv_restores + exit_block.body
+                    self.add_to_returns(keep_alive)
+                else:
+                    exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
         else:
             assert(len(lastprivate_copying) == 0)
             new_header_block = ir.Block(scope, self.loc)
@@ -4226,7 +4235,11 @@ class OpenmpVisitor(Transformer):
             self.blocks[new_header_block_num] = new_header_block
 
             sblk.body = priv_saves + before_start + [ir.Jump(new_header_block_num, self.loc)]
-            eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
+            if for_task:
+                eblk.body = [or_end] + priv_restores + eblk.body[:]
+                self.add_to_returns(keep_alive)
+            else:
+                eblk.body = [or_end] + priv_restores + keep_alive + eblk.body[:]
 
         add_enclosing_region(self.func_ir, self.body_blocks, or_start)
         return clauses
