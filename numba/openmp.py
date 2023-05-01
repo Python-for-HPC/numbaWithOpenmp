@@ -24,7 +24,7 @@ from numba import np as numba_np
 from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
 from numba.extending import overload
-from numba.core.callconv import BaseCallConv, MinimalCallConv, errcode_t, RETCODE_OK
+from numba.core.callconv import BaseCallConv, MinimalCallConv, errcode_t, RETCODE_OK, Status, excinfo_t
 from numba.core.utils import cached_property
 from numba.core.datamodel.registry import register_default as model_register
 from numba.core.datamodel.registry import default_manager as model_manager
@@ -205,7 +205,7 @@ class openmp_tag(object):
             print("unknown arg type:", x, type(x))
             assert(False)
 
-    def arg_to_str(self, x, lowerer, struct_lower=False, var_table=None):
+    def arg_to_str(self, x, lowerer, struct_lower=False, var_table=None, gen_copy=False):
         if config.DEBUG_OPENMP >= 1:
             print("arg_to_str:", x, type(x), self.load, type(self.load))
         if struct_lower:
@@ -324,6 +324,11 @@ class openmp_tag(object):
                     #struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*data", non_arg=True, omp_slice=(0,lowerer.loadvar(size_var.name))))
                     #struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*shape", non_arg=True, omp_slice=(0,stride_abi_size * cur_tag_ndim)))
                     #struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*strides", non_arg=True, omp_slice=(0,stride_abi_size * cur_tag_ndim)))
+
+                if gen_copy and isinstance(xtyp, types.npytypes.Array):
+                    native_np_copy = create_native_np_copy(xtyp)
+                    nnclen = len(native_np_copy)
+                    decl += f", [{nnclen} x i8] c\"{native_np_copy}\""
         elif isinstance(x, StringLiteral):
             decl = str(cgutils.make_bytearray(x.x))
         elif isinstance(x, int):
@@ -467,13 +472,15 @@ class openmp_tag(object):
 
         is_array = self.arg in typemap and isinstance(typemap[self.arg], types.npytypes.Array)
 
+        gen_copy = name_to_use in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.LASTPRIVATE"]
+            
         if name_to_use in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.MAP.TO", "QUAL.OMP.MAP.FROM"] and is_array:
             #name_to_use += ".STRUCT"
             #var_table = get_name_var_table(lowerer.func_ir.blocks)
             #decl = ",".join([self.arg_to_str(x, lowerer, struct_lower=True, var_table=var_table) for x in arg_list])
-            decl = ",".join([self.arg_to_str(x, lowerer, struct_lower=False) for x in arg_list])
+            decl = ",".join([self.arg_to_str(x, lowerer, struct_lower=False, gen_copy=gen_copy) for x in arg_list])
         else:
-            decl = ",".join([self.arg_to_str(x, lowerer, struct_lower=False) for x in arg_list])
+            decl = ",".join([self.arg_to_str(x, lowerer, struct_lower=False, gen_copy=gen_copy) for x in arg_list])
 
         return '"' + name_to_use + '"(' + decl + ')'
 
@@ -674,6 +681,131 @@ def is_target_tag(x):
     ret = x.startswith("DIR.OMP.TARGET") and x not in ["DIR.OMP.TARGET.DATA", "DIR.OMP.TARGET.ENTER.DATA", "DIR.OMP.TARGET.EXIT.DATA"]
     #print("is_target_tag:", x, ret)
     return ret
+
+
+class OpenmpCallConv(MinimalCallConv):
+    def return_value(self, builder, retval):
+        self._return_errcode_raw(builder, RETCODE_OK)
+
+    def return_user_exc(self, builder, exc, exc_args=None, loc=None,
+                        func_name=None):
+        pass  # Don't generate any exception code
+        #assert False
+
+    def get_arguments(self, func):
+        return func.args
+
+    def call_function(self, builder, callee, resty, argtys, args, attrs=None):
+        """
+        Call the Numba-compiled *callee*.
+        """
+        if isinstance(callee.function_type, lir.FunctionType):
+            ft = callee.function_type
+            retty = ft.return_type
+            arginfo = self._get_arg_packer(argtys)
+            args = list(arginfo.as_arguments(builder, args))
+            realargs = args
+            code = builder.call(callee, realargs) #, attrs=_attrs)
+            retvaltmp = cgutils.alloca_once(builder, errcode_t)
+            builder.store(RETCODE_OK, retvaltmp)
+
+            excinfoptr = cgutils.alloca_once(builder, lir.PointerType(excinfo_t),
+                                         name="excinfo")
+            status = Status(code=code,
+                            is_ok=cgutils.true_bit,
+                            is_error=cgutils.false_bit,
+                            is_python_exc=cgutils.false_bit,
+                            is_none=cgutils.false_bit,
+                            is_user_exc=cgutils.false_bit,
+                            is_stop_iteration=cgutils.false_bit,
+                            excinfoptr=builder.load(excinfoptr))
+            return status, code
+
+        """
+        retty = self._get_return_argument(callee.function_type).pointee
+
+        retvaltmp = cgutils.alloca_once(builder, retty)
+        # initialize return value to zeros
+        builder.store(cgutils.get_null_value(retty), retvaltmp)
+
+        excinfoptr = cgutils.alloca_once(builder, ir.PointerType(excinfo_t),
+                                         name="excinfo")
+
+        arginfo = self._get_arg_packer(argtys)
+        args = list(arginfo.as_arguments(builder, args))
+        realargs = [retvaltmp, excinfoptr] + args
+        # deal with attrs, it's fine to specify a load in a string like
+        # "noinline fast" as per LLVM or equally as an iterable of individual
+        # attributes.
+        if attrs is None:
+            _attrs = ()
+        elif isinstance(attrs, Iterable) and not isinstance(attrs, str):
+            _attrs = tuple(attrs)
+        else:
+            raise TypeError("attrs must be an iterable of strings or None")
+        code = builder.call(callee, realargs, attrs=_attrs)
+        status = self._get_return_status(builder, code,
+                                         builder.load(excinfoptr))
+        retval = builder.load(retvaltmp)
+        out = self.context.get_returned_value(builder, resty, retval)
+        return status, out
+        """
+
+        """
+        retty = callee.args[0].type.pointee
+        retvaltmp = cgutils.alloca_once(builder, retty)
+        # initialize return value
+        builder.store(cgutils.get_null_value(retty), retvaltmp)
+
+        arginfo = self._get_arg_packer(argtys)
+        args = arginfo.as_arguments(builder, args)
+        realargs = [retvaltmp] + list(args)
+        code = builder.call(callee, realargs)
+        status = self._get_return_status(builder, code)
+        retval = builder.load(retvaltmp)
+        out = self.context.get_returned_value(builder, resty, retval)
+        return status, out
+        """
+
+    def get_function_type(self, restype, argtypes):
+        """
+        Get the implemented Function type for *restype* and *argtypes*.
+        """
+        if True:
+            argtypes = [self.context.get_value_type(x) for x in argtypes]
+            #argtypes = [self.context.get_value_type(x).as_pointer() for x in argtypes]
+            #resptr = self.get_return_type(restype)
+            #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
+            fnty = lir.FunctionType(errcode_t, argtypes)
+            return fnty
+        else:
+            arginfo = self._get_arg_packer(argtypes)
+            argtypes = list(arginfo.argument_types)
+            #resptr = self.get_return_type(restype)
+            #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
+            fnty = lir.FunctionType(errcode_t, argtypes)
+            return fnty
+
+    def decorate_function(self, fn, args, fe_argtypes, noalias=False):
+        """
+        Set names and attributes of function arguments.
+        """
+        assert not noalias
+        if True:
+            arg_names = ['arg.' + a for a in args]
+            for fnarg, arg_name in zip(fn.args, arg_names):
+                fnarg.name = arg_name
+        else:
+            arginfo = self._get_arg_packer(fe_argtypes)
+            arginfo.assign_names(self.get_arguments(fn),
+                                 ['arg.' + a for a in args])
+        return fn
+
+    def decode_arguments(self, builder, argtypes, func):
+        raw_args = self.get_arguments(func)
+        return raw_args
+        #arginfo = self._get_arg_packer(argtypes)
+        #return arginfo.from_arguments(builder, raw_args)
 
 
 class openmp_region_start(ir.Stmt):
@@ -1337,119 +1469,6 @@ class openmp_region_start(ir.Stmt):
             assert(isinstance(last_block.body[-1], ir.Return))
             # Add typemap entry for the empty tuple return type.
             state_copy.typemap[last_block.body[-1].value.name] = types.containers.Tuple(())
-
-            class OpenmpCallConv(MinimalCallConv):
-                def return_value(self, builder, retval):
-                    self._return_errcode_raw(builder, RETCODE_OK)
-
-                def return_user_exc(self, builder, exc, exc_args=None, loc=None,
-                                    func_name=None):
-                    pass  # Don't generate any exception code
-                    #assert False
-
-                def get_arguments(self, func):
-                    return func.args
-
-                def call_function(self, builder, callee, resty, argtys, args, attrs=None):
-                    """
-                    Call the Numba-compiled *callee*.
-                    """
-                    if isinstance(callee.function_type, lir.FunctionType):
-                        ft = callee.function_type
-                        retty = ft.return_type
-                        arginfo = self._get_arg_packer(argtys)
-                        args = list(arginfo.as_arguments(builder, args))
-                        realargs = args
-                        code = builder.call(callee, realargs) #, attrs=_attrs)
-                        retvaltmp = cgutils.alloca_once(builder, errcode_t)
-                        builder.store(RETCODE_OK, retvaltmp)
-                        return retvaltmp, code
-
-                    """
-                    retty = self._get_return_argument(callee.function_type).pointee
-
-                    retvaltmp = cgutils.alloca_once(builder, retty)
-                    # initialize return value to zeros
-                    builder.store(cgutils.get_null_value(retty), retvaltmp)
-
-                    excinfoptr = cgutils.alloca_once(builder, ir.PointerType(excinfo_t),
-                                                     name="excinfo")
-
-                    arginfo = self._get_arg_packer(argtys)
-                    args = list(arginfo.as_arguments(builder, args))
-                    realargs = [retvaltmp, excinfoptr] + args
-                    # deal with attrs, it's fine to specify a load in a string like
-                    # "noinline fast" as per LLVM or equally as an iterable of individual
-                    # attributes.
-                    if attrs is None:
-                        _attrs = ()
-                    elif isinstance(attrs, Iterable) and not isinstance(attrs, str):
-                        _attrs = tuple(attrs)
-                    else:
-                        raise TypeError("attrs must be an iterable of strings or None")
-                    code = builder.call(callee, realargs, attrs=_attrs)
-                    status = self._get_return_status(builder, code,
-                                                     builder.load(excinfoptr))
-                    retval = builder.load(retvaltmp)
-                    out = self.context.get_returned_value(builder, resty, retval)
-                    return status, out
-                    """
-
-                    """
-                    retty = callee.args[0].type.pointee
-                    retvaltmp = cgutils.alloca_once(builder, retty)
-                    # initialize return value
-                    builder.store(cgutils.get_null_value(retty), retvaltmp)
-
-                    arginfo = self._get_arg_packer(argtys)
-                    args = arginfo.as_arguments(builder, args)
-                    realargs = [retvaltmp] + list(args)
-                    code = builder.call(callee, realargs)
-                    status = self._get_return_status(builder, code)
-                    retval = builder.load(retvaltmp)
-                    out = self.context.get_returned_value(builder, resty, retval)
-                    return status, out
-                    """
-
-                def get_function_type(self, restype, argtypes):
-                    """
-                    Get the implemented Function type for *restype* and *argtypes*.
-                    """
-                    if True:
-                        argtypes = [self.context.get_value_type(x) for x in argtypes]
-                        #argtypes = [self.context.get_value_type(x).as_pointer() for x in argtypes]
-                        #resptr = self.get_return_type(restype)
-                        #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
-                        fnty = lir.FunctionType(errcode_t, argtypes)
-                        return fnty
-                    else:
-                        arginfo = self._get_arg_packer(argtypes)
-                        argtypes = list(arginfo.argument_types)
-                        #resptr = self.get_return_type(restype)
-                        #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
-                        fnty = lir.FunctionType(errcode_t, argtypes)
-                        return fnty
-
-                def decorate_function(self, fn, args, fe_argtypes, noalias=False):
-                    """
-                    Set names and attributes of function arguments.
-                    """
-                    assert not noalias
-                    if True:
-                        arg_names = ['arg.' + a for a in args]
-                        for fnarg, arg_name in zip(fn.args, arg_names):
-                            fnarg.name = arg_name
-                    else:
-                        arginfo = self._get_arg_packer(fe_argtypes)
-                        arginfo.assign_names(self.get_arguments(fn),
-                                             ['arg.' + a for a in args])
-                    return fn
-
-                def decode_arguments(self, builder, argtypes, func):
-                    raw_args = self.get_arguments(func)
-                    return raw_args
-                    #arginfo = self._get_arg_packer(argtypes)
-                    #return arginfo.from_arguments(builder, raw_args)
 
             if selected_device == 0:
                 flags = Flags()
@@ -4156,92 +4175,17 @@ class OpenmpVisitor(Transformer):
             new_header_block.body = [or_start] + after_start + for_after_start + [entry_pred.body[-1]]
             self.blocks[new_header_block_num] = new_header_block
 
-            # --- lastprivate handling
-            if len(lastprivate_copying) > 0:
-                new_exit_block = ir.Block(scope, inst.loc)
-                new_exit_block_num = max(self.blocks.keys()) + 1
-                self.blocks[new_exit_block_num] = new_exit_block
-                evar_copy = scope.redefine("evar_copy_sfd", self.loc)
-                keep_alive.append(ir.Assign(size_var, evar_copy, self.loc))
-                or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", evar_copy))
-                #keep_alive.append(ir.Assign(size_var_copy, evar_copy, self.loc))
-                new_exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
-
-                lastprivate_check_block = exit_block
-                lastprivate_check_block.body = []
-
-                lastprivate_copy_block = ir.Block(scope, inst.loc)
-                lastprivate_copy_block_num = max(self.blocks.keys()) + 1
-                self.blocks[lastprivate_copy_block_num] = lastprivate_copy_block
-
-                #lastprivate_check_block.body.append(ir.Jump(lastprivate_copy_block_num, inst.loc))
-                bool_var = scope.redefine("$bool_var", inst.loc)
-                lastprivate_check_block.body.append(ir.Assign(ir.Global("bool", bool, inst.loc), bool_var, inst.loc))
-                or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", bool_var.name))
-
-                size_minus_step = scope.redefine("$size_minus_step", inst.loc)
-                lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.sub, size_var, step_var, inst.loc), size_minus_step, inst.loc))
-                #lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.sub, size_var_copy, step_var, inst.loc), size_minus_step, inst.loc))
-                #or_start.add_tag(openmp_tag("QUAL.OMP.FIRSTPRIVATE", size_var_copy.name))
-                or_start.add_tag(openmp_tag("QUAL.OMP.SHARED", size_var.name))
-                #or_start.add_tag(openmp_tag("QUAL.OMP.SHARED", size_var_copy.name))
-                or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", size_minus_step.name))
-
-                cmp_var = scope.redefine("$lastiter_cmp_var", inst.loc)
-                if latest_index.name in replace_vardict:
-                    li_privatized = replace_vardict[latest_index.name]
-                    lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ge, li_privatized, size_minus_step, inst.loc), cmp_var, inst.loc))
-                else:
-                    lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ge, latest_index, size_minus_step, inst.loc), cmp_var, inst.loc))
-                or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", cmp_var.name))
-
-                zero_var = loop_index.scope.redefine("$zero_var", inst.loc)
-                zero_assign = ir.Assign(ir.Const(0, inst.loc), zero_var, inst.loc)
-                lastprivate_check_block.body.append(zero_assign)
-                or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", zero_var.name))
-
-                did_work_var = scope.redefine("$did_work_var", inst.loc)
-                lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.ne, step_var, zero_var, inst.loc), did_work_var, inst.loc))
-                or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", did_work_var.name))
-
-                last_iter_cmp = scope.redefine("$lastiter_cmp_var_bool", inst.loc)
-                lastprivate_check_block.body.append(ir.Assign(ir.Expr.call(bool_var, [cmp_var], (), inst.loc), last_iter_cmp, inst.loc))
-                or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", last_iter_cmp.name))
-
-                did_work_cmp = scope.redefine("$did_work_var_bool", inst.loc)
-                lastprivate_check_block.body.append(ir.Assign(ir.Expr.call(bool_var, [did_work_var], (), inst.loc), did_work_cmp, inst.loc))
-                or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", did_work_cmp.name))
-
-                and_var = scope.redefine("$and_var", inst.loc)
-                lastprivate_check_block.body.append(ir.Assign(ir.Expr.binop(operator.and_, last_iter_cmp, did_work_cmp, inst.loc), and_var, inst.loc))
-                or_start.add_tag(openmp_tag("QUAL.OMP.PRIVATE", and_var.name))
-
-                if False:
-                    str_var = scope.redefine("$str_var", inst.loc)
-                    str_const = ir.Const("lastiter check:", inst.loc)
-                    str_assign = ir.Assign(str_const, str_var, inst.loc)
-                    lastprivate_check_block.body.append(str_assign)
-                    str_print = ir.Print([str_var, latest_index, size_var, last_iter_cmp, omp_ub_var, did_work_cmp, and_var, size_minus_step, step_var], None, inst.loc)
-                    lastprivate_check_block.body.append(str_print)
-
-                lastprivate_check_block.body.append(ir.Branch(and_var, lastprivate_copy_block_num, new_exit_block_num, inst.loc))
-
-                lastprivate_copy_block.body.extend(lastprivate_copying)
-                lastprivate_copy_block.body.append(ir.Jump(new_exit_block_num, inst.loc))
-
-                entry_pred.body = entry_pred.body[:-1] + priv_saves + before_start + for_before_start + [ir.Jump(new_header_block_num, self.loc)]
+            entry_pred.body = entry_pred.body[:-1] + before_start + for_before_start + [ir.Jump(new_header_block_num, self.loc)]
+            #entry_pred.body = entry_pred.body[:-1] + priv_saves + before_start + for_before_start + [ir.Jump(new_header_block_num, self.loc)]
+            #entry_pred.body = entry_pred.body[:-1] + before_start + for_before_start + [or_start] + after_start + for_after_start + [entry_pred.body[-1]]
+            if for_task:
+                exit_block.body = [or_end] + exit_block.body
+                #exit_block.body = [or_end] + priv_restores + exit_block.body
+                self.add_to_returns(keep_alive)
             else:
-                entry_pred.body = entry_pred.body[:-1] + priv_saves + before_start + for_before_start + [ir.Jump(new_header_block_num, self.loc)]
-                #entry_pred.body = entry_pred.body[:-1] + before_start + for_before_start + [or_start] + after_start + for_after_start + [entry_pred.body[-1]]
-                if for_task:
-                    exit_block.body = [or_end] + exit_block.body
-                    #exit_block.body = [or_end] + priv_restores + exit_block.body
-                    self.add_to_returns(keep_alive)
-                else:
-                    exit_block.body = [or_end] + keep_alive + exit_block.body
-                    #exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
+                exit_block.body = [or_end] + keep_alive + exit_block.body
+                #exit_block.body = [or_end] + priv_restores + keep_alive + exit_block.body
         else:
-            assert(len(lastprivate_copying) == 0)
             new_header_block = ir.Block(scope, self.loc)
             new_header_block.body = [or_start] + after_start + sblk.body[:]
             self.blocks[new_header_block_num] = new_header_block
@@ -5917,3 +5861,54 @@ omp_get_team_num = OpenmpExternalFunction('omp_get_team_num', types.int32())
 omp_get_num_teams = OpenmpExternalFunction('omp_get_num_teams', types.int32())
 omp_is_initial_device = OpenmpExternalFunction('omp_is_initial_device', types.int32())
 omp_get_initial_device = OpenmpExternalFunction('omp_get_initial_device', types.int32())
+
+def copy_np_array(x):
+    return np.copy(x)
+
+# {meminfo, parent, ...} copy_np_array({meminfo,  parent, ...})
+
+def create_native_np_copy(arg_typ):
+    # The cfunc wrapper of this function is what we need.
+    cres = compiler.compile_isolated(copy_np_array, (arg_typ,), arg_typ)
+    name = getattr(cres.fndesc, 'llvm_cfunc_wrapper_name')
+    #ptf = cres.library.get_pointer_to_function(name)
+    #print("create_native_np_copy:", type(cres), type(cres.entry_point))
+    #print(type(cres.library), dir(cres.library), type(ptf))
+    #return ptf
+    print("create_native:", dir(cres.fndesc))
+    return name
+    #return cres.entry_point
+
+    """
+    from numba.core.registry import cpu_target
+    np_copy_ir = compiler.run_frontend(copy_np_array)
+    typingctx = typing.Context()
+    numbacputargetctx = cpu.CPUContext(typingctx, target='cpu')
+
+    class OpenmpCPUTargetContext(cpu.CPUContext):
+        @cached_property
+        def call_conv(self):
+            return OpenmpCallConv(self)
+
+    targetctx = OpenmpCPUTargetContext(typingctx)
+    # Copy everything (like registries) from cpu context into the new OpenMPCPUTargetContext targetctx
+    # except call_conv which is the whole point of that class so that the minimal call convention is used.
+    targetctx.__dict__.update({k: numbacputargetctx.__dict__[k] for k in numbacputargetctx.__dict__.keys() - {'call_conv'}})
+    #targetctx.__dict__.update({k: targetctx.__dict__[k] for k in targetctx.__dict__.keys() - {'call_conv'}})
+
+    flags = compiler.Flags()
+    flags.nrt = True
+    flags.no_cpython_wrapper = True
+#    flags.no_cfunc_wrapper = True
+    targetctx.refresh()
+#    return compiler.compile_extra(typingctx, numbacputargetctx, copy_np_array, (arg_typ,), arg_typ, flags, {})
+    #with cpu_target.nested_context(typingctx, numbacputargetctx):
+    with cpu_target.nested_context(typingctx, targetctx):
+        #return compiler.compile_extra(typingctx, targetctx, copy_np_array, (arg_typ,), arg_typ, flags, {})
+        pass
+        #return compiler.compile_extra(typingctx, numbacputargetctx, copy_np_array, (arg_typ,), arg_typ, flags, {})
+        #return compiler.compile_extra(typingctx, targetctx, copy_np_array, (arg_typ,), None, compiler.DEFAULT_FLAGS, {})
+        #return compiler.compile_extra(typingctx, targetctx, copy_np_array, (arg_typ,), arg_typ, compiler.DEFAULT_FLAGS, {})
+        #return compiler.compile_extra(typingctx, targetctx, np_copy_ir, [arg_typ], arg_typ, compiler.DEFAULT_FLAGS, {})
+    """
+
