@@ -676,6 +676,13 @@ def is_target_tag(x):
     return ret
 
 
+def get_var_dsa(tags, var):
+    for tag in tags:
+        if is_dsa(tag.name) and tag.var_in(var):
+            return tag.name
+    return None
+
+
 class openmp_region_start(ir.Stmt):
     def __init__(self, tags, region_number, loc):
         if config.DEBUG_OPENMP >= 2:
@@ -753,10 +760,11 @@ class openmp_region_start(ir.Stmt):
 
     def get_var_dsa(self, var):
         assert isinstance(var, str)
-        for tag in self.tags:
-            if is_dsa(tag.name) and tag.var_in(var):
-                return tag.name
-        return None
+        return get_var_dsa(self.tags, var)
+        #for tag in self.tags:
+        #    if is_dsa(tag.name) and tag.var_in(var):
+        #        return tag.name
+        #return None
 
     def requires_acquire_release(self):
         self.acq_res = True
@@ -2667,6 +2675,7 @@ class OpenmpVisitor(Transformer):
 
     def replace_private_vars(self, blocks, all_explicits, explicit_privates, clauses, scope, loc, orig_inputs_to_region, for_target=False):
         replace_vardict = {}
+        lastprivate_vars = []
         # Generate a new Numba privatized variable for each openmp private variable.
         for exp_priv in explicit_privates:
             replace_vardict[exp_priv] = ir.Var(scope, exp_priv + "%privatized", loc)
@@ -2717,10 +2726,11 @@ class OpenmpVisitor(Transformer):
             # This one doesn't really do anything except avoid a Numba decref error for arrays.
             #copying_ir_before.append(ir.Assign(ir.Var(scope, carg, loc), replace_vardict[carg], loc))
 
-        def handle_lastprivate(carg, new_shared_clauses, all_explicits, lastprivate_copying, replace_vardict, clause):
+        def handle_lastprivate(carg, new_shared_clauses, all_explicits, lastprivate_copying, replace_vardict, clause, lastprivate_vars):
             new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", carg))
             all_explicits[carg] = new_shared_clauses[-1]
             lastprivate_copying.extend(do_copy(replace_vardict[c.arg], ir.Var(scope, c.arg, loc)))
+            lastprivate_vars.append(carg)
             # This one doesn't really do anything except avoid a Numba decref error for arrays.
             #copying_ir_before.append(ir.Assign(ir.Var(scope, c.arg, loc), replace_vardict[c.arg], loc))
 
@@ -2761,7 +2771,7 @@ class OpenmpVisitor(Transformer):
                         c.name = "QUAL.OMP.PRIVATE"
                         """
                     elif c.name == "QUAL.OMP.LASTPRIVATE":
-                        handle_lastprivate(c.arg, new_shared_clauses, all_explicits, lastprivate_copying, replace_vardict, c)
+                        handle_lastprivate(c.arg, new_shared_clauses, all_explicits, lastprivate_copying, replace_vardict, c, lastprivate_vars)
                         c.name = "QUAL.OMP.PRIVATE"
                         """
                         new_shared_clauses.append(openmp_tag("QUAL.OMP.SHARED", c.arg))
@@ -2817,7 +2827,7 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             for c in clauses:
                 print("clauses:", c)
-        return replace_vardict, copying_ir, copying_ir_before, lastprivate_copying
+        return replace_vardict, copying_ir, copying_ir_before, lastprivate_copying, lastprivate_vars
 
     def prepare_for_directive(self, clauses, vars_in_explicit_clauses, before_start, after_start, start_tags, end_tags, scope):
         start_tags = clauses
@@ -4065,7 +4075,7 @@ class OpenmpVisitor(Transformer):
                 print("vars_in_explicit post:", k, v)
         if config.DEBUG_OPENMP >= 1:
             print("blocks_in_region:", blocks_in_region)
-        replace_vardict, copying_ir, copying_ir_before, lastprivate_copying = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region, for_target=for_target)
+        replace_vardict, copying_ir, copying_ir_before, lastprivate_copying, lastprivate_vars = self.replace_private_vars(blocks_in_region, vars_in_explicit_clauses, explicit_privates, clauses, scope, self.loc, orig_inputs_to_region, for_target=for_target)
         before_start.extend(copying_ir_before)
         after_start.extend(copying_ir)
         if config.DEBUG_OPENMP >= 1:
@@ -4108,7 +4118,8 @@ class OpenmpVisitor(Transformer):
                 save_var = scope.redefine("$"+cp, self.loc)
                 priv_saves.append(ir.Assign(cpvar, for_typing_var, self.loc))
                 priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
-                priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
+                if cp not in lastprivate_vars:
+                    priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
                 if config.DEBUG_OPENMP >= 1:
                     print("clause_privates: cp in replace_vardict:", cpvar, cplovar, save_var)
             else:
@@ -4116,7 +4127,8 @@ class OpenmpVisitor(Transformer):
                 cplovar = ir.Var(scope, clause_privates[cp], self.loc)
                 save_var = scope.redefine("$"+cp, self.loc)
                 priv_saves.append(ir.Assign(cpvar, save_var, self.loc))
-                priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
+                if cp not in lastprivate_vars:
+                    priv_restores.append(ir.Assign(save_var, cplovar, self.loc))
                 if config.DEBUG_OPENMP >= 1:
                     print("clause_privates: cp not in replace_vardict:", cpvar, cplovar, save_var)
 
