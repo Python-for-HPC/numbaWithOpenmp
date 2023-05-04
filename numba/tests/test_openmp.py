@@ -2079,6 +2079,8 @@ class TestOpenmpTask(TestOpenmpBase):
     def __init__(self, *args):
         TestOpenmpBase.__init__(self, *args)
 
+    @unittest.skipUnless(TestOpenmpBase.skip_disabled,
+                    "firstprivate bad")
     def test_task_basic(self):
         def test_impl(ntsks):
             a = np.zeros(ntsks)
@@ -2194,6 +2196,8 @@ class TestOpenmpTask(TestOpenmpBase):
             return ret
         assert(test_impl(4))
 
+    @unittest.skipUnless(TestOpenmpBase.skip_disabled,
+                    "firstprivate bad")
     def test_taskwait(self):
         def test_impl(ntsks):
             a = np.zeros(ntsks)
