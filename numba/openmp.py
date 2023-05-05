@@ -326,7 +326,8 @@ class openmp_tag(object):
                     #struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*strides", non_arg=True, omp_slice=(0,stride_abi_size * cur_tag_ndim)))
 
                 if gen_copy and isinstance(xtyp, types.npytypes.Array):
-                    native_np_copy = create_native_np_copy(xtyp)
+                    native_np_copy, cres = create_native_np_copy(xtyp)
+                    lowerer.library.add_llvm_module(cres.library._final_module)
                     nnclen = len(native_np_copy)
                     decl += f", [{nnclen} x i8] c\"{native_np_copy}\""
         elif isinstance(x, StringLiteral):
@@ -473,7 +474,7 @@ class openmp_tag(object):
         is_array = self.arg in typemap and isinstance(typemap[self.arg], types.npytypes.Array)
 
         gen_copy = name_to_use in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.LASTPRIVATE"]
-            
+
         if name_to_use in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.MAP.TO", "QUAL.OMP.MAP.FROM"] and is_array:
             #name_to_use += ".STRUCT"
             #var_table = get_name_var_table(lowerer.func_ir.blocks)
@@ -5877,7 +5878,7 @@ def create_native_np_copy(arg_typ):
     #print(type(cres.library), dir(cres.library), type(ptf))
     #return ptf
     print("create_native:", dir(cres.fndesc))
-    return name
+    return (name, cres)
     #return cres.entry_point
 
     """
