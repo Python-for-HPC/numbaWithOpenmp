@@ -4190,7 +4190,8 @@ class OpenmpVisitor(Transformer):
             new_header_block.body = [or_start] + after_start + sblk.body[:]
             self.blocks[new_header_block_num] = new_header_block
 
-            sblk.body = priv_saves + before_start + [ir.Jump(new_header_block_num, self.loc)]
+            sblk.body = before_start + [ir.Jump(new_header_block_num, self.loc)]
+            #sblk.body = priv_saves + before_start + [ir.Jump(new_header_block_num, self.loc)]
             if for_task:
                 eblk.body = [or_end] + eblk.body[:]
                 #eblk.body = [or_end] + priv_restores + eblk.body[:]
