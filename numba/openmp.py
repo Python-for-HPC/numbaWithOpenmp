@@ -810,7 +810,7 @@ class OpenmpCallConv(MinimalCallConv):
 
 
 class openmp_region_start(ir.Stmt):
-    def __init__(self, tags, region_number, loc):
+    def __init__(self, tags, region_number, loc, firstprivate_dead_after=None):
         if config.DEBUG_OPENMP >= 2:
             print("region ids openmp_region_start::__init__", id(self))
         self.tags = tags
@@ -821,6 +821,7 @@ class openmp_region_start(ir.Stmt):
         self.tag_vars = set()
         self.normal_iv = None
         self.target_copy = False
+        self.firstprivate_dead_after = [] if firstprivate_dead_after is None else firstprivate_dead_after
         for tag in self.tags:
             if isinstance(tag.arg, ir.Var):
                 self.tag_vars.add(tag.arg.name)
@@ -1755,26 +1756,6 @@ class OnlyLower(compiler.CompilerBase):
             pms.append(compiler.DefaultPassBuilder.define_nopython_lowering_pipeline(self.state))
         return pms
 
-class TypeLower(compiler.CompilerBase):
-    def define_pipelines(self):
-        pms = []
-        
-        #pm = compiler_machinery.PassManager("TypeLower::typing")
-        ## typing
-        #pm.add_pass(typed_passes.NopythonTypeInference, "nopython frontend")
-        #pm.add_pass(typed_passes.AnnotateTypes, "annotate types")
-        #pm.finalize()
-        #pms.append(pm)
-
-        #if not self.state.flags.force_pyobject:
-        #    pms.append(compiler.DefaultPassBuilder.define_nopython_lowering_pipeline(self.state))
-        pm = compiler_machinery.PassManager("OpenMP TypeLower")
-        pm.add_pass(typed_passes.NativeLowering, "native lowering")
-        pm.add_pass(typed_passes.NoPythonBackend, "nopython mode backend")
-        pm.finalize()
-        pms.append(pm)
-        return pms
-
 
 class openmp_region_end(ir.Stmt):
     def __init__(self, start_region, tags, loc):
@@ -1834,6 +1815,13 @@ class openmp_region_end(ir.Stmt):
 
             pre_fn = builder.module.declare_intrinsic('llvm.directive.region.exit', (), fnty)
             builder.call(pre_fn, [self.start_region.omp_region_var], tail=True, tags=openmp_tag_list_to_str(self.tags, lowerer, True))
+            
+            if config.DEBUG_OPENMP >= 1:
+                print("OpenMP end lowering firstprivate_dead_after len:", len(self.start_region.firstprivate_dead_after))
+
+            for fp in self.start_region.firstprivate_dead_after:
+                new_del = ir.Del(fp.arg, self.loc)
+                lowerer.lower_inst(new_del)
 
     def __str__(self):
         return "openmp_region_end " + ", ".join([str(x) for x in self.tags])
@@ -2492,7 +2480,7 @@ class OpenmpVisitor(Transformer):
             print("inputs_to_region:", inputs_to_region)
             print("private_to_region:", private_to_region)
             print("def_but_live_out:", def_but_live_out)
-        return inputs_to_region, def_but_live_out, private_to_region
+        return inputs_to_region, def_but_live_out, private_to_region, live_map
 
     def get_explicit_vars(self, clauses):
         user_vars = {}
@@ -3549,7 +3537,7 @@ class OpenmpVisitor(Transformer):
             for clause in clauses:
                 print("final clause:", clause)
 
-        inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
+        inputs_to_region, def_but_live_out, private_to_region, live_map = self.find_io_vars(self.body_blocks)
         used_in_region = inputs_to_region | def_but_live_out | private_to_region
         clauses = self.filter_unused_vars(clauses, used_in_region)
 
@@ -3761,7 +3749,7 @@ class OpenmpVisitor(Transformer):
         or_start.requires_acquire_release()
         or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.CRITICAL")], self.loc)
 
-        inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(self.body_blocks)
+        inputs_to_region, def_but_live_out, private_to_region, live_map = self.find_io_vars(self.body_blocks)
         inputs_to_region = {remove_ssa(x, scope, self.loc):x for x in inputs_to_region}
         def_but_live_out = {remove_ssa(x, scope, self.loc):x for x in def_but_live_out}
         common_keys = inputs_to_region.keys() & def_but_live_out.keys()
@@ -4054,7 +4042,7 @@ class OpenmpVisitor(Transformer):
             exit_block = eblk
 
         # Do an analysis to get variable use information coming into and out of the region.
-        inputs_to_region, def_but_live_out, private_to_region = self.find_io_vars(blocks_for_io)
+        inputs_to_region, def_but_live_out, private_to_region, live_map = self.find_io_vars(blocks_for_io)
         orig_inputs_to_region = copy.copy(inputs_to_region)
         live_out_copy = copy.copy(def_but_live_out)
 
@@ -4184,7 +4172,9 @@ class OpenmpVisitor(Transformer):
         #or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TARGET", target_num)], self.loc)
         new_header_block_num = max(self.blocks.keys()) + 1
 
-        or_start = openmp_region_start(start_tags, 0, self.loc)
+        firstprivate_dead_after = list(filter(lambda x: x.name == "QUAL.OMP.FIRSTPRIVATE" and x.arg not in live_map[self.blk_end], start_tags))
+
+        or_start = openmp_region_start(start_tags, 0, self.loc, firstprivate_dead_after=firstprivate_dead_after)
         or_end   = openmp_region_end(or_start, end_tags, self.loc)
 
         if config.DEBUG_OPENMP >= 1:
@@ -4196,6 +4186,8 @@ class OpenmpVisitor(Transformer):
             """
             for x in keep_alive:
                 print("keep_alive:", x)
+            for x in firstprivate_dead_after:
+                print("firstprivate_dead_after:", x)
 
         if has_loop:
             new_header_block = ir.Block(scope, self.loc)
