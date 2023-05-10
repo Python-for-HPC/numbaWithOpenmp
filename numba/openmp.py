@@ -19,7 +19,7 @@ from numba.core.ir_utils import (
     dead_code_elimination
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, find_top_level_loops
-from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils, typing, cpu
+from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils, typing, cpu, compiler_machinery
 from numba import np as numba_np
 from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
@@ -326,8 +326,8 @@ class openmp_tag(object):
                     #struct_tags.append(openmp_tag(cur_tag.name, cur_tag.arg + "*strides", non_arg=True, omp_slice=(0,stride_abi_size * cur_tag_ndim)))
 
                 if gen_copy and isinstance(xtyp, types.npytypes.Array):
-                    native_np_copy, cres = create_native_np_copy(xtyp)
-                    lowerer.library.add_llvm_module(cres.library._final_module)
+                    native_np_copy, copy_cres = create_native_np_copy(xtyp)
+                    lowerer.library.add_llvm_module(copy_cres.library._final_module)
                     nnclen = len(native_np_copy)
                     decl += f", [{nnclen} x i8] c\"{native_np_copy}\""
         elif isinstance(x, StringLiteral):
@@ -1520,13 +1520,6 @@ class openmp_region_start(ir.Stmt):
             flags.inline = "always"
             # Create a pipeline that only lowers the outlined target code.  No need to
             # compile because it has already gone through those passes.
-            class OnlyLower(compiler.CompilerBase):
-                def define_pipelines(self):
-                    pms = []
-                    if not self.state.flags.force_pyobject:
-                        pms.append(compiler.DefaultPassBuilder.define_nopython_lowering_pipeline(self.state))
-                    return pms
-
             if config.DEBUG_OPENMP >= 1:
                 print("outlined_ir:", outlined_ir, type(outlined_ir), outlined_ir.arg_names)
                 dprint_func_ir(outlined_ir, "outlined_ir")
@@ -1755,6 +1748,34 @@ class openmp_region_start(ir.Stmt):
         return "openmp_region_start " + ", ".join([str(x) for x in self.tags]) + " target=" + str(self.target_copy)
 
 
+class OnlyLower(compiler.CompilerBase):
+    def define_pipelines(self):
+        pms = []
+        if not self.state.flags.force_pyobject:
+            pms.append(compiler.DefaultPassBuilder.define_nopython_lowering_pipeline(self.state))
+        return pms
+
+class TypeLower(compiler.CompilerBase):
+    def define_pipelines(self):
+        pms = []
+        
+        #pm = compiler_machinery.PassManager("TypeLower::typing")
+        ## typing
+        #pm.add_pass(typed_passes.NopythonTypeInference, "nopython frontend")
+        #pm.add_pass(typed_passes.AnnotateTypes, "annotate types")
+        #pm.finalize()
+        #pms.append(pm)
+
+        #if not self.state.flags.force_pyobject:
+        #    pms.append(compiler.DefaultPassBuilder.define_nopython_lowering_pipeline(self.state))
+        pm = compiler_machinery.PassManager("OpenMP TypeLower")
+        pm.add_pass(typed_passes.NativeLowering, "native lowering")
+        pm.add_pass(typed_passes.NoPythonBackend, "nopython mode backend")
+        pm.finalize()
+        pms.append(pm)
+        return pms
+
+
 class openmp_region_end(ir.Stmt):
     def __init__(self, start_region, tags, loc):
         if config.DEBUG_OPENMP >= 1:
@@ -1806,6 +1827,11 @@ class openmp_region_end(ir.Stmt):
             assert self.start_region.omp_region_var != None
             if config.DEBUG_OPENMP >= 2:
                 print("before adding exit", self.start_region.omp_region_var._get_name())
+
+            for fp in filter(lambda x: x.name == "QUAL.OMP.FIRSTPRIVATE", self.start_region.tags):
+                new_del = ir.Del(fp.arg, self.loc)
+                lowerer.lower_inst(new_del)
+
             pre_fn = builder.module.declare_intrinsic('llvm.directive.region.exit', (), fnty)
             builder.call(pre_fn, [self.start_region.omp_region_var], tail=True, tags=openmp_tag_list_to_str(self.tags, lowerer, True))
 
@@ -5864,53 +5890,15 @@ omp_get_num_teams = OpenmpExternalFunction('omp_get_num_teams', types.int32())
 omp_is_initial_device = OpenmpExternalFunction('omp_is_initial_device', types.int32())
 omp_get_initial_device = OpenmpExternalFunction('omp_get_initial_device', types.int32())
 
+
 def copy_np_array(x):
     return np.copy(x)
+
 
 # {meminfo, parent, ...} copy_np_array({meminfo,  parent, ...})
 
 def create_native_np_copy(arg_typ):
     # The cfunc wrapper of this function is what we need.
-    cres = compiler.compile_isolated(copy_np_array, (arg_typ,), arg_typ)
-    name = getattr(cres.fndesc, 'llvm_cfunc_wrapper_name')
-    #ptf = cres.library.get_pointer_to_function(name)
-    #print("create_native_np_copy:", type(cres), type(cres.entry_point))
-    #print(type(cres.library), dir(cres.library), type(ptf))
-    #return ptf
-    print("create_native:", dir(cres.fndesc))
-    return (name, cres)
-    #return cres.entry_point
-
-    """
-    from numba.core.registry import cpu_target
-    np_copy_ir = compiler.run_frontend(copy_np_array)
-    typingctx = typing.Context()
-    numbacputargetctx = cpu.CPUContext(typingctx, target='cpu')
-
-    class OpenmpCPUTargetContext(cpu.CPUContext):
-        @cached_property
-        def call_conv(self):
-            return OpenmpCallConv(self)
-
-    targetctx = OpenmpCPUTargetContext(typingctx)
-    # Copy everything (like registries) from cpu context into the new OpenMPCPUTargetContext targetctx
-    # except call_conv which is the whole point of that class so that the minimal call convention is used.
-    targetctx.__dict__.update({k: numbacputargetctx.__dict__[k] for k in numbacputargetctx.__dict__.keys() - {'call_conv'}})
-    #targetctx.__dict__.update({k: targetctx.__dict__[k] for k in targetctx.__dict__.keys() - {'call_conv'}})
-
-    flags = compiler.Flags()
-    flags.nrt = True
-    flags.no_cpython_wrapper = True
-#    flags.no_cfunc_wrapper = True
-    targetctx.refresh()
-#    return compiler.compile_extra(typingctx, numbacputargetctx, copy_np_array, (arg_typ,), arg_typ, flags, {})
-    #with cpu_target.nested_context(typingctx, numbacputargetctx):
-    with cpu_target.nested_context(typingctx, targetctx):
-        #return compiler.compile_extra(typingctx, targetctx, copy_np_array, (arg_typ,), arg_typ, flags, {})
-        pass
-        #return compiler.compile_extra(typingctx, numbacputargetctx, copy_np_array, (arg_typ,), arg_typ, flags, {})
-        #return compiler.compile_extra(typingctx, targetctx, copy_np_array, (arg_typ,), None, compiler.DEFAULT_FLAGS, {})
-        #return compiler.compile_extra(typingctx, targetctx, copy_np_array, (arg_typ,), arg_typ, compiler.DEFAULT_FLAGS, {})
-        #return compiler.compile_extra(typingctx, targetctx, np_copy_ir, [arg_typ], arg_typ, compiler.DEFAULT_FLAGS, {})
-    """
-
+    copy_cres = compiler.compile_isolated(copy_np_array, (arg_typ,), arg_typ)
+    copy_name = getattr(copy_cres.fndesc, 'llvm_cfunc_wrapper_name')
+    return (copy_name, copy_cres)
