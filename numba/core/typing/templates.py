@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from types import MethodType, FunctionType
 
 import numba
-from numba.core import types, utils
+from numba.core import types, utils, targetconfig
 from numba.core.errors import (
     TypingError,
     InternalError,
@@ -673,7 +673,7 @@ class _OverloadFunctionTemplate(AbstractTemplate):
             # needs to exist for type resolution
 
             # NOTE: If lowering is failing on a `_EmptyImplementationEntry`,
-            #       the inliner has failed to inline this entry corretly.
+            #       the inliner has failed to inline this entry correctly.
             impl_init = _EmptyImplementationEntry('always inlined')
             self._compiled_overloads[sig.args] = impl_init
             if not self._inline.is_always_inline:
@@ -701,7 +701,7 @@ class _OverloadFunctionTemplate(AbstractTemplate):
         Returning a Dispatcher object.  The Dispatcher object is cached
         internally in `self._impl_cache`.
         """
-        flags = utils.ConfigStack.top_or_none()
+        flags = targetconfig.ConfigStack.top_or_none()
         cache_key = self.context, tuple(args), tuple(kws.items()), flags
         try:
             impl, args = self._impl_cache[cache_key]
@@ -716,37 +716,30 @@ class _OverloadFunctionTemplate(AbstractTemplate):
     def _get_jit_decorator(self):
         """Gets a jit decorator suitable for the current target"""
 
-        jitter_str = self.metadata.get('target', None)
-        if jitter_str is None:
-            from numba import jit
-            # There is no target requested, use default, this preserves
-            # original behaviour
-            jitter = lambda *args, **kwargs: jit(*args, nopython=True, **kwargs)
-        else:
-            from numba.core.target_extension import (target_registry,
-                                                     get_local_target,
-                                                     jit_registry)
+        from numba.core.target_extension import (target_registry,
+                                                 get_local_target,
+                                                 jit_registry)
 
-            # target has been requested, see what it is...
-            jitter = jit_registry.get(jitter_str, None)
+        jitter_str = self.metadata.get('target', 'generic')
+        jitter = jit_registry.get(jitter_str, None)
 
-            if jitter is None:
-                # No JIT known for target string, see if something is
-                # registered for the string and report if not.
-                target_class = target_registry.get(jitter_str, None)
-                if target_class is None:
-                    msg = ("Unknown target '{}', has it been ",
-                           "registered?")
-                    raise ValueError(msg.format(jitter_str))
+        if jitter is None:
+            # No JIT known for target string, see if something is
+            # registered for the string and report if not.
+            target_class = target_registry.get(jitter_str, None)
+            if target_class is None:
+                msg = ("Unknown target '{}', has it been ",
+                       "registered?")
+                raise ValueError(msg.format(jitter_str))
 
-                target_hw = get_local_target(self.context)
+            target_hw = get_local_target(self.context)
 
-                # check that the requested target is in the hierarchy for the
-                # current frame's target.
-                if not issubclass(target_hw, target_class):
-                    msg = "No overloads exist for the requested target: {}."
+            # check that the requested target is in the hierarchy for the
+            # current frame's target.
+            if not issubclass(target_hw, target_class):
+                msg = "No overloads exist for the requested target: {}."
 
-                jitter = jit_registry[target_hw]
+            jitter = jit_registry[target_hw]
 
         if jitter is None:
             raise ValueError("Cannot find a suitable jit decorator")
@@ -809,7 +802,7 @@ class _OverloadFunctionTemplate(AbstractTemplate):
 
         # Check type of pyfunc
         if not isinstance(pyfunc, FunctionType):
-            msg = ("Implementator function returned by `@overload` "
+            msg = ("Implementation function returned by `@overload` "
                    "has an unexpected type.  Got {}")
             raise AssertionError(msg.format(pyfunc))
 
@@ -901,22 +894,25 @@ def make_overload_template(func, overload_func, jit_options, strict,
     return type(base)(name, (base,), dct)
 
 
-class _IntrinsicTemplate(AbstractTemplate):
-    """
-    A base class of templates for intrinsic definition
-    """
+class _TemplateTargetHelperMixin(object):
+    """Mixin for helper methods that assist with target/registry resolution"""
 
-    def generic(self, args, kws):
-        """
-        Type the intrinsic by the arguments.
+    def _get_target_registry(self, reason):
+        """Returns the registry for the current target.
+
+        Parameters
+        ----------
+        reason: str
+            Reason for the resolution. Expects a noun.
+        Returns
+        -------
+        reg : a registry suitable for the current target.
         """
         from numba.core.target_extension import (_get_local_target_checked,
                                                  dispatcher_registry)
-        from numba.core.imputils import builtin_registry
-
-        cache_key = self.context, args, tuple(kws.items())
         hwstr = self.metadata.get('target', 'generic')
-        target_hw = _get_local_target_checked(self.context, hwstr, "intrinsic")
+        target_hw = _get_local_target_checked(self.context, hwstr, reason)
+        # Get registry for the current hardware
         disp = dispatcher_registry[target_hw]
         tgtctx = disp.targetdescr.target_context
         # This is all workarounds...
@@ -948,7 +944,20 @@ class _IntrinsicTemplate(AbstractTemplate):
             # Pick a registry in which to install intrinsics
             registries = iter(tgtctx._registries)
             reg = next(registries)
-        lower_builtin = reg.lower
+        return reg
+
+
+class _IntrinsicTemplate(_TemplateTargetHelperMixin, AbstractTemplate):
+    """
+    A base class of templates for intrinsic definition
+    """
+
+    def generic(self, args, kws):
+        """
+        Type the intrinsic by the arguments.
+        """
+        lower_builtin = self._get_target_registry('intrinsic').lower
+        cache_key = self.context, args, tuple(kws.items())
         try:
             return self._impl_cache[cache_key]
         except KeyError:
@@ -1026,7 +1035,7 @@ class AttributeTemplate(object):
     generic_resolve = NotImplemented
 
 
-class _OverloadAttributeTemplate(AttributeTemplate):
+class _OverloadAttributeTemplate(_TemplateTargetHelperMixin, AttributeTemplate):
     """
     A base class of templates for @overload_attribute functions.
     """
@@ -1037,30 +1046,11 @@ class _OverloadAttributeTemplate(AttributeTemplate):
         self.context = context
         self._init_once()
 
-    def _get_target_registry(self):
-        """Returns the registry for the current target
-        """
-        from numba.core.target_extension import (_get_local_target_checked,
-                                                 dispatcher_registry)
-        hwstr = self.metadata.get('target', 'generic')
-        target_hw = _get_local_target_checked(self.context, hwstr, "attribute")
-        # Get resgistry for the current hardware
-        disp = dispatcher_registry[target_hw]
-        tgtctx = disp.targetdescr.target_context
-        tgtctx.refresh()
-        if builtin_registry in tgtctx._registries:
-            reg = builtin_registry
-        else:
-            # Pick a registry in which to install intrinsics
-            registries = iter(tgtctx._registries)
-            reg = next(registries)
-        return reg
-
     def _init_once(self):
         cls = type(self)
         attr = cls._attr
 
-        lower_getattr = self._get_target_registry().lower_getattr
+        lower_getattr = self._get_target_registry('attribute').lower_getattr
 
         @lower_getattr(cls.key, attr)
         def getattr_impl(context, builder, typ, value):
@@ -1104,7 +1094,7 @@ class _OverloadMethodTemplate(_OverloadAttributeTemplate):
         attr = self._attr
 
         try:
-            registry = self._get_target_registry()
+            registry = self._get_target_registry('method')
         except InternalTargetMismatchError:
             # Target mismatch. Do not register attribute lookup here.
             pass

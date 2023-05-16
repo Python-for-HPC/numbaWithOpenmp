@@ -99,6 +99,11 @@ INPLACE_BINOPS_TO_OPERATORS = {
     '@=': operator.imatmul,
 }
 
+
+ALL_BINOPS_TO_OPERATORS = {**BINOPS_TO_OPERATORS,
+                           **INPLACE_BINOPS_TO_OPERATORS}
+
+
 UNARY_BUITINS_TO_OPERATORS = {
     '+': operator.pos,
     '-': operator.neg,
@@ -175,7 +180,7 @@ def shutting_down(globals=globals):
 # which atexit is True. Some of these finalizers may call shutting_down() to
 # check whether the interpreter is shutting down. For this to behave correctly,
 # we need to make sure that _at_shutdown is called before the finalizer exit
-# function. Since atexit operates as a LIFO stack, we first contruct a dummy
+# function. Since atexit operates as a LIFO stack, we first construct a dummy
 # finalizer then register atexit to ensure this ordering.
 weakref.finalize(lambda: None, lambda: None)
 atexit.register(_at_shutdown)
@@ -195,49 +200,63 @@ def use_old_style_errors():
     return config.CAPTURED_ERRORS == 'old_style'
 
 
-class ConfigStack:
-    """A stack for tracking target configurations in the compiler.
+class ThreadLocalStack:
+    """A TLS stack container.
 
-    It stores the stack in a thread-local class attribute. All instances in the
-    same thread will see the same stack.
+    Uses the BORG pattern and stores states in threadlocal storage.
     """
-    tls = threading.local()
+    _tls = threading.local()
+    stack_name: str
+    _registered = {}
 
-    @classmethod
-    def top_or_none(cls):
-        """Get the TOS or return None if no config is set.
-        """
-        self = cls()
-        if self:
-            flags = self.top()
-        else:
-            # Note: should this be the default flag for the target instead?
-            flags = None
-        return flags
+    def __init_subclass__(cls, *, stack_name, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # Register stack_name mapping to the new subclass
+        assert stack_name not in cls._registered, \
+            f"stack_name: '{stack_name}' already in use"
+        cls.stack_name = stack_name
+        cls._registered[stack_name] = cls
 
     def __init__(self):
-        tls = self.tls
+        # This class must not be used directly.
+        assert type(self) is not ThreadLocalStack
+        tls = self._tls
+        attr = f"stack_{self.stack_name}"
         try:
-            stk = tls.stack
+            tls_stack = getattr(tls, attr)
         except AttributeError:
-            tls.stack = stk = []
-        self._stk = stk
+            tls_stack = list()
+            setattr(tls, attr, tls_stack)
 
-    def push(self, data):
-        self._stk.append(data)
+        self._stack = tls_stack
+
+    def push(self, state):
+        """Push to the stack
+        """
+        self._stack.append(state)
 
     def pop(self):
-        return self._stk.pop()
+        """Pop from the stack
+        """
+        return self._stack.pop()
 
     def top(self):
-        return self._stk[-1]
+        """Get the top item on the stack.
+
+        Raises IndexError if the stack is empty. Users should check the size
+        of the stack beforehand.
+        """
+        return self._stack[-1]
 
     def __len__(self):
-        return len(self._stk)
+        return len(self._stack)
 
     @contextlib.contextmanager
-    def enter(self, flags):
-        self.push(flags)
+    def enter(self, state):
+        """A contextmanager that pushes ``state`` for the duration of the
+        context.
+        """
+        self.push(state)
         try:
             yield
         finally:
@@ -360,69 +379,6 @@ class UniqueDict(dict):
         if key in self:
             raise AssertionError("key already in dictionary: %r" % (key,))
         super(UniqueDict, self).__setitem__(key, value)
-
-
-if PYVERSION > (3, 7):
-    from functools import cached_property
-else:
-    from threading import RLock
-
-    # The following cached_property() implementation is adapted from CPython:
-    # https://github.com/python/cpython/blob/3.8/Lib/functools.py#L924-L976
-    # commit SHA: 12b714391e485d0150b343b114999bae4a0d34dd
-
-    ###########################################################################
-    ### cached_property() - computed once per instance, cached as attribute
-    ###########################################################################
-
-    _NOT_FOUND = object()
-
-    class cached_property:
-        def __init__(self, func):
-            self.func = func
-            self.attrname = None
-            self.__doc__ = func.__doc__
-            self.lock = RLock()
-
-        def __set_name__(self, owner, name):
-            if self.attrname is None:
-                self.attrname = name
-            elif name != self.attrname:
-                raise TypeError(
-                    "Cannot assign the same cached_property to two different names " # noqa: E501
-                    f"({self.attrname!r} and {name!r})."
-                )
-
-        def __get__(self, instance, owner=None):
-            if instance is None:
-                return self
-            if self.attrname is None:
-                raise TypeError(
-                    "Cannot use cached_property instance without calling __set_name__ on it.") # noqa: E501
-            try:
-                cache = instance.__dict__
-            except AttributeError:  # not all objects have __dict__ (e.g. class defines slots) # noqa: E501
-                msg = (
-                    f"No '__dict__' attribute on {type(instance).__name__!r} "
-                    f"instance to cache {self.attrname!r} property."
-                )
-                raise TypeError(msg) from None
-            val = cache.get(self.attrname, _NOT_FOUND)
-            if val is _NOT_FOUND:
-                with self.lock:
-                    # check if another thread filled cache while we awaited lock
-                    val = cache.get(self.attrname, _NOT_FOUND)
-                    if val is _NOT_FOUND:
-                        val = self.func(instance)
-                        try:
-                            cache[self.attrname] = val
-                        except TypeError:
-                            msg = (
-                                f"The '__dict__' attribute on {type(instance).__name__!r} instance "    # noqa: E501
-                                f"does not support item assignment for caching {self.attrname!r} property." # noqa: E501
-                            )
-                            raise TypeError(msg) from None
-            return val
 
 
 def runonce(fn):
@@ -690,3 +646,19 @@ class _RedirectSubpackage(ModuleType):
     def __reduce__(self):
         args = (self.__old_module_states, self.__new_module)
         return _RedirectSubpackage, args
+
+
+def get_hashable_key(value):
+    """
+        Given a value, returns a key that can be used
+        as a hash. If the value is hashable, we return
+        the value, otherwise we return id(value).
+
+        See discussion in gh #6957
+    """
+    try:
+        hash(value)
+    except TypeError:
+        return id(value)
+    else:
+        return value

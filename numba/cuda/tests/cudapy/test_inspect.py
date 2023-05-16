@@ -1,9 +1,7 @@
 import numpy as np
-import warnings
 
 from io import StringIO
 from numba import cuda, float32, float64, int32, intp
-from numba.core.errors import NumbaDeprecationWarning
 from numba.cuda.testing import unittest, CUDATestCase
 from numba.cuda.testing import (skip_on_cudasim, skip_with_nvdisasm,
                                 skip_without_nvdisasm)
@@ -31,7 +29,14 @@ class TestInspect(CUDATestCase):
         self.assertIn("(float32, int32)", typeanno)
         file.close()
         # Function name in LLVM
-        self.assertIn("foo", foo.inspect_llvm(sig))
+        llvm = foo.inspect_llvm(sig)
+        self.assertIn("foo", llvm)
+
+        # Kernel in LLVM
+        self.assertIn('cuda.kernel.wrapper', llvm)
+
+        # Wrapped device function body in LLVM
+        self.assertIn("define linkonce_odr i32", llvm)
 
         asm = foo.inspect_asm(sig)
 
@@ -65,6 +70,14 @@ class TestInspect(CUDATestCase):
         # Function name in LLVM
         self.assertIn("foo", llvmirs[intp, intp])
         self.assertIn("foo", llvmirs[float64, float64])
+
+        # Kernels in LLVM
+        self.assertIn('cuda.kernel.wrapper', llvmirs[intp, intp])
+        self.assertIn('cuda.kernel.wrapper', llvmirs[float64, float64])
+
+        # Wrapped device function bodies in LLVM
+        self.assertIn("define linkonce_odr i32", llvmirs[intp, intp])
+        self.assertIn("define linkonce_odr i32", llvmirs[float64, float64])
 
         asmdict = foo.inspect_asm()
 
@@ -129,49 +142,6 @@ class TestInspect(CUDATestCase):
             f.inspect_sass()
 
         self.assertIn('nvdisasm is required', str(raises.exception))
-
-    def test_inspect_ptx(self):
-        # Ensure that inspect_ptx works - see issue #6950
-        @cuda.jit(device=True)
-        def use_power(x):
-            return x ** 3
-
-        ptx = use_power.inspect_ptx((int32,)).decode()
-
-        # A simple sanity check - look for multiplications used to implement
-        # `x ** 3` as `x * x * x`.
-        self.assertIn('mul.wide.s32', ptx)
-        self.assertIn('mul.lo.s64', ptx)
-
-    def test_inspect_ptx_deprecation(self):
-        # Make sure we warn the user that inspect_ptx is deprecated and tell
-        # them to use compile_ptx instead.
-        @cuda.jit(device=True)
-        def use_power(x):
-            return x ** 3
-
-        with warnings.catch_warnings(record=True) as w:
-            use_power.inspect_ptx((int32,))
-
-        self.assertEqual(w[0].category, NumbaDeprecationWarning)
-        self.assertIn('Use compile_ptx instead', str(w[0].message))
-
-    def test_inspect_ptx_nvvm_options_deprecation(self):
-        # Ensure that we warn the user of the deprecation of inspect_ptx and
-        # that nvvm_options are ignored if they pass nvvm_options to
-        # inspect_ptx.
-        @cuda.jit(device=True)
-        def use_power(x):
-            return x ** 3
-
-        with warnings.catch_warnings(record=True) as w:
-            nvvm_options = {'opt': 0}
-            use_power.inspect_ptx((int32,), nvvm_options=nvvm_options)
-
-        self.assertEqual(w[0].category, NumbaDeprecationWarning)
-        self.assertIn('Use compile_ptx instead', str(w[0].message))
-        self.assertEqual(w[1].category, NumbaDeprecationWarning)
-        self.assertIn('nvvm_options are ignored', str(w[1].message))
 
 
 if __name__ == '__main__':

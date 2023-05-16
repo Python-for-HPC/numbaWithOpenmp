@@ -1815,7 +1815,7 @@ class openmp_region_end(ir.Stmt):
 
             pre_fn = builder.module.declare_intrinsic('llvm.directive.region.exit', (), fnty)
             builder.call(pre_fn, [self.start_region.omp_region_var], tail=True, tags=openmp_tag_list_to_str(self.tags, lowerer, True))
-            
+
             if config.DEBUG_OPENMP >= 1:
                 print("OpenMP end lowering firstprivate_dead_after len:", len(self.start_region.firstprivate_dead_after))
 
@@ -2078,9 +2078,27 @@ def extract_args_from_openmp(func_ir):
 
 class _OpenmpContextType(WithContext):
     is_callable = True
+    first_time = True
+
+    def do_numba_fixups(self):
+        from numba import core
+        orig_lower_inst = core.lowering.Lower.lower_inst
+        core.lowering.Lower.orig_lower_inst = orig_lower_inst
+        def new_lower(self, inst):
+            if isinstance(inst, openmp_region_start):
+                return _lower_openmp_region_start(self, inst)
+            elif isinstance(inst, openmp_region_end):
+                return _lower_openmp_region_end(self, inst)
+            else:
+                return self.orig_lower_inst(inst)
+        core.lowering.Lower.lower_inst = new_lower
 
     def mutate_with_body(self, func_ir, blocks, blk_start, blk_end,
                          body_blocks, dispatcher_factory, extra, state=None, flags=None):
+        if _OpenmpContextType.first_time == True:
+            _OpenmpContextType.first_time = False
+            self.do_numba_fixups()
+
         if config.DEBUG_OPENMP >= 1:
             print("pre-dead-code")
             dump_blocks(blocks)
