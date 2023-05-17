@@ -25,12 +25,11 @@ from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
 from numba.extending import overload
 from numba.core.callconv import BaseCallConv, MinimalCallConv, errcode_t, RETCODE_OK, Status, excinfo_t
-from numba.core.utils import cached_property
+from functools import cached_property
 from numba.core.datamodel.registry import register_default as model_register
 from numba.core.datamodel.registry import default_manager as model_manager
 from cffi import FFI
 import llvmlite.binding as ll
-import llvmlite.llvmpy.core as lc
 import llvmlite.ir as lir
 import operator
 import sys
@@ -41,7 +40,7 @@ import numpy as np
 from numba.core.analysis import compute_use_defs, compute_live_map, compute_cfg_from_blocks, ir_extension_usedefs, _use_defs_result
 import subprocess
 import tempfile
-from numba.cuda.cudaimpl import lower as cudaimpl_lower
+#from numba.cuda.cudaimpl import lower as cudaimpl_lower
 import types as python_types
 
 library_missing = False
@@ -298,7 +297,7 @@ class openmp_tag(object):
                 if struct_lower and isinstance(xtyp, types.npytypes.Array):
                     dm = lowerer.context.data_model_manager.lookup(xtyp)
                     cur_tag_ndim = xtyp.ndim
-                    stride_typ = lowerer.context.get_value_type(types.intp) #lc.Type.int(64)
+                    stride_typ = lowerer.context.get_value_type(types.intp) #lir.Type.int(64)
                     stride_abi_size = lowerer.context.get_abi_sizeof(stride_typ)
                     array_var = var_table[self.arg]
                     if config.DEBUG_OPENMP >= 1:
@@ -410,7 +409,7 @@ class openmp_tag(object):
                             alloca_name = "$alloca_total_size_" + str(x)
                             if config.DEBUG_OPENMP >= 2:
                                 print("alloca_name:", alloca_name)
-                            alloca_typ = lowerer.context.get_value_type(types.intp) #lc.Type.int(64)
+                            alloca_typ = lowerer.context.get_value_type(types.intp) #lir.Type.int(64)
                             alloca_res = lowerer.alloca_lltype(alloca_name, alloca_typ)
                             if config.DEBUG_OPENMP >= 2:
                                 print("alloca:", alloca_name, alloca_typ, alloca_res, alloca_res.get_reference())
@@ -1055,7 +1054,7 @@ class openmp_region_start(ir.Stmt):
                     cur_tag_typ = typemap_lookup(typemap, cur_tag.arg)
                     if isinstance(cur_tag_typ, types.npytypes.Array):
                         cur_tag_ndim = cur_tag_typ.ndim
-                        stride_typ = lowerer.context.get_value_type(types.intp) #lc.Type.int(64)
+                        stride_typ = lowerer.context.get_value_type(types.intp) #lir.Type.int(64)
                         stride_abi_size = context.get_abi_sizeof(stride_typ)
                         array_var = var_table[cur_tag.arg]
                         if config.DEBUG_OPENMP >= 1:
@@ -1648,8 +1647,8 @@ class openmp_region_start(ir.Stmt):
             #bytes_array_typ = lir.ArrayType(cgutils.voidptr_t, len(target_elf))
             #bytes_array_typ = lir.ArrayType(cgutils.int8_t, len(target_elf))
             #dev_image = cgutils.add_global_variable(mod, bytes_array_typ, ".omp_offloading.device_image")
-            #dev_image.initializer = lc.Constant.array(cgutils.int8_t, target_elf)
-            #dev_image.initializer = lc.Constant.array(cgutils.int8_t, target_elf)
+            #dev_image.initializer = lir.Constant.array(cgutils.int8_t, target_elf)
+            #dev_image.initializer = lir.Constant.array(cgutils.int8_t, target_elf)
             add_target_globals_in_numba = int(os.environ.get("NUMBA_OPENMP_ADD_TARGET_GLOBALS", 0))
             if add_target_globals_in_numba != 0:
                 elftext = cgutils.make_bytearray(target_elf)
@@ -1659,9 +1658,9 @@ class openmp_region_start(ir.Stmt):
 
                 llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 2)
                 llvmused_gv = cgutils.add_global_variable(mod, llvmused_typ, "llvm.used")
-                llvmused_syms = [lc.Constant.bitcast(dev_image, cgutils.voidptr_t),
-                                 lc.Constant.bitcast(mangled_var, cgutils.voidptr_t)]
-                llvmused_gv.initializer = lc.Constant.array(cgutils.voidptr_t, llvmused_syms)
+                llvmused_syms = [lir.Constant.bitcast(dev_image, cgutils.voidptr_t),
+                                 lir.Constant.bitcast(mangled_var, cgutils.voidptr_t)]
+                llvmused_gv.initializer = lir.Constant.array(cgutils.voidptr_t, llvmused_syms)
                 llvmused_gv.linkage = "appending"
             else:
                 host_side_target_tags.append(openmp_tag("QUAL.OMP.TARGET.DEV_FUNC", StringLiteral(cres.fndesc.mangled_name.encode("utf-8"))))
@@ -1670,24 +1669,24 @@ class openmp_region_start(ir.Stmt):
             """
             llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 1)
             llvmused_gv = cgutils.add_global_variable(mod, llvmused_typ, "llvm.used")
-            llvmused_syms = [lc.Constant.bitcast(dev_image, cgutils.voidptr_t)]
-            llvmused_gv.initializer = lc.Constant.array(cgutils.voidptr_t, llvmused_syms)
+            llvmused_syms = [lir.Constant.bitcast(dev_image, cgutils.voidptr_t)]
+            llvmused_gv.initializer = lir.Constant.array(cgutils.voidptr_t, llvmused_syms)
             llvmused_gv.linkage = "appending"
             """
 
             """
-            todd_gv1_typ = targetctx.get_value_type(types.intp) #lc.Type.int(64)
+            todd_gv1_typ = targetctx.get_value_type(types.intp) #lir.Type.int(64)
             tgv = cgutils.add_global_variable(target_module, todd_gv1_typ, "todd_gv1")
             tst = targetctx.insert_const_string(target_module, "todd_string2")
             llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 1)
             #llvmused_typ = lir.ArrayType(cgutils.voidptr_t, 2)
             #llvmused_typ = lir.ArrayType(cgutils.intp_t, 2)
             llvmused_gv = cgutils.add_global_variable(target_module, llvmused_typ, "llvm.used")
-            llvmused_syms = [lc.Constant.bitcast(tgv, cgutils.voidptr_t)]
+            llvmused_syms = [lir.Constant.bitcast(tgv, cgutils.voidptr_t)]
             #llvmused_syms = [tgv, tst]
-            llvmused_gv.initializer = lc.Constant.array(cgutils.voidptr_t, llvmused_syms)
-            #llvmused_gv.initializer = lc.Constant.array(cgutils.intp_t, llvmused_syms)
-            #llvmused_gv.initializer = lc.Constant.array(llvmused_typ, llvmused_syms)
+            llvmused_gv.initializer = lir.Constant.array(cgutils.voidptr_t, llvmused_syms)
+            #llvmused_gv.initializer = lir.Constant.array(cgutils.intp_t, llvmused_syms)
+            #llvmused_gv.initializer = lir.Constant.array(llvmused_typ, llvmused_syms)
             llvmused_gv.linkage = "appending"
 
             #targetctx.declare_function(target_module, )
@@ -1697,7 +1696,7 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 dprint_func_ir(func_ir, "target after outline compiled func_ir")
 
-        llvm_token_t = lc.Type.token()
+        llvm_token_t = lir.TokenType()
         fnty = lir.FunctionType(llvm_token_t, [])
         tags_to_include = self.tags + host_side_target_tags
         #tags_to_include = list(filter(lambda x: x.name != "DIR.OMP.TARGET", tags_to_include))
@@ -1796,8 +1795,8 @@ class openmp_region_end(ir.Stmt):
             print("start_region tag length:", self.start_region.filtered_tag_length)
 
         if self.start_region.filtered_tag_length > 0:
-            llvm_token_t = lc.Type.token()
-            fnty = lir.FunctionType(lc.Type.void(), [llvm_token_t])
+            llvm_token_t = lir.TokenType()
+            fnty = lir.FunctionType(lir.VoidType(), [llvm_token_t])
             # The callback is only needed if llvm.directive.region.entry was added
             # which only happens if tag length > 0.
             pop_alloca_callback(lowerer, builder)
@@ -2939,6 +2938,8 @@ class OpenmpVisitor(Transformer):
                 # Loop through all statements in block that jumps to the end of the region.
                 # If those are all assignments where the LHS is dead then they are safe.
                 for nlb_stmt in nlb.body[:-1]:
+                    if isinstance(nlb_stmt, ir.PopBlock):
+                        continue
                     if not isinstance(nlb_stmt, ir.Assign):
                         break  # Non-assignment is not known to be safe...will fallthrough to raise exception.
                     if nlb_stmt.target.name in live_end:
