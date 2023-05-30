@@ -52,6 +52,10 @@ if iomplib is None:
 if iomplib is None:
     iomplib = ctypes.util.find_library("libiomp5.so")
 if iomplib is None:
+    iomplib = ctypes.util.find_library("omp")
+if iomplib is None:
+    iomplib = ctypes.util.find_library("libomp")
+if iomplib is None:
     library_missing = True
 else:
     if config.DEBUG_OPENMP >= 1:
@@ -62,11 +66,14 @@ omptargetlib = os.getenv('NUMBA_OMPTARGET_LIB', None)
 if omptargetlib is None:
     omptargetlib = ctypes.util.find_library("libomptarget.so")
 if omptargetlib is None:
+    omptargetlib = ctypes.util.find_library("omptarget")
+if omptargetlib is None:
     library_missing = True
 else:
     if config.DEBUG_OPENMP >= 1:
         print("Found OpenMP target runtime library at", omptargetlib)
     ll.load_library_permanently(omptargetlib)
+
 
 #----------------------------------------------------------------------------------------------
 
@@ -932,17 +939,21 @@ class openmp_region_start(ir.Stmt):
     def process_alloca_queue(self):
         # This should be old code...making sure with the assertion.
         assert len(self.alloca_queue) == 0
+        """
         has_update = False
         for alloca_instr, typ in self.alloca_queue:
             has_update = self.process_one_alloca(alloca_instr, typ) or has_update
         if has_update:
             self.update_tags()
         self.alloca_queue = []
+        """
 
     def post_lowering_process_alloca_queue(self, enter_directive):
         has_update = False
         if config.DEBUG_OPENMP >= 1:
             print("starting post_lowering_process_alloca_queue")
+        assert len(self.alloca_queue) == 0
+        """
         for alloca_instr, typ in self.alloca_queue:
             has_update = self.process_one_alloca(alloca_instr, typ) or has_update
         if has_update:
@@ -955,6 +966,7 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 print("post_lowering_process_alloca_queue updated tags:", enter_directive.tags)
         self.alloca_queue = []
+        """
 
     def process_one_alloca(self, alloca_instr, typ):
         avar = alloca_instr.name
@@ -1815,7 +1827,7 @@ class openmp_region_end(ir.Stmt):
 
             pre_fn = builder.module.declare_intrinsic('llvm.directive.region.exit', (), fnty)
             builder.call(pre_fn, [self.start_region.omp_region_var], tail=True, tags=openmp_tag_list_to_str(self.tags, lowerer, True))
-            
+
             if config.DEBUG_OPENMP >= 1:
                 print("OpenMP end lowering firstprivate_dead_after len:", len(self.start_region.firstprivate_dead_after))
 
