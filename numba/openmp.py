@@ -509,21 +509,6 @@ def openmp_tag_list_to_str(tag_list, lowerer, debug):
     tag_strs = [x.lower(lowerer, debug) for x in tag_list]
     return '[ ' + ", ".join(tag_strs) + ' ]'
 
-def add_offload_info(lowerer, new_data):
-    if hasattr(lowerer, 'omp_offload'):
-        lowerer.omp_offload.append(new_data)
-    else:
-        lowerer.omp_offload = [new_data]
-
-
-def get_next_offload_number(lowerer):
-    if hasattr(lowerer, 'offload_number'):
-        cur = lowerer.offload_number
-    else:
-        cur = 0
-    lowerer.offload_number = cur + 1
-    return cur
-
 
 def list_vars_from_tags(tags):
     used_vars = []
@@ -1725,20 +1710,6 @@ class openmp_region_start(ir.Stmt):
             self.omp_region_var.save_orig_numba_openmp = self
             if config.DEBUG_OPENMP >= 2:
                 print("setting omp_region_var", self.omp_region_var._get_name())
-        """
-        if self.omp_metadata is None and self.has_target():
-            self.omp_metadata = builder.module.add_metadata([
-                 lir.IntType(32)(0),   # Kind of this metadata.  0 is for target.
-                 lir.IntType(32)(lb.getDeviceForFile(self.loc.filename)),   # Device ID of the file with the entry.
-                 lir.IntType(32)(lb.getFileIdForFile(self.loc.filename)),   # File ID of the file with the entry.
-                 lowerer.fndesc.mangled_name,   # Mangled name of the function with the entry.
-                 lir.IntType(32)(self.loc.line),  # Line in the source file where with the entry.
-                 lir.IntType(32)(self.region_number),   # Order the entry was created.
-                 #lir.IntType(32)(get_next_offload_number(lowerer)),   # Order the entry was created.
-                 lir.IntType(32)(0)    # Entry kind.  Should always be 0 I think.
-                ])
-            add_offload_info(lowerer, self.omp_metadata)
-        """
         if self.acq_res:
             builder.fence("acquire")
         if self.acq_rel:

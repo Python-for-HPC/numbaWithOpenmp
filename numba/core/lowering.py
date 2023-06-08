@@ -139,13 +139,6 @@ class BaseLower(object):
         """
         Called after all blocks are lowered
         """
-        # Add omp offloading metadata if present.
-        if hasattr(self, 'omp_offload'):
-            print("Has omp_offload")
-            omp_offload_metadata = self.module.get_or_insert_named_metadata('omp_offload.info')
-            for oi in self.omp_offload:
-                omp_offload_metadata.add(oi)
-
         self.debuginfo.finalize()
 
     def pre_block(self, block):
@@ -477,7 +470,6 @@ class Lower(BaseLower):
             pass
 
     def lower_inst(self, inst):
-        #print("lower_inst:", inst)
         # Set debug location for all subsequent LL instructions
         self.debuginfo.mark_location(self.builder, self.loc.line)
         self.debug_print(str(inst))
