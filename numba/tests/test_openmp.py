@@ -987,6 +987,15 @@ class TestOpenmpParallelClauses(TestOpenmpBase):
             return b
         self.check(test_impl, 10, np.ones(10))
 
+    def test_teams1(self):
+        def test_impl():
+            a = 1
+            with openmp('teams'):
+                with openmp('parallel'):
+                    a = 123
+            return a
+        self.check(test_impl)
+
 
 @linux_only
 class TestOpenmpDataClauses(TestOpenmpBase):
