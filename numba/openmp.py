@@ -629,6 +629,8 @@ def copy_one(x, calltypes):
         return ir.FreeVar(copy_one(x.index, calltypes), copy_one(x.name, calltypes), copy_one(x.value, calltypes), copy_one(x.loc, calltypes))
     elif isinstance(x, slice):
         return slice(copy_one(x.start, calltypes), copy_one(x.stop, calltypes), copy_one(x.step, calltypes))
+    elif isinstance(x, ir.PopBlock):
+        return ir.PopBlock(copy_one(x.loc, calltypes))
     print("Failed to handle the following type when copying target IR.", type(x), x)
     assert False
 

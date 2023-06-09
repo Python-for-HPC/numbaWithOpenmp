@@ -164,15 +164,6 @@ def _load_global_helpers():
             ll.add_symbol("PyExc_%s" % (obj.__name__), id(obj))
 
 
-def print_overloads(overloads):
-    for o in overloads:
-        print(type(o), o)
-
-def print_defns(defns):
-    for k,v in defns.items():
-        print("Key:", k, v, type(k), type(v))
-        print_overloads(v.versions)
-
 class BaseContext(object):
     """
 
@@ -460,7 +451,7 @@ class BaseContext(object):
         self.call_conv.decorate_function(fn, fndesc.args, fndesc.argtypes, noalias=fndesc.noalias)
         if fndesc.inline:
             fn.attributes.add('alwaysinline')
-        else:
+#        else:
             # fn.attributes.add('noinline')   # Is this a pyomp change?
             # alwaysinline overrides optnone
             fn.attributes.discard('noinline')

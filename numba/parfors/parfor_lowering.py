@@ -27,9 +27,6 @@ from numba.core.ir_utils import (
     get_np_ufunc_typ,
     get_unused_var_name,
     is_const_call,
-    remove_dead,
-    build_definitions,
-    replace_vars_inner,
     fixup_var_define_in_scope,
     transfer_scope,
     find_max_label,
@@ -42,11 +39,6 @@ from numba.core.errors import (
     NumbaParallelSafetyWarning, NotDefinedError, CompilerError, InternalError,
 )
 from numba.parfors.parfor_lowering_utils import ParforLoweringBuilder
-
-multi_tile = False
-
-
-#----------------------------------------------------------------------------------------------
 
 
 class ParforLower(lowering.Lower):
@@ -356,9 +348,7 @@ def _lower_parfor_parallel_std(lowerer, parfor):
     num_reductions = len(parfor_redvars)
     num_inputs = len(func_args) - len(parfor_output_arrays) - num_reductions
     if config.DEBUG_ARRAY_OPT:
-        print("func", func, type(func))
-        print("func_args", func_args, type(func_args))
-        print("func_sig", func_sig, type(func_sig))
+        print("func_args", func_args)
         print("num_inputs = ", num_inputs)
         print("parfor_outputs = ", parfor_output_arrays)
         print("parfor_redvars = ", parfor_redvars)
@@ -1632,21 +1622,12 @@ def call_parallel_gufunc(lowerer, cres, gu_signature, outer_sig, expr_args, expr
         print("expr_args", expr_args)
         print("expr_arg_types", expr_arg_types)
         print("gu_signature", gu_signature)
-        print("cres", cres, type(cres))
-        print("cres.library", cres.library, type(cres.library))
-        print("cres.fndesc", cres.fndesc, type(cres.fndesc))
 
     # Build the wrapper for GUFunc
     args, return_type = sigutils.normalize_signature(outer_sig)
     llvm_func = cres.library.get_function(cres.fndesc.llvm_func_name)
 
-    if config.DEBUG_ARRAY_OPT:
-        print("llvm_func", llvm_func, type(llvm_func))
     sin, sout = gu_signature
-
-    if config.DEBUG_ARRAY_OPT:
-        print("sin", sin)
-        print("sout", sout)
 
     # These are necessary for build_gufunc_wrapper to find external symbols
     _launch_threads()

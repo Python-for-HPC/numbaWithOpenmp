@@ -470,6 +470,7 @@ class Lower(BaseLower):
             pass
 
     def lower_inst(self, inst):
+        #print("lower_inst:", inst)
         # Set debug location for all subsequent LL instructions
         self.debuginfo.mark_location(self.builder, self.loc.line)
         self.debug_print(str(inst))
@@ -1465,7 +1466,7 @@ class Lower(BaseLower):
         #if hasattr(fetype, "cpointer") and fetype.cpointer:
         if name.startswith("arg.cpointer."):
             llty = self.context.get_value_type(types.CPointer(fetype))
-            ptr = values.Argument(self.module, llty, name)
+            ptr = llvmlite.ir.values.Argument(self.module, llty, name)
             self.varmap[name] = ptr
             return
 
