@@ -451,8 +451,6 @@ class BaseContext(object):
         self.call_conv.decorate_function(fn, fndesc.args, fndesc.argtypes, noalias=fndesc.noalias)
         if fndesc.inline:
             fn.attributes.add('alwaysinline')
-#        else:
-            # fn.attributes.add('noinline')   # Is this a pyomp change?
             # alwaysinline overrides optnone
             fn.attributes.discard('noinline')
             fn.attributes.discard('optnone')
@@ -630,7 +628,6 @@ class BaseContext(object):
                 return None
             else:
                 pyval = getattr(typ.pymod, attr)
-                #TODD llval = self.get_constant(attrty, pyval)
                 def imp(context, builder, typ, val, attr):
                     llval = self.get_constant_generic(builder, attrty, pyval)
                     return impl_ret_borrowed(context, builder, attrty, llval)

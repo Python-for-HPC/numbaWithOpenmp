@@ -99,10 +99,6 @@ import numba.cpython.builtins
 from numba.stencils import stencilparfor
 # circular dependency: import numba.npyufunc.dufunc.DUFunc
 
-def dprint(*s):
-    if config.DEBUG_ARRAY_OPT >= 1:
-        print(*s)
-
 # wrapped pretty print
 _termwidth = 80
 _txtwrapper = textwrap.TextWrapper(width=_termwidth, drop_whitespace=False)
@@ -4456,6 +4452,10 @@ def has_cross_iter_dep(
 
     return False, index_positions, indexed_arrays, non_indexed_arrays
 
+
+def dprint(*s):
+    if config.DEBUG_ARRAY_OPT >= 1:
+        print(*s)
 
 def get_parfor_pattern_vars(parfor):
     """ get the variables used in parfor pattern information

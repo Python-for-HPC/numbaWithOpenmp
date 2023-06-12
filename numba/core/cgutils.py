@@ -396,10 +396,6 @@ def alloca_once(builder, ty, size=None, name='', zfill=False):
         # Also zero-fill at the use-site
         if zfill:
             builder.store(ptr.type.pointee(None), ptr)
-
-        for cb in alloca_callbacks:
-            cb[0](cb[1], ptr, ty)
-
         return ptr
 
 

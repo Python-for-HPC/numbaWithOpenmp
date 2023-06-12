@@ -33,12 +33,7 @@ class DataModelManager(object):
             return self._cache[fetype]
         except KeyError:
             pass
-        fetype_typ = type(fetype)
-        if fetype_typ not in self._handlers:
-            bases = fetype_typ.__bases__
-            if len(bases) == 1:
-                fetype_typ = bases[0] 
-        handler = self._handlers[fetype_typ]
+        handler = self._handlers[type(fetype)]
         model = self._cache[fetype] = handler(self, fetype)
         return model
 

@@ -1245,8 +1245,7 @@ class CPUCodegen(Codegen):
                 # prevented vectorization from working. The desired
                 # vectorization effects can be achieved with this in LLVM 11
                 # (and also < 11) but at a potentially slightly higher cost:
-#                Todd: I don't remember why I commented this out.  Re-evaluate later.
-#                pm.add_licm_pass()
+                pm.add_licm_pass()
                 pm.add_cfg_simplification_pass()
             else:
                 # These passes are required to get SVML to vectorize tests

@@ -348,7 +348,7 @@ def _lower_parfor_parallel_std(lowerer, parfor):
     num_reductions = len(parfor_redvars)
     num_inputs = len(func_args) - len(parfor_output_arrays) - num_reductions
     if config.DEBUG_ARRAY_OPT:
-        print("func_args", func_args)
+        print("func_args = ", func_args)
         print("num_inputs = ", num_inputs)
         print("parfor_outputs = ", parfor_output_arrays)
         print("parfor_redvars = ", parfor_redvars)
@@ -1626,7 +1626,6 @@ def call_parallel_gufunc(lowerer, cres, gu_signature, outer_sig, expr_args, expr
     # Build the wrapper for GUFunc
     args, return_type = sigutils.normalize_signature(outer_sig)
     llvm_func = cres.library.get_function(cres.fndesc.llvm_func_name)
-
     sin, sout = gu_signature
 
     # These are necessary for build_gufunc_wrapper to find external symbols

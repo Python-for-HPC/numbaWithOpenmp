@@ -28,6 +28,7 @@ from numba.core.callconv import BaseCallConv, MinimalCallConv, errcode_t, RETCOD
 from functools import cached_property
 from numba.core.datamodel.registry import register_default as model_register
 from numba.core.datamodel.registry import default_manager as model_manager
+from numba.core.datamodel.models import OpaqueModel
 from cffi import FFI
 import llvmlite.binding as ll
 import llvmlite.ir as lir
@@ -5848,6 +5849,8 @@ class OpenmpExternalFunction(types.ExternalFunction):
         C = ffi.dlopen(None)
         return getattr(C, fname)(*args)
 
+
+model_register(OpenmpExternalFunction)(OpaqueModel)
 
 omp_set_num_threads = OpenmpExternalFunction('omp_set_num_threads', types.void(types.int32))
 omp_get_thread_num = OpenmpExternalFunction('omp_get_thread_num', types.int32())
