@@ -18,7 +18,7 @@ from numba.core.ir_utils import (
     build_definitions,
     dead_code_elimination
 )
-from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, find_top_level_loops
+from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, filter_nested_loops
 from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils, typing, cpu, compiler_machinery
 from numba import np as numba_np
 from numba.core.controlflow import CFGraph
@@ -2930,7 +2930,7 @@ class OpenmpVisitor(Transformer):
         for k, v in all_loops.items():
             if v.header >= self.blk_start and v.header <= self.blk_end:
                 loops[k] = v
-        loops = list(find_top_level_loops(cfg, loops=loops))
+        loops = list(filter_nested_loops(cfg, loops))
 
         if config.DEBUG_OPENMP >= 1:
             print("loops:", loops)

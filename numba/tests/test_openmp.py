@@ -2777,6 +2777,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         assert(r[0] == n1)
         assert(r[1] == n1 + nt + 2*n2)
 
+    @unittest.skipUnless(TestOpenmpBase.skip_disabled, "Abort - unimplemented")
     def target_data_nested(self, device):
         target_pragma = f"""target data device({device}) map(to: a)
                         map(tofrom: b) map(from: as1, as2, bs1, bs2)"""

@@ -20,8 +20,6 @@ from numba.misc.inspection import disassemble_elf_to_cfg
 from numba.misc.llvm_pass_timings import PassTimingsCollection
 
 
-import sys
-
 _x86arch = frozenset(['x86', 'i386', 'i486', 'i586', 'i686', 'i786',
                       'i886', 'i986'])
 
@@ -682,7 +680,6 @@ class CPUCodeLibrary(CodeLibrary):
         with self._recorded_timings.record(cheap_name):
             # A cheaper optimisation pass is run first to try and get as many
             # refops into the same function as possible via inlining
-            #self._codegen._mpm_full.run(self._final_module)
             self._codegen._mpm_cheap.run(self._final_module)
         # Refop pruning is then run on the heavily inlined function
         if not config.LLVM_REFPRUNE_PASS:
@@ -811,13 +808,9 @@ class CPUCodeLibrary(CodeLibrary):
 
         if config.DUMP_OPTIMIZED:
             dump("OPTIMIZED DUMP %s" % self.name, self.get_llvm_str(), 'llvm')
-            sys.stdout.flush()
 
         if config.DUMP_ASSEMBLY:
-            asm = self.get_asm_str()
-            if asm:
-                dump("ASSEMBLY %s" % self.name, asm, 'asm')
-                sys.stdout.flush()
+            dump("ASSEMBLY %s" % self.name, self.get_asm_str(), 'asm')
 
     def get_defined_functions(self):
         """
@@ -1212,7 +1205,8 @@ class CPUCodegen(Codegen):
         self._data_layout = str(self._target_data)
         self._mpm_cheap = self._module_pass_manager(loop_vectorize=False,
                                                     slp_vectorize=False,
-                                                    opt=3,
+                                                    opt=0,
+                                                    #opt=3,
                                                     cost="cheap")
         self._mpm_full = self._module_pass_manager()
 

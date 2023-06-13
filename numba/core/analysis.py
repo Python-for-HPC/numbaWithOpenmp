@@ -247,13 +247,8 @@ def compute_cfg_from_blocks(blocks):
     return cfg
 
 
-def find_top_level_loops(cfg, loops=None):
-    """
-    A generator that yields toplevel loops given a control-flow-graph
-    """
+def filter_nested_loops(cfg, loops):
     blocks_in_loop = set()
-    if loops is None:
-        loops = cfg.loops()
     # get loop bodies
     for loop in loops.values():
         insiders = set(loop.body) | set(loop.entries) | set(loop.exits)
@@ -263,6 +258,14 @@ def find_top_level_loops(cfg, loops=None):
     for loop in loops.values():
         if loop.header not in blocks_in_loop:
             yield _fix_loop_exit(cfg, loop)
+
+
+def find_top_level_loops(cfg, loops=None):
+    """
+    A generator that yields toplevel loops given a control-flow-graph
+    """
+    loops = cfg.loops()
+    filter_nested_loops(cfg, loops)
 
 
 def _fix_loop_exit(cfg, loop):

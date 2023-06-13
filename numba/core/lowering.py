@@ -212,13 +212,6 @@ class BaseLower(object):
             else:
                 print(self.module)
             print('=' * 80)
-            import sys
-            sys.stdout.flush()
-            print("name:", self.fndesc.unique_name)
-            fname = str(self.fndesc.unique_name) + ".bc"
-
-            with open(fname, "w") as llvm_file:
-                llvm_file.write(str(self.module))
 
         # Special optimization to remove NRT on functions that do not need it.
         if self.context.enable_nrt and self.generator_info is None:

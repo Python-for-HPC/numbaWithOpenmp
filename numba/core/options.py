@@ -90,7 +90,6 @@ class DefaultOptions:
     error_model = _mapping("error_model")
     inline = _mapping("inline")
     forceinline = _mapping("forceinline")
-    enable_ssa = _mapping("enable_ssa") # Todd pyomp
 
     target_backend = _mapping("target_backend")
 
