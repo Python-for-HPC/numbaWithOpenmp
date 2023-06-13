@@ -132,13 +132,11 @@ class CPUContext(BaseContext):
                                         self.get_env_name(self.fndesc))
         envarg = builder.load(envgv)
         pyapi = self.get_python_api(builder)
-        from numba.openmp import in_openmp_region
-        if not in_openmp_region(builder):
-            pyapi.emit_environment_sentry(
-                envarg,
-                return_pyobject=return_pyobject,
-                debug_msg=self.fndesc.env_name,
-            )
+        pyapi.emit_environment_sentry(
+            envarg,
+            return_pyobject=return_pyobject,
+            debug_msg=self.fndesc.env_name,
+        )
         env_body = self.get_env_body(builder, envarg)
         return pyapi.get_env_manager(self.environment, env_body, envarg)
 
@@ -195,12 +193,6 @@ class CPUContext(BaseContext):
                                 fndesc, env, call_helper=call_helper,
                                 release_gil=release_gil)
         builder.build()
-        if config.DUMP_LLVM:
-            print(("LLVM WRAPPER DUMP %s" % fndesc).center(80, '-'))
-            print(wrapper_module)
-            print('=' * 80)
-            import sys
-            sys.stdout.flush()
         library.add_ir_module(wrapper_module)
 
     def create_cfunc_wrapper(self, library, fndesc, env, call_helper):

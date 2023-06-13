@@ -969,7 +969,7 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 print(f"LLVM variable {avar} didn't previously exist in the list of vars so adding as private.")
             self.add_tag(openmp_tag("QUAL.OMP.PRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
-            #self.tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
+            #self.add_tag(openmp_tag("QUAL.OMP.FIRSTPRIVATE", alloca_instr)) # is FIRSTPRIVATE right here?
             has_update = True
         return has_update
 
