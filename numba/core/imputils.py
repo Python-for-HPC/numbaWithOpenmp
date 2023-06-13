@@ -190,15 +190,12 @@ def user_function(fndesc, libs):
     """
 
     def imp(context, builder, sig, args):
-        from numba.openmp import in_openmp_region
-
         func = context.declare_function(builder.module, fndesc)
         # env=None assumes this is a nopython function
         status, retval = context.call_conv.call_function(
             builder, func, fndesc.restype, fndesc.argtypes, args)
-        if not in_openmp_region(builder):
-            with cgutils.if_unlikely(builder, status.is_error):
-                context.call_conv.return_status_propagate(builder, status)
+        with cgutils.if_unlikely(builder, status.is_error):
+            context.call_conv.return_status_propagate(builder, status)
         assert sig.return_type == fndesc.restype
         # Reconstruct optional return type
         retval = fix_returning_optional(context, builder, sig, status, retval)

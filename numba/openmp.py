@@ -704,7 +704,7 @@ class OpenmpCallConv(MinimalCallConv):
             builder.store(RETCODE_OK, retvaltmp)
 
             excinfoptr = cgutils.alloca_once(builder, lir.PointerType(excinfo_t),
-                                         name="excinfo")
+                                         name=".excinfo")
             status = Status(code=code,
                             is_ok=cgutils.true_bit,
                             is_error=cgutils.false_bit,
@@ -723,7 +723,7 @@ class OpenmpCallConv(MinimalCallConv):
         builder.store(cgutils.get_null_value(retty), retvaltmp)
 
         excinfoptr = cgutils.alloca_once(builder, ir.PointerType(excinfo_t),
-                                         name="excinfo")
+                                         name=".excinfo")
 
         arginfo = self._get_arg_packer(argtys)
         args = list(arginfo.as_arguments(builder, args))
@@ -981,6 +981,60 @@ class openmp_region_start(ir.Stmt):
             return True
         return False
 
+    def update_context(self, context, builder):
+        cctyp = type(context.call_conv)
+        #print("start update_context id(context)", id(context), "id(const.call_conv)", id(context.call_conv), "cctyp", cctyp, "id(cctyp)", id(cctyp))
+
+        if not hasattr(cctyp, "pyomp_patch_installed") or cctyp.pyomp_patch_installed == False:
+            cctyp.pyomp_patch_installed = True
+            #print("update_context", "id(cctyp.return_user_exec)", id(cctyp.return_user_exc), "id(context)", id(context))
+            setattr(cctyp, "orig_return_user_exc", cctyp.return_user_exc)
+            def pyomp_return_user_exc(self, builder, *args, **kwargs):
+                #print("pyomp_return_user_exc")
+                if in_openmp_region(builder):
+                    return
+                self.orig_return_user_exc(builder, *args, **kwargs)
+            setattr(cctyp, "return_user_exc", pyomp_return_user_exc)
+            #print("after", id(pyomp_return_user_exc), id(cctyp.return_user_exc))
+
+            setattr(cctyp, "orig_return_status_propagate", cctyp.return_status_propagate)
+            def pyomp_return_status_propagate(self, builder, *args, **kwargs):
+                if in_openmp_region(builder):
+                    return
+                self.orig_return_status_propagate(builder, *args, **kwargs)
+            setattr(cctyp, "return_status_propagate", pyomp_return_status_propagate)
+
+        cemtyp = type(context.error_model)
+        #print("start update_context id(context)", id(context), "id(const.error_model)", id(context.error_model), "cemtyp", cemtyp, "id(cemtyp)", id(cemtyp))
+
+        if not hasattr(cemtyp, "pyomp_patch_installed") or cemtyp.pyomp_patch_installed == False:
+            cemtyp.pyomp_patch_installed = True
+            #print("update_context", "id(cemtyp.return_user_exec)", id(cemtyp.fp_zero_division), "id(context)", id(context))
+            setattr(cemtyp, "orig_fp_zero_division", cemtyp.fp_zero_division)
+            def pyomp_fp_zero_division(self, builder, *args, **kwargs):
+                #print("pyomp_fp_zero_division")
+                if in_openmp_region(builder):
+                    return False
+                return self.orig_fp_zero_division(builder, *args, **kwargs)
+            setattr(cemtyp, "fp_zero_division", pyomp_fp_zero_division)
+            #print("after", id(pyomp_fp_zero_division), id(cemtyp.fp_zero_division))
+
+        pyapi = context.get_python_api(builder)
+        ptyp = type(pyapi)
+
+        if not hasattr(ptyp, "pyomp_patch_installed") or ptyp.pyomp_patch_installed == False:
+            ptyp.pyomp_patch_installed = True
+            #print("update_context", "id(ptyp.emit_environment_sentry)", id(ptyp.emit_environment_sentry), "id(context)", id(context))
+            setattr(ptyp, "orig_emit_environment_sentry", ptyp.emit_environment_sentry)
+            def pyomp_emit_environment_sentry(self, *args, **kwargs):
+                builder = self.builder
+                #print("pyomp_emit_environment_sentry")
+                if in_openmp_region(builder):
+                    return False
+                return self.orig_emit_environment_sentry(*args, **kwargs)
+            setattr(ptyp, "emit_environment_sentry", pyomp_emit_environment_sentry)
+            #print("after", id(pyomp_emit_environment_sentry), id(ptyp.emit_environment_sentry))
+
     def lower(self, lowerer):
         typingctx = lowerer.context.typing_context
         targetctx = lowerer.context
@@ -994,6 +1048,7 @@ class openmp_region_start(ir.Stmt):
         self.block = builder.block
         self.builder = builder
         self.lowerer = lowerer
+        self.update_context(context, builder)
         if config.DEBUG_OPENMP >= 1:
             print("region ids lower:block", id(self), self, id(self.block), self.block, type(self.block), self.tags, len(self.tags), "builder_id:", id(self.builder), "block_id:", id(self.block))
             for k,v in lowerer.func_ir.blocks.items():
@@ -2071,6 +2126,9 @@ class _OpenmpContextType(WithContext):
             else:
                 return self.orig_lower_inst(inst)
         core.lowering.Lower.lower_inst = new_lower
+
+        ll.initialize_all_targets()
+
 
     def mutate_with_body(self, func_ir, blocks, blk_start, blk_end,
                          body_blocks, dispatcher_factory, extra, state=None, flags=None):

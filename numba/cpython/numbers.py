@@ -14,7 +14,6 @@ from numba.core.imputils import (lower_builtin, lower_getattr,
 from numba.core import typing, types, utils, errors, cgutils, optional
 from numba.core.extending import intrinsic, overload_method
 from numba.cpython.unsafe.numbers import viewer
-from numba.openmp import in_openmp_region
 
 def _int_arith_flags(rettype):
     """
@@ -142,7 +141,7 @@ def _int_divmod_impl(context, builder, sig, args, zerodiv_message):
     with builder.if_else(cgutils.is_scalar_zero(builder, b), likely=False
                          ) as (if_zero, if_non_zero):
         with if_zero:
-            if in_openmp_region(builder) or not context.error_model.fp_zero_division(
+            if not context.error_model.fp_zero_division(
                 builder, (zerodiv_message,)):
                 # No exception raised => return 0
                 # XXX We should also set the FPU exception status, but
@@ -181,9 +180,8 @@ def int_truediv_impl(context, builder, sig, args):
     [ta, tb] = sig.args
     a = context.cast(builder, va, ta, sig.return_type)
     b = context.cast(builder, vb, tb, sig.return_type)
-    if not in_openmp_region(builder):
-        with cgutils.if_zero(builder, b):
-            context.error_model.fp_zero_division(builder, ("division by zero",))
+    with cgutils.if_zero(builder, b):
+        context.error_model.fp_zero_division(builder, ("division by zero",))
     res = builder.fdiv(a, b)
     return impl_ret_untracked(context, builder, sig.return_type, res)
 
@@ -597,9 +595,8 @@ def real_mul_impl(context, builder, sig, args):
 
 
 def real_div_impl(context, builder, sig, args):
-    if not in_openmp_region(builder):
-        with cgutils.if_zero(builder, args[1]):
-            context.error_model.fp_zero_division(builder, ("division by zero",))
+    with cgutils.if_zero(builder, args[1]):
+        context.error_model.fp_zero_division(builder, ("division by zero",))
     res = builder.fdiv(*args)
     return impl_ret_untracked(context, builder, sig.return_type, res)
 
@@ -743,7 +740,7 @@ def real_divmod_impl(context, builder, sig, args, loc=None):
     with builder.if_else(cgutils.is_scalar_zero(builder, y), likely=False
                          ) as (if_zero, if_non_zero):
         with if_zero:
-            if in_openmp_region(builder) or not context.error_model.fp_zero_division(
+            if not context.error_model.fp_zero_division(
                 builder, ("modulo by zero",), loc):
                 # No exception raised => compute the nan result,
                 # and set the FP exception word for Numpy warnings.
@@ -766,7 +763,7 @@ def real_mod_impl(context, builder, sig, args, loc=None):
     with builder.if_else(cgutils.is_scalar_zero(builder, y), likely=False
                          ) as (if_zero, if_non_zero):
         with if_zero:
-            if in_openmp_region(builder) or not context.error_model.fp_zero_division(
+            if not context.error_model.fp_zero_division(
                 builder, ("modulo by zero",), loc):
                 # No exception raised => compute the nan result,
                 # and set the FP exception word for Numpy warnings.
@@ -785,7 +782,7 @@ def real_floordiv_impl(context, builder, sig, args, loc=None):
     with builder.if_else(cgutils.is_scalar_zero(builder, y), likely=False
                          ) as (if_zero, if_non_zero):
         with if_zero:
-            if in_openmp_region(builder) or not context.error_model.fp_zero_division(
+            if not context.error_model.fp_zero_division(
                 builder, ("division by zero",), loc):
                 # No exception raised => compute the +/-inf or nan result,
                 # and set the FP exception word for Numpy warnings.

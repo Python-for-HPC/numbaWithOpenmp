@@ -926,11 +926,9 @@ class BaseContext(object):
         Given the function descriptor of an internally compiled function,
         emit a call to that function with the given arguments.
         """
-        from numba.openmp import in_openmp_region
         status, res = self.call_internal_no_propagate(builder, fndesc, sig, args)
-        if not in_openmp_region(builder):
-            with cgutils.if_unlikely(builder, status.is_error):
-                self.call_conv.return_status_propagate(builder, status)
+        with cgutils.if_unlikely(builder, status.is_error):
+            self.call_conv.return_status_propagate(builder, status)
 
         res = imputils.fix_returning_optional(self, builder, sig, status, res)
         return res
@@ -984,10 +982,8 @@ class BaseContext(object):
         # Normal call sequence
         status, res = self.call_conv.call_function(builder, fn, sig.return_type,
                                                    sig.args, args)
-        from numba.openmp import in_openmp_region
-        if not in_openmp_region(builder):
-            with cgutils.if_unlikely(builder, status.is_error):
-                self.call_conv.return_status_propagate(builder, status)
+        with cgutils.if_unlikely(builder, status.is_error):
+            self.call_conv.return_status_propagate(builder, status)
 
         res = imputils.fix_returning_optional(self, builder, sig, status, res)
         return res

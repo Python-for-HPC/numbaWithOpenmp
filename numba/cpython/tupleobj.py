@@ -229,10 +229,9 @@ def getitem_typed(context, builder, sig, args):
         bbend = builder.append_basic_block("typed_switch.end")
         switch = builder.switch(idx, bbelse)
 
-        if not in_openmp_region(builder):
-            with builder.goto_block(bbelse):
-                context.call_conv.return_user_exc(builder, IndexError,
-                                                errmsg_oob)
+        with builder.goto_block(bbelse):
+            context.call_conv.return_user_exc(builder, IndexError,
+                                            errmsg_oob)
 
         lrtty = context.get_value_type(sig.return_type)
         voidptrty = context.get_value_type(types.voidptr)
@@ -336,10 +335,9 @@ def getitem_unituple(context, builder, sig, args):
         bbend = builder.append_basic_block("switch.end")
         switch = builder.switch(idx, bbelse)
 
-        if not in_openmp_region(builder):
-            with builder.goto_block(bbelse):
-                context.call_conv.return_user_exc(builder, IndexError,
-                                                  errmsg_oob)
+        with builder.goto_block(bbelse):
+            context.call_conv.return_user_exc(builder, IndexError,
+                                              errmsg_oob)
 
         lrtty = context.get_value_type(tupty.dtype)
         with builder.goto_block(bbend):

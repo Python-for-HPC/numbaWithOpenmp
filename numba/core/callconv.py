@@ -888,7 +888,7 @@ class CPUCallConv(BaseCallConv):
         builder.store(cgutils.get_null_value(retty), retvaltmp)
 
         excinfoptr = cgutils.alloca_once(builder, ir.PointerType(excinfo_t),
-                                         name="excinfo")
+                                         name=".excinfo")
 
         arginfo = self._get_arg_packer(argtys)
         args = list(arginfo.as_arguments(builder, args))

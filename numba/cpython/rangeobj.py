@@ -13,7 +13,6 @@ from numba.core.imputils import (lower_builtin, lower_cast,
 from numba.core.typing import signature
 from numba.core.extending import intrinsic, overload, overload_attribute, register_jitable
 from numba.parfors.parfor import internal_prange
-from numba.openmp import in_openmp_region
 
 def make_range_iterator(typ):
     """
@@ -128,14 +127,10 @@ def make_range_impl(int_type, range_state_type, range_iter_type):
             sign_differs = builder.xor(pos_diff, pos_step)
             zero_step = builder.icmp_unsigned('==', step, zero)
 
-            if not in_openmp_region(builder):
-                with cgutils.if_unlikely(builder, zero_step):
-                    # step shouldn't be zero
-                    context.call_conv.return_user_exc(
-                        builder,
-                        ValueError,
-                        ("range() arg 3 must not be zero",)
-                    )
+            with cgutils.if_unlikely(builder, zero_step):
+                # step shouldn't be zero
+                context.call_conv.return_user_exc(builder, ValueError,
+                                                  ("range() arg 3 must not be zero",))
 
             with builder.if_else(sign_differs) as (then, orelse):
                 with then:
