@@ -2817,9 +2817,10 @@ class TestOpenmpTarget(TestOpenmpBase):
         @njit
         def test_impl(s, n1, n2):
             a = np.full(s, n1)
-            as1 = np.empty(s)
-            as2 = np.empty(s)
+            as1 = np.empty(s, dtype=a.dtype)
+            as2 = np.empty(s, dtype=a.dtype)
             b = n1
+            as1[:] = a
 
             #def setToValueRegion(val):
             #    nonlocal a, b
@@ -2857,6 +2858,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         assert(b1 == n1)
         assert(b2 == n2)
 
+    @unittest.skipUnless(TestOpenmpBase.skip_disabled, "Unimplemented")
     def target_enter_data_alloc(self, device):
         target_enter_pragma = f"""target enter data device({device})
                                 map(alloc: v1, v2)"""
@@ -2880,7 +2882,7 @@ class TestOpenmpTarget(TestOpenmpBase):
                 for _ in range(10000):
                     sum += 1
 
-            with openmp("target map(from: p) nowait depend(in: v1, v2)"):
+            with openmp("target teams map(from: p) nowait depend(in: v1, v2)"):
                 with openmp("distribute parallel for"):
                     for i in range(s):
                         p[i] = v1[i] * v2[i]

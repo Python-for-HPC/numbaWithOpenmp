@@ -1532,6 +1532,7 @@ class openmp_region_start(ir.Stmt):
                 # Copy everything (like registries) from cpu context into the new OpenMPCPUTargetContext subtarget
                 # except call_conv which is the whole point of that class so that the minimal call convention is used.
                 subtarget.__dict__.update({k: targetctx.__dict__[k] for k in targetctx.__dict__.keys() - {'call_conv'}})
+                #subtarget.install_registry(imputils.builtin_registry)
                 # Turn off the Numba runtime (incref and decref mostly) for the target compilation.
                 subtarget.enable_nrt = False
                 printreg = imputils.Registry()
@@ -2127,7 +2128,7 @@ class _OpenmpContextType(WithContext):
                 return self.orig_lower_inst(inst)
         core.lowering.Lower.lower_inst = new_lower
 
-        ll.initialize_all_targets()
+        #ll.initialize_all_targets()
 
 
     def mutate_with_body(self, func_ir, blocks, blk_start, blk_end,
@@ -2723,6 +2724,8 @@ class OpenmpVisitor(Transformer):
                 clauses.append(clause)
             elif isinstance(clause, list):
                 clauses.extend(remove_indirections(clause))
+            elif clause == 'nowait':
+                clauses.append(openmp_tag("QUAL.OMP.NOWAIT"))
             elif isinstance(clause, default_shared_val):
                 default_shared = clause.val
                 if config.DEBUG_OPENMP >= 1:
