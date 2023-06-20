@@ -59,63 +59,63 @@ import unittest
 # process starts which enables the tests within the process. The decorator
 # @needs_subprocess is used to ensure the appropriate test skips are made.
 
-@linux_only
-class TestOpenmpRunner(TestCase):
-    _numba_parallel_test_ = False
-
-    # Each test class can run for 30 minutes before time out.
-    _TIMEOUT = 1800
-
-    """This is the test runner for all the OpenMP tests, it runs them in
-    subprocesses as described above. The convention for the test method naming
-    is: `test_<TestClass>` where <TestClass> is the name of the test class in
-    this module.
-    """
-    def runner(self):
-        themod = self.__module__
-        test_clazz_name = self.id().split('.')[-1].split('_')[-1]
-        # don't specify a given test, it's an entire class that needs running
-        self.subprocess_test_runner(test_module=themod,
-                                    test_class=test_clazz_name,
-                                    timeout=self._TIMEOUT)
-
-    """
-    def test_TestOpenmpBasic(self):
-        self.runner()
-    """
-
-    def test_TestOpenmpRoutinesEnvVariables(self):
-        self.runner()
-
-    def test_TestOpenmpParallelForResults(self):
-        self.runner()
-
-    def test_TestOpenmpWorksharingSchedule(self):
-        self.runner()
-
-    def test_TestOpenmpParallelClauses(self):
-        self.runner()
-
-    def test_TestOpenmpDataClauses(self):
-        self.runner()
-
-    def test_TestOpenmpConstraints(self):
-        self.runner()
-
-    def test_TestOpenmpConcurrency(self):
-        self.runner()
-
-    def test_TestOpenmpTask(self):
-        self.runner()
-
-    def test_TestOpenmpTaskloop(self):
-        self.runner()
-
-    def test_TestOpenmpTarget(self):
-        self.runner()
-
-    def test_TestOpenmpPi(self):
-        self.runner()
+#@linux_only
+#class TestOpenmpRunner(TestCase):
+#    _numba_parallel_test_ = False
+#
+#    # Each test class can run for 30 minutes before time out.
+#    _TIMEOUT = 1800
+#
+#    """This is the test runner for all the OpenMP tests, it runs them in
+#    subprocesses as described above. The convention for the test method naming
+#    is: `test_<TestClass>` where <TestClass> is the name of the test class in
+#    this module.
+#    """
+#    def runner(self):
+#        themod = self.__module__
+#        test_clazz_name = self.id().split('.')[-1].split('_')[-1]
+#        # don't specify a given test, it's an entire class that needs running
+#        self.subprocess_test_runner(test_module=themod,
+#                                    test_class=test_clazz_name,
+#                                    timeout=self._TIMEOUT)
+#
+#    """
+#    def test_TestOpenmpBasic(self):
+#        self.runner()
+#    """
+#
+#    def test_TestOpenmpRoutinesEnvVariables(self):
+#        self.runner()
+#
+#    def test_TestOpenmpParallelForResults(self):
+#        self.runner()
+#
+#    def test_TestOpenmpWorksharingSchedule(self):
+#        self.runner()
+#
+#    def test_TestOpenmpParallelClauses(self):
+#        self.runner()
+#
+#    def test_TestOpenmpDataClauses(self):
+#        self.runner()
+#
+#    def test_TestOpenmpConstraints(self):
+#        self.runner()
+#
+#    def test_TestOpenmpConcurrency(self):
+#        self.runner()
+#
+#    def test_TestOpenmpTask(self):
+#        self.runner()
+#
+#    def test_TestOpenmpTaskloop(self):
+#        self.runner()
+#
+#    def test_TestOpenmpTarget(self):
+#        self.runner()
+#
+#    def test_TestOpenmpPi(self):
+#        self.runner()
 
 
 x86_only = unittest.skipIf(platform.machine() not in ('i386', 'x86_64'), 'x86 only test')
@@ -129,7 +129,7 @@ def null_comparer(a, b):
     pass
 
 
-@needs_subprocess
+#@needs_subprocess
 class TestOpenmpBase(TestCase):
     """
     Base class for testing OpenMP.
