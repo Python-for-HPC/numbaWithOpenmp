@@ -924,23 +924,6 @@ class Assign(Stmt):
         return '%s = %s' % (self.target, self.value)
 
 
-class RevArgAssign(Stmt):
-    """
-    Assign to a variable.
-    """
-    def __init__(self, value, target, loc):
-        assert isinstance(value, AbstractRHS)
-        assert isinstance(target, Arg)
-        assert target.reverse
-        assert isinstance(loc, Loc)
-        self.value = value
-        self.target = target
-        self.loc = loc
-
-    def __str__(self):
-        return '%s = %s' % (self.target, self.value)
-
-
 class Print(Stmt):
     """
     Print some values.

@@ -479,12 +479,6 @@ class Lower(BaseLower):
                 argidx = inst.value.index + 1 # args start at 1
             self.storevar(val, inst.target.name, argidx=argidx)
 
-        elif isinstance(inst, ir.RevArgAssign):
-            ty = self.typeof(inst.target.name)
-            val = self.lower_assign(ty, inst)
-            arg_target = self.fnargs[inst.target.index]
-            self.builder.store(val, arg_target)
-
         elif isinstance(inst, ir.Branch):
             cond = self.loadvar(inst.cond.name)
             tr = self.blkmap[inst.truebr]
