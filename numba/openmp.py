@@ -1088,14 +1088,14 @@ class openmp_region_start(ir.Stmt):
                         loaded_str = str(loaded_pointee) + " * " + loaded_size._get_reference()
                         if "TO" in cur_tag.name:
                             struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
-                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, cur_tag_ndim)))
-                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, cur_tag_ndim)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, 1)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, 1)))
                         else:
                             # Must be QUAL.OMP.MAP.FROM in which case only need to get the data back but always need the array struct for metadata.
                             #struct_tags.append(openmp_tag("QUAL.OMP.MAP.TOFROM.STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
                             struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
-                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, cur_tag_ndim)))
-                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, cur_tag_ndim)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, 1)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, 1)))
                             #cur_tag.name = cur_tag.name + ".STRUCT"
                             #cur_tag.arg = cur_tag.arg + "*data"
                             #cur_tag.non_arg = True
