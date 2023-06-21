@@ -475,13 +475,6 @@ class Expr(Inst):
         return cls(op=op, loc=loc, value=value)
 
     @classmethod
-    def itercount(cls, value, loc):
-        assert isinstance(value, Var)
-        assert isinstance(loc, Loc)
-        op = 'itercount'
-        return cls(op=op, loc=loc, value=value)
-
-    @classmethod
     def iternext(cls, value, loc):
         assert isinstance(value, Var)
         assert isinstance(loc, Loc)
@@ -995,7 +988,7 @@ class PopBlock(Stmt):
 
 
 class Arg(EqualityCheckMixin, AbstractRHS):
-    def __init__(self, name, index, loc, openmp_ptr=False, reverse=False):
+    def __init__(self, name, index, loc, openmp_ptr=False):
         assert isinstance(name, str)
         assert isinstance(index, int)
         assert isinstance(loc, Loc)
@@ -1003,14 +996,10 @@ class Arg(EqualityCheckMixin, AbstractRHS):
         self.index = index
         self.loc = loc
         self.openmp_ptr = openmp_ptr
-        self.reverse = reverse
 
     def __repr__(self):
         if self.openmp_ptr:
-            if self.reverse:
-                return 'openmp_ptr.reverse_arg(%d, name=%s)' % (self.index, self.name)
-            else:
-                return 'openmp_ptr.arg(%d, name=%s)' % (self.index, self.name)
+            return 'openmp_ptr.arg(%d, name=%s)' % (self.index, self.name)
         else:
             return 'arg(%d, name=%s)' % (self.index, self.name)
 

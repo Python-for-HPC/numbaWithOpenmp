@@ -1227,13 +1227,6 @@ class Lower(BaseLower):
             res = self.lower_call(resty, expr)
             return res
 
-        elif expr.op == 'itercount':
-            val = self.loadvar(expr.value.name)
-            ty = self.typeof(expr.value.name)
-            res = self.context.itercount(self.builder, val, ty)
-            self.incref(resty, res)
-            return res
-
         elif expr.op == 'pair_first':
             val = self.loadvar(expr.value.name)
             ty = self.typeof(expr.value.name)

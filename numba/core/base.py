@@ -708,13 +708,6 @@ class BaseContext(object):
     def get_data_as_value(self, builder, ty, val):
         return self.data_model_manager[ty].from_data(builder, val)
 
-    def itercount(self, builder, val, ty):
-        """
-        Extract the first element of a heterogeneous pair.
-        """
-        pair = self.make_helper(builder, ty, val)
-        return builder.load(pair.count)
-
     def pair_first(self, builder, val, ty):
         """
         Extract the first element of a heterogeneous pair.

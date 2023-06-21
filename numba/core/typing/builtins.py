@@ -111,17 +111,6 @@ class IterNext(AbstractTemplate):
 
 
 @infer
-class IterCount(AbstractTemplate):
-    key = "itercount"
-
-    def generic(self, args, kws):
-        assert not kws
-        [it] = args
-        if isinstance(it, types.RangeIteratorType):
-            return signature(it.yield_type, it)
-
-
-@infer
 class PairFirst(AbstractTemplate):
     """
     Given a heterogeneous pair, return the first element.
