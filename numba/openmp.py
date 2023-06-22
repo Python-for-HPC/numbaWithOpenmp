@@ -52,6 +52,10 @@ if iomplib is None:
 if iomplib is None:
     iomplib = ctypes.util.find_library("libiomp5.so")
 if iomplib is None:
+    iomplib = ctypes.util.find_library("omp")
+if iomplib is None:
+    iomplib = ctypes.util.find_library("libomp")
+if iomplib is None:
     library_missing = True
 else:
     if config.DEBUG_OPENMP >= 1:
@@ -61,6 +65,8 @@ else:
 omptargetlib = os.getenv('NUMBA_OMPTARGET_LIB', None)
 if omptargetlib is None:
     omptargetlib = ctypes.util.find_library("libomptarget.so")
+if omptargetlib is None:
+    omptargetlib = ctypes.util.find_library("omptarget")
 if omptargetlib is None:
     library_missing = True
 else:
@@ -5881,7 +5887,7 @@ class OpenmpExternalFunction(types.ExternalFunction):
         arg_str = ",".join([numba_to_c(str(x)) for x in self.sig.args])
         proto = f"{ret_typ} {fname}({arg_str});"
         ffi.cdef(proto)
-        C = ffi.dlopen(None)
+        C = ffi.dlopen(iomplib)
         return getattr(C, fname)(*args)
 
 
