@@ -938,22 +938,19 @@ class openmp_region_start(ir.Stmt):
 
     def process_alloca_queue(self):
         # This should be old code...making sure with the assertion.
-        assert len(self.alloca_queue) == 0
-        """
+        #assert len(self.alloca_queue) == 0
         has_update = False
         for alloca_instr, typ in self.alloca_queue:
             has_update = self.process_one_alloca(alloca_instr, typ) or has_update
         if has_update:
             self.update_tags()
         self.alloca_queue = []
-        """
 
     def post_lowering_process_alloca_queue(self, enter_directive):
         has_update = False
         if config.DEBUG_OPENMP >= 1:
             print("starting post_lowering_process_alloca_queue")
-        assert len(self.alloca_queue) == 0
-        """
+        #assert len(self.alloca_queue) == 0
         for alloca_instr, typ in self.alloca_queue:
             has_update = self.process_one_alloca(alloca_instr, typ) or has_update
         if has_update:
@@ -966,7 +963,6 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 print("post_lowering_process_alloca_queue updated tags:", enter_directive.tags)
         self.alloca_queue = []
-        """
 
     def process_one_alloca(self, alloca_instr, typ):
         avar = alloca_instr.name
@@ -5859,7 +5855,7 @@ class OpenmpExternalFunction(types.ExternalFunction):
         arg_str = ",".join([numba_to_c(str(x)) for x in self.sig.args])
         proto = f"{ret_typ} {fname}({arg_str});"
         ffi.cdef(proto)
-        C = ffi.dlopen(None)
+        C = ffi.dlopen(iomplib)
         return getattr(C, fname)(*args)
 
 
