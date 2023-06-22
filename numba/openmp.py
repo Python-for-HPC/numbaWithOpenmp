@@ -5290,7 +5290,7 @@ class OpenmpExternalFunction(types.ExternalFunction):
         arg_str = ",".join([numba_to_c(str(x)) for x in self.sig.args])
         proto = f"{ret_typ} {fname}({arg_str});"
         ffi.cdef(proto)
-        C = ffi.dlopen(None)
+        C = ffi.dlopen(iomplib)
         return getattr(C, fname)(*args)
 
 
