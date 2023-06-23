@@ -108,7 +108,7 @@ def get_itercount(typingctx, it):
         sig = typing.signature(it.yield_type, it)
         def codegen(context, builder, signature, args):
             assert len(args) == 1
-            val = args[0] 
+            val = args[0]
             pair = context.make_helper(builder, it, val)
             return builder.load(pair.count)
         return sig, codegen
@@ -1656,6 +1656,10 @@ class openmp_region_start(ir.Stmt):
                 for k,v in lowerer.func_ir.blocks.items():
                     print("block post copy:", k, id(v), id(func_ir.blocks[k]), id(v.body), id(func_ir.blocks[k].body))
 
+            shared_ext = ".so"
+            if sys.platform.startswith('win'):
+                shared_ext = ".dll"
+
             # TODO: move device pipelines in numba proper.
             if selected_device == 0:
                 arch = 'x86_64'
@@ -1663,7 +1667,7 @@ class openmp_region_start(ir.Stmt):
                 fd_o, filename_o = tempfile.mkstemp('.o')
                 with open(filename_o, 'wb') as f:
                     f.write(target_elf)
-                fd_so, filename_so = tempfile.mkstemp('.so')
+                fd_so, filename_so = tempfile.mkstemp(shared_ext)
                 subprocess.run(['clang', '-shared', filename_o, '-o', filename_so])
                 with open(filename_so, 'rb') as f:
                     target_elf = f.read()
