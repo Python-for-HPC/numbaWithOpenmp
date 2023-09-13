@@ -1468,25 +1468,50 @@ class openmp_region_start(ir.Stmt):
             if selected_device == 0:
                 flags = Flags()
 
-                class OpenmpCPUTargetContext(cpu.CPUContext):
-                    @cached_property
-                    def call_conv(self):
-                        return OpenmpCallConv(self)
+                use_aot = True
 
-                subtarget = OpenmpCPUTargetContext(targetctx.typing_context)
-                # Copy everything (like registries) from cpu context into the new OpenMPCPUTargetContext subtarget
-                # except call_conv which is the whole point of that class so that the minimal call convention is used.
-                subtarget.__dict__.update({k: targetctx.__dict__[k] for k in targetctx.__dict__.keys() - {'call_conv'}})
-                # Turn off the Numba runtime (incref and decref mostly) for the target compilation.
-                subtarget.enable_nrt = False
-                printreg = imputils.Registry()
-                @printreg.lower(print, types.VarArg(types.Any))
-                def print_varargs(context, builder, sig, args):
-                    #print("target print_varargs lowerer")
-                    return context.get_dummy_value()
+                if use_aot:
+                    class OpenmpCPUTargetContext(cpu.CPUContext):
+                        @cached_property
+                        def call_conv(self):
+                            return OpenmpCallConv(self)
 
-                subtarget.install_registry(printreg)
-                device_target = subtarget
+                    subtarget = OpenmpCPUTargetContext(targetctx.typing_context)
+                    print("got here")
+                    subtarget = subtarget.with_aot_codegen("device_aot")
+                    # Copy everything (like registries) from cpu context into the new OpenMPCPUTargetContext subtarget
+                    # except call_conv which is the whole point of that class so that the minimal call convention is used.
+                    subtarget.__dict__.update({k: targetctx.__dict__[k] for k in targetctx.__dict__.keys() - {'call_conv'}})
+                    # Turn off the Numba runtime (incref and decref mostly) for the target compilation.
+                    subtarget.enable_nrt = False
+                    printreg = imputils.Registry()
+                    @printreg.lower(print, types.VarArg(types.Any))
+                    def print_varargs(context, builder, sig, args):
+                        #print("target print_varargs lowerer")
+                        return context.get_dummy_value()
+
+                    subtarget.install_registry(printreg)
+                    device_target = subtarget
+                else:
+                    class OpenmpCPUTargetContext(cpu.CPUContext):
+                        @cached_property
+                        def call_conv(self):
+                            return OpenmpCallConv(self)
+
+                    subtarget = OpenmpCPUTargetContext(targetctx.typing_context)
+                    # Copy everything (like registries) from cpu context into the new OpenMPCPUTargetContext subtarget
+                    # except call_conv which is the whole point of that class so that the minimal call convention is used.
+                    subtarget.__dict__.update({k: targetctx.__dict__[k] for k in targetctx.__dict__.keys() - {'call_conv'}})
+                    # Turn off the Numba runtime (incref and decref mostly) for the target compilation.
+                    subtarget.enable_nrt = False
+                    printreg = imputils.Registry()
+                    @printreg.lower(print, types.VarArg(types.Any))
+                    def print_varargs(context, builder, sig, args):
+                        #print("target print_varargs lowerer")
+                        return context.get_dummy_value()
+
+                    subtarget.install_registry(printreg)
+                    device_target = subtarget
             elif selected_device == 1:
                 from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
                 flags = cuda_compiler.CUDAFlags()
@@ -1499,6 +1524,13 @@ class openmp_region_start(ir.Stmt):
 
                 device_target = OpenmpCUDATargetContext(cuda_descriptor.cuda_target.typing_context)
                 #device_target = cuda_descriptor.cuda_target.target_context
+            elif selected_device == 2:
+                class OpenmpDpexKernelTargetContext(DpexKernelTargetContext):
+                    @cached_property
+                    def call_conv(self):
+                        return OpenmpCallConv(self)
+
+                device_target = OpenmpDpexKernelTargetContext(targetctx.typing_context)
             else:
                 raise NotImplementedError("Unsupported OpenMP device number")
 
@@ -1640,6 +1672,11 @@ class openmp_region_start(ir.Stmt):
                     '-o', filename_prefix + '-intrinsics_omp-linked-opt.o'], check=True)
                 with open(filename_prefix + '-intrinsics_omp-linked-opt.o', 'rb') as f:
                     target_elf = f.read()
+            elif selected_device == 2:
+                # need intel openmp bitcode
+                # like above but use llvm-to-spirv to replace llc step
+                # instead of cubin we have zebin...need to find command to go from spirv to actual binary 
+                pass
             else:
                 raise NotImplementedError("Unsupported OpenMP device number")
 
