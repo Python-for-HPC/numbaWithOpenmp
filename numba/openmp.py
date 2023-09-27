@@ -46,7 +46,15 @@ import types as python_types
 
 library_missing = False
 
+numba_openmp_path = os.path.dirname(os.path.realpath(__file__))
+numba_openmp_lib_path = numba_openmp_path + "/lib"
+numba_openmp_bin_path = numba_openmp_path + "/bin"
+
 iomplib = os.getenv('NUMBA_OMP_LIB',None)
+if iomplib is None:
+    lib_name = numba_openmp_lib_path + "/libomp.so"
+    if os.path.isfile(lib_name):
+        iomplib = lib_name
 if iomplib is None:
     iomplib = ctypes.util.find_library("libomp.so")
 if iomplib is None:
@@ -63,6 +71,10 @@ else:
     ll.load_library_permanently(iomplib)
 
 omptargetlib = os.getenv('NUMBA_OMPTARGET_LIB', None)
+if omptargetlib is None:
+    lib_name = numba_openmp_lib_path + "/libomptarget.so"
+    if os.path.isfile(lib_name):
+        omptargetlib = lib_name
 if omptargetlib is None:
     omptargetlib = ctypes.util.find_library("libomptarget.so")
 if omptargetlib is None:
@@ -1678,20 +1690,21 @@ class openmp_region_start(ir.Stmt):
                 with open(filename_prefix + '.ll', 'w') as f:
                     f.write(target_llvm_ir)
                 if config.DEBUG_OPENMP_LLVM_PASS >= 1:
-                    cmd_list = ['opt', '-S', '--intrinsics-openmp', '-debug-only=intrinsics-openmp',
+                    cmd_list = [numba_openmp_bin_path + '/opt', '-S', '--intrinsics-openmp', '-debug-only=intrinsics-openmp',
                         filename_prefix + '.ll', '-o', filename_prefix + '-intrinsics_omp.ll']
                 else:
-                    cmd_list = ['opt', '-S', '--intrinsics-openmp',
+                    cmd_list = [numba_openmp_bin_path + '/opt', '-S', '--intrinsics-openmp',
                         filename_prefix + '.ll', '-o', filename_prefix + '-intrinsics_omp.ll']
                 subprocess.run(cmd_list, check=True)
-                omptarget_path = os.path.dirname(omptargetlib)
+                #omptarget_path = os.path.dirname(omptargetlib)
+                omptarget_path = numba_openmp_lib_path
                 libomptarget_arch = omptarget_path + '/libomptarget-new-' + arch + '-' + cc + '.bc'
                 print('libomptarget_arch', libomptarget_arch)
-                subprocess.run(['llvm-link', '--internalize', '-S', filename_prefix + '-intrinsics_omp.ll', libomptarget_arch,
+                subprocess.run([numba_openmp_bin_path + '/llvm-link', '--internalize', '-S', filename_prefix + '-intrinsics_omp.ll', libomptarget_arch,
                                 '-o', filename_prefix + '-intrinsics_omp-linked.ll'], check=True)
-                subprocess.run(['opt', '-S', '-O3', filename_prefix + '-intrinsics_omp-linked.ll',
+                subprocess.run([numba_openmp_bin_path + '/opt', '-S', '-O3', filename_prefix + '-intrinsics_omp-linked.ll',
                     '-o', filename_prefix + '-intrinsics_omp-linked-opt.ll'], check=True)
-                subprocess.run(['llc', '-O3', '-march=nvptx64', f'-mcpu={cc}', f'-mattr=+ptx64,+{cc}',
+                subprocess.run([numba_openmp_bin_path + '/llc', '-O3', '-march=nvptx64', f'-mcpu={cc}', f'-mattr=+ptx64,+{cc}',
                     filename_prefix + '-intrinsics_omp-linked-opt.ll',
                     '-o', filename_prefix + '-intrinsics_omp-linked-opt.s'], check=True)
                 subprocess.run(['ptxas', '-m64', '--gpu-name', cc,

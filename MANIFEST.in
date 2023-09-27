@@ -4,6 +4,8 @@ include README.rst setup.py runtests.py versioneer.py CHANGE_LOG LICENSE
 recursive-include numba *.c *.cpp *.h *.hpp *.inc
 recursive-include docs *.ipynb *.txt *.py Makefile *.rst
 recursive-include examples *.py
+recursive-include numba/lib *.bc lib*omp*so
+recursive-include numba/bin opt llc llvm-link clang
 
 prune docs/_build
 prune docs/gh-pages

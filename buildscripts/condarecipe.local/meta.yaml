@@ -1,13 +1,21 @@
+{% set VERSION_SUFFIX = "" %} # debug version suffix, appended to the version
+{% set shortversion = "0.4_pyomp" %}
+{% set version = "0.4_pyomp" %}
+{% set build_number = "3" %}
+
 package:
    name: numba
-   version: {{ GIT_DESCRIBE_TAG }}
+   #version: {{ GIT_DESCRIBE_TAG }}
+   version: {{ version }}
 
 source:
    path: ../..
 
 build:
-  number: {{ GIT_DESCRIBE_NUMBER|int }}
-  string: np{{ NPY_VER }}py{{ PY_VER }}h{{ PKG_HASH }}_{{GIT_DESCRIBE_HASH}}_{{ GIT_DESCRIBE_NUMBER }}
+  number: {{ environ.get('GIT_DESCRIBE_NUMBER', 0) }}
+  #number: {{ GIT_DESCRIBE_NUMBER|int }}
+  string: np{{ NPY_VER }}py{{ PY_VER }}h{{ PKG_HASH }}_{{ version }}
+  #string: np{{ NPY_VER }}py{{ PY_VER }}h{{ PKG_HASH }}_{{GIT_DESCRIBE_HASH}}_{{ GIT_DESCRIBE_NUMBER }}
   entry_points:
     - numba = numba.misc.numba_entry:main
   script_env:
@@ -46,7 +54,7 @@ requirements:
     - numpy >=1.21, !=1.22.0, !=1.22.1, !=1.22.2, <1.25
     - importlib_metadata       # [py<39]
     # On channel https://anaconda.org/numba/
-    - llvmlite 0.3_pyomp
+    - llvmlite 0.4_pyomp
     - lark-parser
     - cffi
     - openmp
