@@ -2238,6 +2238,9 @@ class ParallelForExtraCode(Exception):
 class ParallelForWrongLoopCount(Exception):
     pass
 
+class ParallelForInvalidCollapseCount(Exception):
+    pass
+
 class NonconstantOpenmpSpecification(Exception):
     pass
 
@@ -2797,21 +2800,169 @@ class OpenmpVisitor(Transformer):
         usedefs = compute_use_defs(self.blocks)
         live_map = compute_live_map(cfg, self.blocks, usedefs.usemap, usedefs.defmap)
 
+        def get_loops_in_region(all_loops):
+            loops = {}
+            for k, v in all_loops.items():
+                if v.header >= self.blk_start and v.header <= self.blk_end:
+                    loops[k] = v
+            return loops
+
         all_loops = cfg.loops()
         if config.DEBUG_OPENMP >= 1:
             print("all_loops:", all_loops)
             print("live_map:", live_map)
-        loops = {}
+            print("body_blocks:", self.body_blocks)
+
+        loops = get_loops_in_region(all_loops)
         # Find the outer-most loop in this OpenMP region.
-        for k, v in all_loops.items():
-            if v.header >= self.blk_start and v.header <= self.blk_end:
-                loops[k] = v
         loops = list(filter_nested_loops(cfg, loops))
 
         if config.DEBUG_OPENMP >= 1:
             print("loops:", loops)
         if len(loops) != 1:
             raise ParallelForWrongLoopCount(f"OpenMP parallel for regions must contain exactly one range based loop.  The parallel for at line {self.loc} contains {len(loops)} loops.")
+
+        collapse_tags = get_tags_of_type(clauses, "QUAL.OMP.COLLAPSE")
+        new_stmts_for_iterspace = []
+        if len(collapse_tags) > 0:
+            # Limit all_loops to just loops within the openmp region.
+            all_loops = get_loops_in_region(all_loops)
+            # In case of multiple collapse tags, use the last one.
+            collapse_tag = collapse_tags[-1]
+            # Remove collapse tags from clauses so they don't go to LLVM pass.
+            clauses[:] = [x for x in clauses if x not in collapse_tags]
+            # Add top level loop to loop_order list.
+            loop_order = [loops[0]]
+            # Determine how many nested loops we need to process.
+            collapse_value = collapse_tag.arg - 1
+            # Make sure initial collapse value was >= 2.
+            if collapse_value <= 0:
+                raise ParallelForInvalidCollapseCount(f"OpenMP parallel for regions with collapse clauses must be greather than or equal to 2 at line {self.loc}.")
+
+            # Delete top-level loop from all_loops.
+            del all_loops[loop_order[-1].header]
+            # For remaining nested loops...
+            for _ in range(collapse_value):
+                # Get the next most top-level loop.
+                loops = list(filter_nested_loops(cfg, all_loops))
+                # Make sure there is only one.
+                if len(loops) != 1:
+                    raise ParallelForWrongLoopCount(f"OpenMP parallel for collapse regions must be perfectly nested for the parallel for at line {self.loc}.")
+                # Add this loop to the loops to process in order.
+                loop_order.append(loops[0])
+                # Delete this loop from all_loops.
+                del all_loops[loop_order[-1].header]
+
+            stmts_to_retain = []
+            loop_bounds = []
+            for loop in loop_order:
+                loop_entry = list(loop.entries)[0]
+                loop_exit = list(loop.exits)[0]
+                loop_header = loop.header
+                loop_entry_block = self.blocks[loop_entry]
+                loop_exit_block = self.blocks[loop_exit]
+                loop_header_block = self.blocks[loop_header]
+                # Copy all stmts from the loop entry block up to the ir.Global
+                # for range.
+                for entry_block_index, stmt in enumerate(loop_entry_block.body):
+                    if isinstance(stmt, ir.Assign) and isinstance(stmt.value, ir.Global) and stmt.value.name == "range":
+                        range_target = stmt.target
+                        call_stmt = loop_entry_block.body[entry_block_index + 1]
+                        assert isinstance(call_stmt, ir.Assign) and isinstance(call_stmt.value, ir.Expr) and call_stmt.value.op == 'call' and call_stmt.value.func == range_target
+                        # Remove stmts that were retained.
+                        loop_entry_block.body = loop_entry_block.body[entry_block_index:]
+                        break
+                    stmts_to_retain.append(stmt)
+                for header_block_index, stmt in enumerate(loop_header_block.body):
+                    if isinstance(stmt, ir.Assign) and isinstance(stmt.value, ir.Expr) and stmt.value.op == "iternext":
+                        iternext_inst = loop_header_block.body[header_block_index]
+                        pair_first_inst = loop_header_block.body[header_block_index + 1]
+                        pair_second_inst = loop_header_block.body[header_block_index + 2]
+
+                        assert(isinstance(iternext_inst, ir.Assign) and isinstance(iternext_inst.value, ir.Expr) and iternext_inst.value.op == 'iternext')
+                        assert(isinstance(pair_first_inst, ir.Assign) and isinstance(pair_first_inst.value, ir.Expr) and pair_first_inst.value.op == 'pair_first')
+                        assert(isinstance(pair_second_inst, ir.Assign) and isinstance(pair_second_inst.value, ir.Expr) and pair_second_inst.value.op == 'pair_second')
+                        stmts_to_retain.extend(loop_header_block.body[header_block_index + 3:-1])
+                        loop_index = pair_first_inst.target
+                        break
+                    stmts_to_retain.append(stmt)
+                loop_bounds.append((call_stmt.value.args[0], loop_index))
+            if config.DEBUG_OPENMP >= 1:
+                print("collapse 1")
+                dump_blocks(self.blocks)
+            # For all the loops except the last...
+            for loop in loop_order[:-1]:
+                # Change the unneeded headers to just jump to the next block.
+                loop_header = loop.header
+                loop_header_block = self.blocks[loop_header]
+                loop_header_block.body = [ir.Jump(loop_header_block.body[-1].truebr, loop_header_block.body[-1].loc)]
+                last_eliminated_loop_header_block = loop_header_block
+                self.body_blocks = [x for x in self.body_blocks if x not in loop.entries]
+                self.body_blocks.remove(loop.header)
+            if config.DEBUG_OPENMP >= 1:
+                print("loop order:", loop_order)
+                print("loop bounds:", loop_bounds)
+                print("collapse 2")
+                dump_blocks(self.blocks)
+            last_loop = loop_order[-1]
+            last_loop_entry = list(last_loop.entries)[0]
+            last_loop_exit = list(last_loop.exits)[0]
+            last_loop_header = last_loop.header
+            last_loop_entry_block = self.blocks[last_loop_entry]
+            last_loop_exit_block = self.blocks[last_loop_exit]
+            last_loop_header_block = self.blocks[last_loop_header]
+            last_loop_first_body_block = last_loop_header_block.body[-1].truebr
+            self.blocks[last_loop_first_body_block].body = stmts_to_retain + self.blocks[last_loop_first_body_block].body
+            last_loop_header_block.body[-1].falsebr = list(loop_order[0].exits)[0]
+            new_var_scope = last_loop_entry_block.body[0].target.scope
+
+            # -------- Add vars to remember cumulative product of iteration space sizes.
+            iterspace_vars = []
+            new_iterspace_var = new_var_scope.redefine("new_iterspace0", self.loc)
+            start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", new_iterspace_var.name))
+            iterspace_vars.append(new_iterspace_var)
+            new_stmts_for_iterspace.append(ir.Assign(loop_bounds[0][0], new_iterspace_var, self.loc))
+            for lb_num, loop_bound in enumerate(loop_bounds[1:]):
+                mul_op = ir.Expr.binop(operator.mul, new_iterspace_var, loop_bound[0], self.loc)
+                new_iterspace_var = new_var_scope.redefine("new_iterspace" + str(lb_num+1), self.loc)
+                start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", new_iterspace_var.name))
+                iterspace_vars.append(new_iterspace_var)
+                new_stmts_for_iterspace.append(ir.Assign(mul_op, new_iterspace_var, self.loc))
+            # Change iteration space of innermost loop to the product of all the
+            # loops' iteration spaces.
+            last_loop_entry_block.body[1].value.args[0] = new_iterspace_var
+
+            last_eliminated_loop_header_block.body = new_stmts_for_iterspace + last_eliminated_loop_header_block.body
+
+            deconstruct_indices = []
+            new_deconstruct_var = new_var_scope.redefine("deconstruct", self.loc)
+            deconstruct_indices.append(ir.Assign(loop_bounds[-1][1], new_deconstruct_var, self.loc))
+            for deconstruct_index in range(len(loop_bounds)-1, 0, -1):
+                if config.DEBUG_OPENMP >= 1:
+                    print("deconstructing", iterspace_vars[deconstruct_index-1])
+                    deconstruct_indices.append(ir.Print([new_deconstruct_var, iterspace_vars[deconstruct_index-1]], None, self.loc))
+                deconstruct_div = ir.Expr.binop(operator.floordiv, new_deconstruct_var, iterspace_vars[deconstruct_index-1], self.loc)
+                new_deconstruct_var_loop = new_var_scope.redefine("deconstruct", self.loc)
+                deconstruct_indices.append(ir.Assign(deconstruct_div, new_deconstruct_var_loop, self.loc))
+                if config.DEBUG_OPENMP >= 1:
+                    deconstruct_indices.append(ir.Print([new_deconstruct_var_loop], None, self.loc))
+                new_deconstruct_var_mul = new_var_scope.redefine("deconstruct_mul", self.loc)
+                deconstruct_indices.append(ir.Assign(ir.Expr.binop(operator.mul, new_deconstruct_var_loop, iterspace_vars[deconstruct_index-1], self.loc), new_deconstruct_var_mul, self.loc))
+                deconstruct_indices.append(ir.Assign(ir.Expr.binop(operator.sub, new_deconstruct_var, new_deconstruct_var_mul, self.loc), loop_bounds[deconstruct_index][1], self.loc))
+                new_deconstruct_var = new_deconstruct_var_loop
+            deconstruct_indices.append(ir.Assign(new_deconstruct_var, loop_bounds[0][1], self.loc))
+
+            self.blocks[last_loop_first_body_block].body = deconstruct_indices + self.blocks[last_loop_first_body_block].body
+
+            if config.DEBUG_OPENMP >= 1:
+                print("collapse 3", self.blk_start, self.blk_end)
+                dump_blocks(self.blocks)
+
+            cfg = compute_cfg_from_blocks(self.blocks)
+            live_map = compute_live_map(cfg, self.blocks, usedefs.usemap, usedefs.defmap)
+            all_loops = cfg.loops()
+            loops = get_loops_in_region(all_loops)
+            loops = list(filter_nested_loops(cfg, loops))
 
         def _get_loop_kind(func_var, call_table):
             if func_var not in call_table:
@@ -2838,7 +2989,9 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             print("non_loop_blocks:", non_loop_blocks, "entry:", entry, self.body_blocks)
 
+        # Find the first statement after any iterspace calculation ones for collapse.
         first_stmt = self.blocks[entry].body[0]
+        #first_stmt = self.blocks[entry].body[len(new_stmts_for_iterspace)]
         if not isinstance(first_stmt, ir.Assign) or not isinstance(first_stmt.value, ir.Global) or first_stmt.value.name != "range":
             raise ParallelForExtraCode(f"Extra code near line {self.loc} is not allowed before or after the loop in an OpenMP parallel for region.")
 
@@ -4119,9 +4272,9 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for UNIFORM.
 
     def collapse_clause(self, args):
-        raise NotImplementedError("Collapse currently unsupported.")
         if config.DEBUG_OPENMP >= 1:
             print("visit collapse_clause", args, type(args))
+        return openmp_tag("QUAL.OMP.COLLAPSE", args[1])
 
     # Don't need a rule for COLLAPSE.
     # Don't need a rule for task_construct.
