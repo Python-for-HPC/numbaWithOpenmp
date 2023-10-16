@@ -2895,7 +2895,8 @@ class OpenmpVisitor(Transformer):
                 # Change the unneeded headers to just jump to the next block.
                 loop_header = loop.header
                 loop_header_block = self.blocks[loop_header]
-                loop_header_block.body = [ir.Jump(loop_header_block.body[-1].truebr, loop_header_block.body[-1].loc)]
+                loop_header_block.body[-1] = ir.Jump(loop_header_block.body[-1].truebr, loop_header_block.body[-1].loc)
+                #loop_header_block.body = [ir.Jump(loop_header_block.body[-1].truebr, loop_header_block.body[-1].loc)]
                 last_eliminated_loop_header_block = loop_header_block
                 self.body_blocks = [x for x in self.body_blocks if x not in loop.entries]
                 self.body_blocks.remove(loop.header)
@@ -2940,21 +2941,21 @@ class OpenmpVisitor(Transformer):
             for deconstruct_index in range(len(loop_bounds)-1):
                 cur_iterspace_var = iterspace_vars[len(loop_bounds) - 2 - deconstruct_index]
                 cur_loop_bound = loop_bounds[deconstruct_index][1]
-                if config.DEBUG_OPENMP >= 1:
-                    print("deconstructing", cur_iterspace_var)
-                    deconstruct_indices.append(ir.Print([new_deconstruct_var, cur_iterspace_var], None, self.loc))
+                #if config.DEBUG_OPENMP >= 1:
+                #    print("deconstructing", cur_iterspace_var)
+                #    deconstruct_indices.append(ir.Print([new_deconstruct_var, cur_iterspace_var], None, self.loc))
                 deconstruct_div = ir.Expr.binop(operator.floordiv, new_deconstruct_var, cur_iterspace_var, self.loc)
                 new_deconstruct_var_loop = new_var_scope.redefine("deconstruct" + str(deconstruct_index), self.loc)
                 deconstruct_indices.append(ir.Assign(deconstruct_div, cur_loop_bound, self.loc))
-                if config.DEBUG_OPENMP >= 1:
-                    deconstruct_indices.append(ir.Print([cur_loop_bound], None, self.loc))
+                #if config.DEBUG_OPENMP >= 1:
+                #    deconstruct_indices.append(ir.Print([cur_loop_bound], None, self.loc))
                 new_deconstruct_var_mul = new_var_scope.redefine("deconstruct_mul" + str(deconstruct_index), self.loc)
                 deconstruct_indices.append(ir.Assign(ir.Expr.binop(operator.mul, cur_loop_bound, cur_iterspace_var, self.loc), new_deconstruct_var_mul, self.loc))
-                if config.DEBUG_OPENMP >= 1:
-                    deconstruct_indices.append(ir.Print([new_deconstruct_var_mul], None, self.loc))
+                #if config.DEBUG_OPENMP >= 1:
+                #    deconstruct_indices.append(ir.Print([new_deconstruct_var_mul], None, self.loc))
                 deconstruct_indices.append(ir.Assign(ir.Expr.binop(operator.sub, new_deconstruct_var, new_deconstruct_var_mul, self.loc), new_deconstruct_var_loop, self.loc))
-                if config.DEBUG_OPENMP >= 1:
-                    deconstruct_indices.append(ir.Print([new_deconstruct_var_loop], None, self.loc))
+                #if config.DEBUG_OPENMP >= 1:
+                #    deconstruct_indices.append(ir.Print([new_deconstruct_var_loop], None, self.loc))
                 new_deconstruct_var = new_deconstruct_var_loop
             deconstruct_indices.append(ir.Assign(new_deconstruct_var, loop_bounds[-1][1], self.loc))
 
