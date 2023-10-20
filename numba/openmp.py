@@ -519,12 +519,38 @@ class openmp_tag(object):
         if isinstance(self.arg, ir.Var):
             self.arg = replace_vars_inner(self.arg, var_dict)
 
-    def add_to_use_set(self, use_set):
-        if not is_dsa(self.name):
+    def add_to_usedef_set(self, use_set, def_set, start):
+        assert start==True or start==False
+        if config.DEBUG_OPENMP >= 1:
+            print("add_to_usedef_set", start, self.name, "is_dsa=", is_dsa(self.name))
+
+        def add_arg(arg, the_set):
             if isinstance(self.arg, ir.Var):
-                use_set.add(self.arg.name)
-            if isinstance(self.arg, str):
-                use_set.add(self.arg)
+                the_set.add(self.arg.name)
+            elif isinstance(self.arg, str):
+                the_set.add(self.arg)
+
+        if self.name.startswith("DIR.OMP"):
+            assert not isinstance(self.arg, (ir.Var, str))
+            return
+
+        if self.name in ["QUAL.OMP.MAP.TO", "QUAL.OMP.IF", "QUAL.OMP.NUM_THREADS", "QUAL.OMP.NUM_TEAMS", "QUAL.OMP.THREAD_LIMIT", "QUAL.OMP.SCHEDULE.STATIC", "QUAL.OMP.SCHEDULE.RUNTIME", "QUAL.OMP.SCHEDULE.GUIDED", "QUAL.OMP.SCHEDULE_DYNAMIC", "QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.COPYIN", "QUAL.OMP.COPYPRIVATE", "QUAL.OMP.NORMALIZED.LB", "QUAL.OMP.NORMALIZED.START", "QUAL.OMP.NORMALIZED.UB", "QUAL.OMP.MAP.TO.STRUCT"]:
+            if start:
+                add_arg(self.arg, use_set)
+        elif self.name in ["QUAL.OMP.PRIVATE", "QUAL.OMP.LINEAR", "QUAL.OMP.SHARED", "QUAL.OMP.NORMALIZED.IV"]:
+            # Intentionally do nothing.
+            pass
+        elif self.name in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.TARGET.IMPLICIT", "QUAL.OMP.MAP.TOFROM.STRUCT"]:
+            if start:
+                add_arg(self.arg, use_set)
+            else:
+                add_arg(self.arg, def_set)
+        elif self.name in ["QUAL.OMP.MAP.FROM", "QUAL.OMP.LASTPRIVATE"] or self.name.startswith("QUAL.OMP.REDUCTION"):
+            if not start:
+                add_arg(self.arg, def_set)
+        else:
+            # All other clauses should not have a variable argument.
+            assert not isinstance(self.arg, (ir.Var, str))
 
     def __str__(self):
         return "openmp_tag(" + str(self.name) + "," + str(self.arg) + ")"
@@ -1341,10 +1367,13 @@ class openmp_region_start(ir.Stmt):
             add_firstprivate_to_ins(ins, self.tags)
 
             normalized_ivs = get_tags_of_type(self.tags, "QUAL.OMP.NORMALIZED.IV")
+            if config.DEBUG_OPENMP >= 1:
+                print("ivs ins", normalized_ivs, ins, outs)
             for niv in normalized_ivs:
                 if config.DEBUG_OPENMP >= 1:
                     print("Removing normalized iv from ins", niv.arg)
-                ins.remove(niv.arg)
+                if niv.arg in ins:
+                    ins.remove(niv.arg)
             # Get the types of the variables live-in to the target region.
             target_args_unordered = ins + list(set(outs) - set(ins))
             if config.DEBUG_OPENMP >= 1:
@@ -2024,21 +2053,25 @@ def post_lowering_openmp(mod):
 
 # Callback for ir_extension_usedefs
 def openmp_region_start_defs(region, use_set=None, def_set=None):
+    assert isinstance(region, openmp_region_start)
     if use_set is None:
         use_set = set()
     if def_set is None:
         def_set = set()
     for tag in region.tags:
-        tag.add_to_use_set(use_set)
+        tag.add_to_usedef_set(use_set, def_set, start=True)
     return _use_defs_result(usemap=use_set, defmap=def_set)
 
 def openmp_region_end_defs(region, use_set=None, def_set=None):
+    assert isinstance(region, openmp_region_end)
     if use_set is None:
         use_set = set()
     if def_set is None:
         def_set = set()
-    for tag in region.tags:
-        tag.add_to_use_set(use_set)
+    # We refer to the clauses from the corresponding start of the region.
+    start_region = region.start_region
+    for tag in start_region.tags:
+        tag.add_to_usedef_set(use_set, def_set, start=False)
     return _use_defs_result(usemap=use_set, defmap=def_set)
 
 # Extend usedef analysis to support openmp_region_start/end nodes.
@@ -5467,7 +5500,9 @@ class OpenmpExternalFunction(types.ExternalFunction):
         arg_str = ",".join([numba_to_c(str(x)) for x in self.sig.args])
         proto = f"{ret_typ} {fname}({arg_str});"
         ffi.cdef(proto)
-        C = ffi.dlopen(iomplib)
+        # Should be loaded into the process by the load_library_permanently
+        # at the top of this file.
+        C = ffi.dlopen(None)
         return getattr(C, fname)(*args)
 
 
