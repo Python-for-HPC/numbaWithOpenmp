@@ -2171,6 +2171,40 @@ def extract_args_from_openmp(func_ir):
                         sys.exit(-3)
 
 
+def remove_empty_blocks(blocks):
+    found = True
+    while found:
+        found = False
+        empty_block = None
+        for label, block in blocks.items():
+            if len(block.body) == 1:
+                assert isinstance(block.body[-1], ir.Jump)
+                empty_block = label
+                next_block = block.body[-1].target
+                break
+
+        if empty_block is not None:
+            del blocks[empty_block]
+
+            found = True
+            for block in blocks.values():
+                last_stmt = block.body[-1]
+                if isinstance(last_stmt, ir.Jump):
+                    if last_stmt.target == empty_block:
+                        block.body[-1] = ir.Jump(next_block, last_stmt.loc)
+                elif isinstance(last_stmt, ir.Branch):
+                    if last_stmt.truebr == empty_block:
+                        block.body[-1] = ir.Branch(last_stmt.cond, next_block, last_stmt.falsebr, last_stmt.loc)
+                    elif block.body[-1].falsebr == empty_block:
+                        block.body[-1] = ir.Branch(last_stmt.cond, last_stmt.truebr, next_block, last_stmt.loc)
+                elif isinstance(last_stmt, ir.Return):
+                    # Intentionally do nothing.
+                    pass
+                else:
+                    print(type(last_stmt))
+                    assert False
+
+
 class _OpenmpContextType(WithContext):
     is_callable = True
     first_time = True
@@ -2211,6 +2245,7 @@ class _OpenmpContextType(WithContext):
             extract_args_from_openmp(func_ir)
             #dead_code_elimination(func_ir)
             remove_ssa_from_func_ir(func_ir)
+            #remove_empty_blocks(blocks)
             func_ir.has_openmp_region = True
         if config.DEBUG_OPENMP >= 1:
             print("pre-with-removal")
@@ -2929,7 +2964,6 @@ class OpenmpVisitor(Transformer):
                 loop_header = loop.header
                 loop_header_block = self.blocks[loop_header]
                 loop_header_block.body[-1] = ir.Jump(loop_header_block.body[-1].truebr, loop_header_block.body[-1].loc)
-                #loop_header_block.body = [ir.Jump(loop_header_block.body[-1].truebr, loop_header_block.body[-1].loc)]
                 last_eliminated_loop_header_block = loop_header_block
                 self.body_blocks = [x for x in self.body_blocks if x not in loop.entries]
                 self.body_blocks.remove(loop.header)
@@ -3027,7 +3061,12 @@ class OpenmpVisitor(Transformer):
         #non_loop_blocks.difference_update({exit})
 
         if config.DEBUG_OPENMP >= 1:
-            print("non_loop_blocks:", non_loop_blocks, "entry:", entry, self.body_blocks)
+            print("non_loop_blocks:", non_loop_blocks)
+            print("entry:", entry)
+            print("header:", header)
+            print("exit:",  exit)
+            print("body_blocks:", self.body_blocks)
+            print("loop:", loop)
 
         # Find the first statement after any iterspace calculation ones for collapse.
         first_stmt = self.blocks[entry].body[0]
@@ -3058,14 +3097,24 @@ class OpenmpVisitor(Transformer):
         if config.DEBUG_OPENMP >= 1:
             print("loop_blocks_for_io:", loop_blocks_for_io, entry, exit)
             print("non_loop_blocks:", non_loop_blocks)
+            print("header:", header)
 
         entry_block = self.blocks[entry]
+        assert isinstance(entry_block.body[-1], ir.Jump)
+        assert entry_block.body[-1].target == header
         exit_block = self.blocks[exit]
         header_block = self.blocks[header]
+        extra_block = None if len(header_block.body) > 1 else header_block.body[-1].target
 
         latch_block_num = max(self.blocks.keys()) + 1
 
-        # We have to reformat the Numba style of loop to the only form that xmain openmp supports.
+        # We have to reformat the Numba style of loop to the form that the LLVM
+        # openmp pass supports.
+        """
+        if extra_block is not None:
+            header_preds = [x[0] for x in cfg.predecessors(extra_block)]
+        else:
+        """
         header_preds = [x[0] for x in cfg.predecessors(header)]
         entry_preds = list(set(header_preds).difference(loop.body))
         back_blocks = list(set(header_preds).intersection(loop.body))
@@ -3076,6 +3125,9 @@ class OpenmpVisitor(Transformer):
         assert(len(entry_preds) == 1)
         entry_pred_label = entry_preds[0]
         entry_pred = self.blocks[entry_pred_label]
+        if extra_block is not None:
+            header_block = self.blocks[extra_block]
+            header = extra_block
         header_branch = header_block.body[-1]
         post_header = {header_branch.truebr, header_branch.falsebr}
         post_header.remove(exit)
@@ -3113,6 +3165,7 @@ class OpenmpVisitor(Transformer):
                     if config.DEBUG_OPENMP >= 1:
                         print("getiter_inst:", getiter_inst)
                     #----------------------------------------------
+
                     assert(len(header_block.body) > 3)
                     if config.DEBUG_OPENMP >= 1:
                         print("header block before removing Numba range vars:")
