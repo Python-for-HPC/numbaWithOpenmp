@@ -24,7 +24,7 @@ from numba import np as numba_np
 from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
 from numba.extending import overload, intrinsic
-from numba.core.callconv import BaseCallConv, MinimalCallConv, errcode_t, RETCODE_OK, Status, excinfo_t
+from numba.core.callconv import BaseCallConv, MinimalCallConv, errcode_t, RETCODE_OK, Status, excinfo_t, CPUCallConv
 from functools import cached_property
 from numba.core.datamodel.registry import register_default as model_register
 from numba.core.datamodel.registry import default_manager as model_manager
@@ -505,7 +505,7 @@ class openmp_tag(object):
 
         gen_copy = name_to_use in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.LASTPRIVATE"]
 
-        if name_to_use in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.MAP.TO", "QUAL.OMP.MAP.FROM"] and is_array:
+        if name_to_use in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.MAP.TO", "QUAL.OMP.MAP.FROM", "QUAL.OMP.MAP.ALLOC"] and is_array:
             #name_to_use += ".STRUCT"
             #var_table = get_name_var_table(lowerer.func_ir.blocks)
             #decl = ",".join([self.arg_to_str(x, lowerer, struct_lower=True, var_table=var_table) for x in arg_list])
@@ -537,7 +537,7 @@ class openmp_tag(object):
         if self.name in ["QUAL.OMP.MAP.TO", "QUAL.OMP.IF", "QUAL.OMP.NUM_THREADS", "QUAL.OMP.NUM_TEAMS", "QUAL.OMP.THREAD_LIMIT", "QUAL.OMP.SCHEDULE.STATIC", "QUAL.OMP.SCHEDULE.RUNTIME", "QUAL.OMP.SCHEDULE.GUIDED", "QUAL.OMP.SCHEDULE_DYNAMIC", "QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.COPYIN", "QUAL.OMP.COPYPRIVATE", "QUAL.OMP.NORMALIZED.LB", "QUAL.OMP.NORMALIZED.START", "QUAL.OMP.NORMALIZED.UB", "QUAL.OMP.MAP.TO.STRUCT"]:
             if start:
                 add_arg(self.arg, use_set)
-        elif self.name in ["QUAL.OMP.PRIVATE", "QUAL.OMP.LINEAR", "QUAL.OMP.SHARED", "QUAL.OMP.NORMALIZED.IV"]:
+        elif self.name in ["QUAL.OMP.PRIVATE", "QUAL.OMP.LINEAR", "QUAL.OMP.SHARED", "QUAL.OMP.NORMALIZED.IV", "QUAL.OMP.MAP.ALLOC", "QUAL.OMP.MAP.ALLOC.STRUCT"]:
             # Intentionally do nothing.
             pass
         elif self.name in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.TARGET.IMPLICIT", "QUAL.OMP.MAP.TOFROM.STRUCT"]:
@@ -550,6 +550,8 @@ class openmp_tag(object):
                 add_arg(self.arg, def_set)
         else:
             # All other clauses should not have a variable argument.
+            if isinstance(self.arg, (ir.Var, str)):
+                print("Bad usedef tag:", self.name, self.arg)
             assert not isinstance(self.arg, (ir.Var, str))
 
     def __str__(self):
@@ -682,6 +684,13 @@ def copy_one(x, calltypes):
         return slice(copy_one(x.start, calltypes), copy_one(x.stop, calltypes), copy_one(x.step, calltypes))
     elif isinstance(x, ir.PopBlock):
         return ir.PopBlock(copy_one(x.loc, calltypes))
+    elif isinstance(x, ir.SetAttr):
+        ctyp = calltypes[x]
+        ret = ir.SetAttr(copy_one(x.target, calltypes), copy_one(x.attr, calltypes), copy_one(x.value, calltypes), copy_one(x.loc, calltypes))
+        calltypes[ret] = ctyp
+        return ret
+    elif isinstance(x, ir.DelAttr):
+        return ir.DelAttr(copy_one(x.target, calltypes), copy_one(x.attr, calltypes), copy_one(x.loc, calltypes))
     print("Failed to handle the following type when copying target IR.", type(x), x)
     assert False
 
@@ -728,42 +737,76 @@ def is_target_tag(x):
 
 
 class OpenmpCallConv(MinimalCallConv):
+    def __init__(self, x, normal):
+        super().__init__(x)
+        self.normal = normal(x)
+        self.first = True
+        self.function_type_count = 0
+
     def return_value(self, builder, retval):
-        self._return_errcode_raw(builder, RETCODE_OK)
+        if config.DEBUG_OPENMP >= 2:
+            print("========== OpenmpCallConv return_value =====================", self.first)
+        return self._return_errcode_raw(builder, RETCODE_OK)
+        """
+        if self.first:
+            return self._return_errcode_raw(builder, RETCODE_OK)
+        else:
+            #breakpoint()
+            return self.normal.return_value(builder, retval)
+        """
 
     def return_user_exc(self, builder, exc, exc_args=None, loc=None,
                         func_name=None):
-        pass  # Don't generate any exception code
-        #assert False
+        if config.DEBUG_OPENMP >= 2:
+            print("========== OpenmpCallConv return_user_exc =====================", self.first)
+        if self.first:
+            pass  # Don't generate any exception code
+        else:
+            return self.normal.return_user_exc(builder, exc, exc_args, loc, func_name)
 
     def get_arguments(self, func):
-        return func.args
+        if config.DEBUG_OPENMP >= 2:
+            print("========== OpenmpCallConv get_arguments =====================", self.first)
+        if self.first:
+            return func.args
+        else:
+            return self.normal.get_arguments(func)
 
     def call_function(self, builder, callee, resty, argtys, args, attrs=None):
         """
         Call the Numba-compiled *callee*.
         """
-        if isinstance(callee.function_type, lir.FunctionType):
-            ft = callee.function_type
-            retty = ft.return_type
-            arginfo = self._get_arg_packer(argtys)
-            args = list(arginfo.as_arguments(builder, args))
-            realargs = args
-            code = builder.call(callee, realargs) #, attrs=_attrs)
-            retvaltmp = cgutils.alloca_once(builder, errcode_t)
-            builder.store(RETCODE_OK, retvaltmp)
+        if config.DEBUG_OPENMP >= 2:
+            print("========== OpenmpCallConv call_function =====================", self.first)
+        if self.first:
+            if isinstance(callee.function_type, lir.FunctionType):
+                if config.DEBUG_OPENMP >= 2:
+                    print("call_function:", callee, callee.name, type(callee), argtys, args)
+                #if "compute_velocity" in callee.name:
+                #    breakpoint()
+                ft = callee.function_type
+                retty = ft.return_type
+                arginfo = self._get_arg_packer(argtys)
+                args = list(arginfo.as_arguments(builder, args))
+                realargs = args
+                code = builder.call(callee, realargs) #, attrs=_attrs)
+                retvaltmp = cgutils.alloca_once(builder, errcode_t)
+                builder.store(RETCODE_OK, retvaltmp)
 
-            excinfoptr = cgutils.alloca_once(builder, lir.PointerType(excinfo_t),
-                                         name=".excinfo")
-            status = Status(code=code,
-                            is_ok=cgutils.true_bit,
-                            is_error=cgutils.false_bit,
-                            is_python_exc=cgutils.false_bit,
-                            is_none=cgutils.false_bit,
-                            is_user_exc=cgutils.false_bit,
-                            is_stop_iteration=cgutils.false_bit,
-                            excinfoptr=builder.load(excinfoptr))
-            return status, code
+                excinfoptr = cgutils.alloca_once(builder, lir.PointerType(excinfo_t),
+                                             name=".excinfo")
+                status = Status(code=code,
+                                is_ok=cgutils.true_bit,
+                                is_error=cgutils.false_bit,
+                                is_python_exc=cgutils.false_bit,
+                                is_none=cgutils.false_bit,
+                                is_user_exc=cgutils.false_bit,
+                                is_stop_iteration=cgutils.false_bit,
+                                excinfoptr=builder.load(excinfoptr))
+                return status, code
+
+        else:
+            return self.normal.call_function(builder, callee, resty, argtys, args, attrs)
 
         """
         retty = self._get_return_argument(callee.function_type).pointee
@@ -815,41 +858,61 @@ class OpenmpCallConv(MinimalCallConv):
         """
         Get the implemented Function type for *restype* and *argtypes*.
         """
-        if True:
-            argtypes = [self.context.get_value_type(x) for x in argtypes]
-            #argtypes = [self.context.get_value_type(x).as_pointer() for x in argtypes]
-            #resptr = self.get_return_type(restype)
-            #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
-            fnty = lir.FunctionType(errcode_t, argtypes)
-            return fnty
+        self.function_type_count += 1
+        if self.function_type_count >= 2:
+            self.first = False
+
+        if config.DEBUG_OPENMP >= 2:
+            print("========== OpenmpCallConv get_function_type =====================", self.first)
+        if self.first:
+            if True:
+                argtypes = [self.context.get_value_type(x) for x in argtypes]
+                #argtypes = [self.context.get_value_type(x).as_pointer() for x in argtypes]
+                #resptr = self.get_return_type(restype)
+                #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
+                fnty = lir.FunctionType(errcode_t, argtypes)
+                return fnty
+            else:
+                arginfo = self._get_arg_packer(argtypes)
+                argtypes = list(arginfo.argument_types)
+                #resptr = self.get_return_type(restype)
+                #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
+                fnty = lir.FunctionType(errcode_t, argtypes)
+                return fnty
+
         else:
-            arginfo = self._get_arg_packer(argtypes)
-            argtypes = list(arginfo.argument_types)
-            #resptr = self.get_return_type(restype)
-            #fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
-            fnty = lir.FunctionType(errcode_t, argtypes)
-            return fnty
+            return self.normal.get_function_type(restype, argtypes)
 
     def decorate_function(self, fn, args, fe_argtypes, noalias=False):
         """
         Set names and attributes of function arguments.
         """
-        assert not noalias
-        if True:
-            arg_names = ['arg.' + a for a in args]
-            for fnarg, arg_name in zip(fn.args, arg_names):
-                fnarg.name = arg_name
+        if config.DEBUG_OPENMP >= 2:
+            print("========== OpenmpCallConv decorate_function =====================", self.first)
+        if self.first:
+            assert not noalias
+            if True:
+                arg_names = ['arg.' + a for a in args]
+                for fnarg, arg_name in zip(fn.args, arg_names):
+                    fnarg.name = arg_name
+            else:
+                arginfo = self._get_arg_packer(fe_argtypes)
+                arginfo.assign_names(self.get_arguments(fn),
+                                     ['arg.' + a for a in args])
+            return fn
         else:
-            arginfo = self._get_arg_packer(fe_argtypes)
-            arginfo.assign_names(self.get_arguments(fn),
-                                 ['arg.' + a for a in args])
-        return fn
+            return self.normal.decorate_function(fn, args, fe_argtypes, noalias)
 
     def decode_arguments(self, builder, argtypes, func):
-        raw_args = self.get_arguments(func)
-        return raw_args
-        #arginfo = self._get_arg_packer(argtypes)
-        #return arginfo.from_arguments(builder, raw_args)
+        if config.DEBUG_OPENMP >= 2:
+            print("========== OpenmpCallConv decode_arguments =====================", self.first)
+        if self.first:
+            raw_args = self.get_arguments(func)
+            return raw_args
+            #arginfo = self._get_arg_packer(argtypes)
+            #return arginfo.from_arguments(builder, raw_args)
+        else:
+            return self.normal.decode_arguments(builder, argtypes, func)
 
 
 class openmp_region_start(ir.Stmt):
@@ -1148,7 +1211,7 @@ class openmp_region_start(ir.Stmt):
             struct_tags = []
             for i in range(len(self.tags)):
                 cur_tag = self.tags[i]
-                if cur_tag.name in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.MAP.TO", "QUAL.OMP.MAP.FROM"]:
+                if cur_tag.name in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.MAP.TO", "QUAL.OMP.MAP.FROM", "QUAL.OMP.MAP.ALLOC"]:
                     assert isinstance(cur_tag.arg, str)
                     cur_tag_typ = typemap_lookup(typemap, cur_tag.arg)
                     if isinstance(cur_tag_typ, types.npytypes.Array):
@@ -1195,6 +1258,11 @@ class openmp_region_start(ir.Stmt):
                             struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
                             struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, 1)))
                             struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, 1)))
+                        elif "ALLOC" in cur_tag.name:
+                            struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, 1)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, 1)))
+                            cur_tag.name = "QUAL.OMP.MAP.TO"
                         else:
                             # Must be QUAL.OMP.MAP.FROM in which case only need to get the data back but always need the array struct for metadata.
                             #struct_tags.append(openmp_tag("QUAL.OMP.MAP.TOFROM.STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
@@ -1410,7 +1478,7 @@ class openmp_region_start(ir.Stmt):
             #outline_arg_typs = [None] * len(target_args_unordered)
             for tag in self.tags:
                 if config.DEBUG_OPENMP >= 1:
-                    print(1, "target_arg?", tag)
+                    print(1, "target_arg?", tag, tag.non_arg, is_target_arg(tag.name))
                 if tag.arg in target_args_unordered and not tag.non_arg and is_target_arg(tag.name):
                     target_args.append(tag.arg)
                     #target_arg_index = target_args.index(tag.arg)
@@ -1428,6 +1496,7 @@ class openmp_region_start(ir.Stmt):
 
             if config.DEBUG_OPENMP >= 1:
                 print("target_args:", target_args)
+                print("target_args_unordered:", target_args_unordered)
                 print("outline_arg_typs:", outline_arg_typs)
                 print("extras_before:", extras_before, start_block)
                 for eb in extras_before:
@@ -1577,7 +1646,7 @@ class openmp_region_start(ir.Stmt):
                 class OpenmpCPUTargetContext(cpu.CPUContext):
                     @cached_property
                     def call_conv(self):
-                        return OpenmpCallConv(self)
+                        return OpenmpCallConv(self, CPUCallConv)
 
                 subtarget = OpenmpCPUTargetContext(targetctx.typing_context)
                 # Copy everything (like registries) from cpu context into the new OpenMPCPUTargetContext subtarget
@@ -1596,13 +1665,15 @@ class openmp_region_start(ir.Stmt):
                 device_target = subtarget
             elif selected_device == 1:
                 from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
+                from numba.cuda.target import CUDACallConv
+
                 flags = cuda_compiler.CUDAFlags()
                 #class OpenmpCUDACallConv(BaseCallConv):
 
                 class OpenmpCUDATargetContext(cuda_descriptor.CUDATargetContext):
                     @cached_property
                     def call_conv(self):
-                        return OpenmpCallConv(self)
+                        return OpenmpCallConv(self, CUDACallConv)
 
                 device_target = OpenmpCUDATargetContext(cuda_descriptor.cuda_target.typing_context)
                 #device_target = cuda_descriptor.cuda_target.target_context
@@ -1652,6 +1723,7 @@ class openmp_region_start(ir.Stmt):
                                        is_lifted_loop=False,  # tried this as True since code derived from loop lifting code but it goes through the pipeline twice and messes things up
                                        parent_state=state_copy)
 
+            #breakpoint()
             if selected_device == 0:
                 #from numba.cpython import printimpl
                 ##subtarget.install_registry(printimpl.registry)
@@ -1668,6 +1740,7 @@ class openmp_region_start(ir.Stmt):
                 print("cres_library:", type(cres_library))
                 sys.stdout.flush()
             cres_library._ensure_finalized()
+            print("cres final module:", cres_library._final_module)
             if config.DEBUG_OPENMP >= 2:
                 print("ensure_finalized:")
                 sys.stdout.flush()
@@ -2338,7 +2411,7 @@ def get_dotted_type(x, typemap, lowerer):
 
 
 def is_target_arg(name):
-    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
+    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT", "QUAL.OMP.THREAD_LIMIT"] or name.startswith("QUAL.OMP.MAP")
     #or name.startswith("QUAL.OMP.NORMALIZED")
     #return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
 
@@ -3757,16 +3830,16 @@ class OpenmpVisitor(Transformer):
 
     def teams_back_prop(self, tags, clauses):
         nt_tag = self.get_clauses_by_name(tags, "QUAL.OMP.NUM_TEAMS")
-        assert len(nt_tag) > 0
-        cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS")
+        assert len(nt_tag) == 1
+        cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS", remove_from_orig=True)
         if len(cur_num_team_clauses) >= 1:
             nt_tag[-1].arg = cur_num_team_clauses[-1].arg
         else:
             nt_tag[-1].arg = 0
 
         nt_tag = self.get_clauses_by_name(tags, "QUAL.OMP.THREAD_LIMIT")
-        assert len(nt_tag) > 0
-        cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")
+        assert len(nt_tag) == 1
+        cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT", remove_from_orig=True)
         if len(cur_num_team_clauses) >= 1:
             nt_tag[-1].arg = cur_num_team_clauses[-1].arg
         else:
@@ -3852,15 +3925,22 @@ class OpenmpVisitor(Transformer):
     def target_teams_distribute_parallel_for_simd_directive(self, args):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 6, has_loop=True)
 
-    def get_clauses_by_name(self, clauses, names):
+    def get_clauses_by_name(self, clauses, names, remove_from_orig=False):
         if not isinstance(names, list):
             names = [names]
-        return list(filter(lambda x: x.name in names, clauses))
 
-    def get_clauses_by_start(self, clauses, names):
+        ret = list(filter(lambda x: x.name in names, clauses))
+        if remove_from_orig:
+            clauses[:] = list(filter(lambda x: x.name not in names, clauses))
+        return ret
+
+    def get_clauses_by_start(self, clauses, names, remove_from_orig=False):
         if not isinstance(names, list):
             names = [names]
-        return list(filter(lambda x: any([x.name.startswith(y) for y in names]), clauses))
+        ret = list(filter(lambda x: any([x.name.startswith(y) for y in names]), clauses))
+        if remove_from_orig:
+            clauses[:] = list(filter(lambda x: any([not x.name.startswith(y) for y in names]), clauses))
+        return ret
 
     def target_enter_data_directive(self, args):
         sblk = self.blocks[self.blk_start]
@@ -3950,15 +4030,27 @@ class OpenmpVisitor(Transformer):
 
         sblk = self.blocks[self.blk_start]
         clauses, _ = self.flatten(args[lexer_count:], sblk)
-        #if len(self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS")) == 0:
-        #    if config.DEBUG_OPENMP >= 1:
-        #        print("Adding NUM_TEAMS implicit clause.")
-        #    start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
+        """
+        nt_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS", remove_from_orig=False)
+        if len(nt_clauses) == 0:
+            if config.DEBUG_OPENMP >= 1:
+                print("Adding NUM_TEAMS implicit clause.")
+            #clauses.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
+            start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
+        else:
+            start_tags.append(nt_clauses[-1])
+        """
         start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
-        #if len(self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")) == 0:
-        #    if config.DEBUG_OPENMP >= 1:
-        #        print("Adding THREAD_LIMIT implicit clause.")
-        #    start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
+        """
+        tl_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT", remove_from_orig=False)
+        if len(tl_clauses) == 0:
+            if config.DEBUG_OPENMP >= 1:
+                print("Adding THREAD_LIMIT implicit clause.")
+            #clauses.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
+            start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
+        else:
+            start_tags.append(tl_clauses[-1])
+        """
         start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
 
         if "TEAMS" in dir_tag:
@@ -4534,7 +4626,7 @@ class OpenmpVisitor(Transformer):
     def parallel_back_prop(self, tags, clauses):
         nt_tag = self.get_clauses_by_name(tags, "QUAL.OMP.THREAD_LIMIT")
         assert len(nt_tag) > 0
-        cur_thread_limit_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_THREADS")
+        cur_thread_limit_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_THREADS", remove_from_orig=True)
         if len(cur_thread_limit_clauses) >= 1:
             nt_tag[-1].arg = cur_thread_limit_clauses[-1].arg
         else:
