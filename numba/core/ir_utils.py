@@ -1439,6 +1439,12 @@ def merge_adjacent_blocks(blocks):
         if label in removed:
             continue
         block = blocks[label]
+
+        # Merging into blocks that start with EnterWith or PopBlock
+        # will break "with" handling.
+        if isinstance(block.body[0], (ir.EnterWith, ir.PopBlock)):
+            continue
+
         succs = list(cfg.successors(label))
         while True:
             if len(succs) != 1:
@@ -1451,6 +1457,12 @@ def merge_adjacent_blocks(blocks):
             if len(preds) != 1 or preds[0][0] != label:
                 break
             next_block = blocks[next_label]
+
+            # Removing blocks that start with EnterWith or PopBlock
+            # will break "with" handling.
+            if isinstance(next_block.body[0], (ir.EnterWith, ir.PopBlock)):
+                break
+
             # XXX: commented out since scope objects are not consistent
             # throughout the compiler. for example, pieces of code are compiled
             # and inlined on the fly without proper scope merge.
