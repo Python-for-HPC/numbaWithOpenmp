@@ -1740,7 +1740,6 @@ class openmp_region_start(ir.Stmt):
                 print("cres_library:", type(cres_library))
                 sys.stdout.flush()
             cres_library._ensure_finalized()
-            print("cres final module:", cres_library._final_module)
             if config.DEBUG_OPENMP >= 2:
                 print("ensure_finalized:")
                 sys.stdout.flush()
