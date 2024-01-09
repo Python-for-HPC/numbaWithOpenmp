@@ -1094,6 +1094,9 @@ class JitEngine(object):
         # when symbol-not-found.
         self._defined_symbols = set()
 
+    def __del__(self):
+        self.run_static_destructors()
+
     def is_symbol_defined(self, name):
         """Is the symbol defined in this session?
         """
@@ -1126,6 +1129,7 @@ class JitEngine(object):
     set_object_cache = _proxy(ll.ExecutionEngine.set_object_cache)
     finalize_object = _proxy(ll.ExecutionEngine.finalize_object)
     run_static_constructors = _proxy(ll.ExecutionEngine.run_static_constructors)
+    run_static_destructors = _proxy(ll.ExecutionEngine.run_static_destructors)
     get_function_address = _proxy(ll.ExecutionEngine.get_function_address)
     get_global_value_address = _proxy(
         ll.ExecutionEngine.get_global_value_address
