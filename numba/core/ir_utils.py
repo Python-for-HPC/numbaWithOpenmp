@@ -1435,17 +1435,22 @@ def merge_adjacent_blocks(blocks):
     cfg = compute_cfg_from_blocks(blocks)
     # merge adjacent blocks
     removed = set()
+    post_pop_blocks = set()
     for label in list(blocks.keys()):
-        if label in removed:
+        if label in removed or label in post_pop_blocks:
             continue
         block = blocks[label]
+
+        succs = list(cfg.successors(label))
 
         # Merging into blocks that start with EnterWith or PopBlock
         # will break "with" handling.
         if isinstance(block.body[0], (ir.EnterWith, ir.PopBlock)):
+            if isinstance(block.body[0], ir.PopBlock):
+                assert len(succs) == 1
+                post_pop_blocks.add(succs[0][0])
             continue
 
-        succs = list(cfg.successors(label))
         while True:
             if len(succs) != 1:
                 break
