@@ -1436,6 +1436,16 @@ def merge_adjacent_blocks(blocks):
     # merge adjacent blocks
     removed = set()
     post_pop_blocks = set()
+
+    # Find pop blocks first since the blocks may not be in such an
+    # order that that pop block will precede its target.
+    for label in list(blocks.keys()):
+        block = blocks[label]
+        succs = list(cfg.successors(label))
+        if isinstance(block.body[0], ir.PopBlock):
+            assert len(succs) == 1
+            post_pop_blocks.add(succs[0][0])
+
     for label in list(blocks.keys()):
         if label in removed or label in post_pop_blocks:
             continue
@@ -1446,9 +1456,6 @@ def merge_adjacent_blocks(blocks):
         # Merging into blocks that start with EnterWith or PopBlock
         # will break "with" handling.
         if isinstance(block.body[0], (ir.EnterWith, ir.PopBlock)):
-            if isinstance(block.body[0], ir.PopBlock):
-                assert len(succs) == 1
-                post_pop_blocks.add(succs[0][0])
             continue
 
         while True:
