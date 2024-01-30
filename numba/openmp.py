@@ -1783,6 +1783,8 @@ class openmp_region_start(ir.Stmt):
                     print("target_elf:", type(target_elf), len(target_elf))
                     sys.stdout.flush()
             elif selected_device == 1:
+                import numba.cuda.cudadrv.libs as cudalibs
+                libdevice_path = cudalibs.get_libdevice()
                 # Explicitly trigger post_lowering_openmp on device code since
                 # it is not called by the context.
                 post_lowering_openmp(cres_library._module)
@@ -1805,8 +1807,11 @@ class openmp_region_start(ir.Stmt):
                 omptarget_path = numba_openmp_lib_path
                 libomptarget_arch = omptarget_path + '/libomptarget-new-' + arch + '-' + cc + '.bc'
                 print('libomptarget_arch', libomptarget_arch)
-                subprocess.run([numba_openmp_bin_path + '/llvm-link', '--internalize', '-S', filename_prefix + '-intrinsics_omp.ll', libomptarget_arch,
-                                '-o', filename_prefix + '-intrinsics_omp-linked.ll'], check=True)
+                subprocess.run([numba_openmp_bin_path + '/llvm-link',
+                    '--internalize', '-S', filename_prefix +
+                    '-intrinsics_omp.ll', libomptarget_arch, libdevice_path,
+                    '-o', filename_prefix + '-intrinsics_omp-linked.ll'],
+                    check=True)
                 subprocess.run([numba_openmp_bin_path + '/opt', '-S', '-O3', filename_prefix + '-intrinsics_omp-linked.ll',
                     '-o', filename_prefix + '-intrinsics_omp-linked-opt.ll'], check=True)
                 subprocess.run([numba_openmp_bin_path + '/llc', '-O3', '-march=nvptx64', f'-mcpu={cc}', f'-mattr=+ptx64,+{cc}',
