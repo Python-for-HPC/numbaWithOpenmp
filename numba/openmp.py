@@ -20,6 +20,7 @@ from numba.core.ir_utils import (
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, filter_nested_loops
 from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils, typing, cpu, compiler_machinery
+from numba.cuda import compiler as CUDAcompiler
 from numba import np as numba_np
 from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
@@ -43,6 +44,11 @@ import subprocess
 import tempfile
 #from numba.cuda.cudaimpl import lower as cudaimpl_lower
 import types as python_types
+
+ll.set_option('openmp', '-debug')
+
+if config.DEBUG_OPENMP_LLVM_PASS >= 1:
+    ll.set_option('openmp', '-debug-only=intrinsics-openmp')
 
 library_missing = False
 
@@ -1923,6 +1929,15 @@ class OnlyLower(compiler.CompilerBase):
         if not self.state.flags.force_pyobject:
             pms.append(compiler.DefaultPassBuilder.define_nopython_lowering_pipeline(self.state))
         return pms
+
+class OnlyLowerCUDA(CUDAcompiler):
+    def define_pipelines(self):
+        pm = PassManager('cuda')
+        pm.add_pass(CUDALegalization, "CUDA legalization")
+        lowering_passes = self.define_cuda_lowering_pipeline(self.state)
+        pm.passes.extend(lowering_passes.passes)
+        pm.finalize()
+        return [pm]
 
 
 class openmp_region_end(ir.Stmt):

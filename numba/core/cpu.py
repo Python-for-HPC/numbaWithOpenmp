@@ -32,9 +32,6 @@ class EnvBody(cgutils.Structure):
     ]
 
 
-if config.DEBUG_OPENMP_LLVM_PASS >= 1:
-    ll.set_option('openmp', '-debug-only=intrinsics-openmp')
-
 
 class CPUContext(BaseContext):
     """
