@@ -20,8 +20,8 @@ from numba.core.ir_utils import (
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, filter_nested_loops
 from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils, typing, cpu, compiler_machinery
-from numba.cuda import compiler as CUDAcompiler
 from numba import np as numba_np
+from numba import cuda as numba_cuda
 from numba.core.controlflow import CFGraph
 from numba.core.ssa import _run_ssa
 from numba.extending import overload, intrinsic
@@ -30,6 +30,7 @@ from functools import cached_property
 from numba.core.datamodel.registry import register_default as model_register
 from numba.core.datamodel.registry import default_manager as model_manager
 from numba.core.datamodel.models import OpaqueModel
+from numba.core.types.functions import Dispatcher
 from cffi import FFI
 import llvmlite.binding as ll
 import llvmlite.ir as lir
@@ -45,9 +46,9 @@ import tempfile
 #from numba.cuda.cudaimpl import lower as cudaimpl_lower
 import types as python_types
 
-ll.set_option('openmp', '-debug')
 
 if config.DEBUG_OPENMP_LLVM_PASS >= 1:
+    ll.set_option('openmp', '-debug')
     ll.set_option('openmp', '-debug-only=intrinsics-openmp')
 
 library_missing = False
@@ -1154,6 +1155,29 @@ class openmp_region_start(ir.Stmt):
             setattr(ptyp, "emit_environment_sentry", pyomp_emit_environment_sentry)
             #print("after", id(pyomp_emit_environment_sentry), id(ptyp.emit_environment_sentry))
 
+    def fix_dispatchers(self, typemap, typingctx, cuda_target):
+        fixup_dict = {}
+        for k,v in typemap.items():
+            if isinstance(v, Dispatcher) and not isinstance(v, numba_cuda.types.CUDADispatcher):
+                #print("fix_dispatchers:", k, v, type(v))
+                #targetoptions = v.targetoptions.copy()
+                #targetoptions['device'] = True
+                #targetoptions['debug'] = targetoptions.get('debug', False)
+                #targetoptions['opt'] = targetoptions.get('opt', True)
+                vdispatcher = v.dispatcher
+                print("overloads:", vdispatcher.overloads.keys())
+                vdispatcher.targetoptions.pop("nopython", None)
+                vdispatcher.targetoptions.pop("boundscheck", None)
+                disp = typingctx.resolve_value_type(vdispatcher)
+                fixup_dict[k] = disp
+                print(type(disp), type(disp.dispatcher))
+                for sig in vdispatcher.overloads.keys():
+                    disp.dispatcher.compile_device(sig, cuda_target=cuda_target)
+        
+        for k,v in fixup_dict.items():
+            del typemap[k]        
+            typemap[k] = v
+
     def lower(self, lowerer):
         typingctx = lowerer.context.typing_context
         targetctx = lowerer.context
@@ -1648,6 +1672,7 @@ class openmp_region_start(ir.Stmt):
 
             if selected_device == 0:
                 flags = Flags()
+                device_lowerer_pipeline = OnlyLower
 
                 class OpenmpCPUTargetContext(cpu.CPUContext):
                     @cached_property
@@ -1669,6 +1694,7 @@ class openmp_region_start(ir.Stmt):
 
                 subtarget.install_registry(printreg)
                 device_target = subtarget
+                typingctx_outlined = targetctx.typing_context
             elif selected_device == 1:
                 from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
                 from numba.cuda.target import CUDACallConv
@@ -1681,8 +1707,14 @@ class openmp_region_start(ir.Stmt):
                     def call_conv(self):
                         return OpenmpCallConv(self, CUDACallConv)
 
-                device_target = OpenmpCUDATargetContext(cuda_descriptor.cuda_target.typing_context)
+                typingctx_outlined = cuda_descriptor.cuda_target.typing_context
+                device_target = OpenmpCUDATargetContext(typingctx_outlined)
                 #device_target = cuda_descriptor.cuda_target.target_context
+                device_lowerer_pipeline = OnlyLowerCUDA
+                openmp_cuda_target = numba_cuda.descriptor.CUDATarget("openmp_cuda")
+                openmp_cuda_target._typingctx = typingctx_outlined
+                openmp_cuda_target._targetctx = device_target
+                self.fix_dispatchers(state_copy.typemap, typingctx_outlined, openmp_cuda_target)
             else:
                 raise NotImplementedError("Unsupported OpenMP device number")
 
@@ -1714,7 +1746,8 @@ class openmp_region_start(ir.Stmt):
                 print("===================================================================================")
 
 
-            cres = compiler.compile_ir(typingctx,
+            #cres = compiler.compile_ir(typingctx,
+            cres = compiler.compile_ir(typingctx_outlined,
                                        device_target,
                                        outlined_ir,
                                        outline_arg_typs,
@@ -1724,7 +1757,7 @@ class openmp_region_start(ir.Stmt):
                                        #state.return_type,
                                        flags,
                                        {},
-                                       pipeline_class=OnlyLower,
+                                       pipeline_class=device_lowerer_pipeline,
                                        #pipeline_class=Compiler,
                                        is_lifted_loop=False,  # tried this as True since code derived from loop lifting code but it goes through the pipeline twice and messes things up
                                        parent_state=state_copy)
@@ -1793,13 +1826,20 @@ class openmp_region_start(ir.Stmt):
                 libdevice_path = cudalibs.get_libdevice()
                 # Explicitly trigger post_lowering_openmp on device code since
                 # it is not called by the context.
-                post_lowering_openmp(cres_library._module)
+                #post_lowering_openmp(cres_library._module)
                 arch = 'nvptx'
                 import numba.cuda.api as cudaapi
                 cc_api = cudaapi.get_current_device().compute_capability
                 cc = 'sm_' + str(cc_api[0]) + str(cc_api[1])
                 filename_prefix = cres_library.name
-                target_llvm_ir = cres_library.get_llvm_str()
+                allmods = cres_library.modules
+                for mod in allmods:
+                    print(type(mod))
+                cur_mod = ll.parse_assembly(str(allmods[0]))
+                for mod in allmods[1:]:
+                    cur_mod.link_in(ll.parse_assembly(str(mod))) 
+                target_llvm_ir = str(cur_mod)
+                #target_llvm_ir = cres_library.get_llvm_str()
                 with open(filename_prefix + '.ll', 'w') as f:
                     f.write(target_llvm_ir)
                 if config.DEBUG_OPENMP_LLVM_PASS >= 1:
@@ -1930,10 +1970,11 @@ class OnlyLower(compiler.CompilerBase):
             pms.append(compiler.DefaultPassBuilder.define_nopython_lowering_pipeline(self.state))
         return pms
 
-class OnlyLowerCUDA(CUDAcompiler):
+
+class OnlyLowerCUDA(numba_cuda.compiler.CUDACompiler):
     def define_pipelines(self):
-        pm = PassManager('cuda')
-        pm.add_pass(CUDALegalization, "CUDA legalization")
+        pm = compiler_machinery.PassManager('cuda')
+        pm.add_pass(numba_cuda.compiler.CUDALegalization, "CUDA legalization")
         lowering_passes = self.define_cuda_lowering_pipeline(self.state)
         pm.passes.extend(lowering_passes.passes)
         pm.finalize()

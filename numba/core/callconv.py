@@ -272,7 +272,7 @@ class MinimalCallConv(BaseCallConv):
         """
         return func.args[1:]
 
-    def call_function(self, builder, callee, resty, argtys, args):
+    def call_function(self, builder, callee, resty, argtys, args, attrs=None):
         """
         Call the Numba-compiled *callee*.
         """

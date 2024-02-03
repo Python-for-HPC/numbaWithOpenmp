@@ -186,13 +186,15 @@ class CUDACompiler(CompilerBase):
 @global_compiler_lock
 def compile_cuda(pyfunc, return_type, args, debug=False, lineinfo=False,
                  inline=False, fastmath=False, nvvm_options=None,
-                 cc=None):
+                 cc=None, overload_cuda_target=None):
     if cc is None:
         raise ValueError('Compute Capability must be supplied')
 
-    from .descriptor import cuda_target
-    typingctx = cuda_target.typing_context
-    targetctx = cuda_target.target_context
+    if overload_cuda_target is None:
+        from .descriptor import cuda_target
+        overload_cuda_target = cuda_target
+    typingctx = overload_cuda_target.typing_context
+    targetctx = overload_cuda_target.target_context
 
     flags = CUDAFlags()
     # Do not compile (generate native code), just lower (to LLVM)
