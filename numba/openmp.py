@@ -1842,7 +1842,8 @@ class openmp_region_start(ir.Stmt):
                 #omptarget_path = os.path.dirname(omptargetlib)
                 omptarget_path = numba_openmp_lib_path
                 libomptarget_arch = omptarget_path + '/libomptarget-new-' + arch + '-' + cc + '.bc'
-                print('libomptarget_arch', libomptarget_arch)
+                if config.DEBUG_OPENMP >= 1:
+                    print('libomptarget_arch', libomptarget_arch)
                 subprocess.run([numba_openmp_bin_path + '/llvm-link',
                     '--internalize', '-S', filename_prefix +
                     '-intrinsics_omp.ll', libomptarget_arch, libdevice_path,
