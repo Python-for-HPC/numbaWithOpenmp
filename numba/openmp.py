@@ -744,48 +744,43 @@ def is_target_tag(x):
 
 
 class OpenmpCallConv(MinimalCallConv):
-    def __init__(self, x, normal):
+    def __init__(self, x, normal, custom_funcs):
         super().__init__(x)
         self.normal = normal(x)
-        self.first = True
-        self.function_type_count = 0
+        self.custom_funcs = custom_funcs
 
-    def return_value(self, builder, retval):
+    def return_value(self, builder, retval, name):
         if config.DEBUG_OPENMP >= 2:
-            print("========== OpenmpCallConv return_value =====================", self.first)
-        return self._return_errcode_raw(builder, RETCODE_OK)
-        """
-        if self.first:
+            print("========== OpenmpCallConv return_value =====================")
+        if name in self.custom_funcs:
             return self._return_errcode_raw(builder, RETCODE_OK)
         else:
-            #breakpoint()
-            return self.normal.return_value(builder, retval)
-        """
+            return self.normal.return_value(builder, retval, name)
 
     def return_user_exc(self, builder, exc, exc_args=None, loc=None,
                         func_name=None):
         if config.DEBUG_OPENMP >= 2:
-            print("========== OpenmpCallConv return_user_exc =====================", self.first)
-        if self.first:
+            print("========== OpenmpCallConv return_user_exc =====================")
+        if func_name is not None and func_name in self.custom_funcs:
             pass  # Don't generate any exception code
         else:
             return self.normal.return_user_exc(builder, exc, exc_args, loc, func_name)
 
-    def get_arguments(self, func):
+    def get_arguments(self, func, name):
         if config.DEBUG_OPENMP >= 2:
-            print("========== OpenmpCallConv get_arguments =====================", self.first)
-        if self.first:
+            print("========== OpenmpCallConv get_arguments =====================")
+        if name in self.custom_funcs:
             return func.args
         else:
-            return self.normal.get_arguments(func)
+            return self.normal.get_arguments(func, name)
 
-    def call_function(self, builder, callee, resty, argtys, args, attrs=None):
+    def call_function(self, builder, callee, resty, argtys, args, name, attrs=None):
         """
         Call the Numba-compiled *callee*.
         """
         if config.DEBUG_OPENMP >= 2:
-            print("========== OpenmpCallConv call_function =====================", self.first)
-        if self.first:
+            print("========== OpenmpCallConv call_function =====================")
+        if name in self.custom_funcs:
             if isinstance(callee.function_type, lir.FunctionType):
                 if config.DEBUG_OPENMP >= 2:
                     print("call_function:", callee, callee.name, type(callee), argtys, args)
@@ -861,17 +856,13 @@ class OpenmpCallConv(MinimalCallConv):
         return status, out
         """
 
-    def get_function_type(self, restype, argtypes):
+    def get_function_type(self, restype, argtypes, name):
         """
         Get the implemented Function type for *restype* and *argtypes*.
         """
-        self.function_type_count += 1
-        if self.function_type_count >= 2:
-            self.first = False
-
         if config.DEBUG_OPENMP >= 2:
-            print("========== OpenmpCallConv get_function_type =====================", self.first)
-        if self.first:
+            print("========== OpenmpCallConv get_function_type =====================")
+        if name in self.custom_funcs:
             if True:
                 argtypes = [self.context.get_value_type(x) for x in argtypes]
                 #argtypes = [self.context.get_value_type(x).as_pointer() for x in argtypes]
@@ -888,15 +879,15 @@ class OpenmpCallConv(MinimalCallConv):
                 return fnty
 
         else:
-            return self.normal.get_function_type(restype, argtypes)
+            return self.normal.get_function_type(restype, argtypes, name)
 
-    def decorate_function(self, fn, args, fe_argtypes, noalias=False):
+    def decorate_function(self, fn, args, fe_argtypes, name, noalias=False):
         """
         Set names and attributes of function arguments.
         """
         if config.DEBUG_OPENMP >= 2:
-            print("========== OpenmpCallConv decorate_function =====================", self.first)
-        if self.first:
+            print("========== OpenmpCallConv decorate_function =====================")
+        if name in self.custom_funcs:
             assert not noalias
             if True:
                 arg_names = ['arg.' + a for a in args]
@@ -904,22 +895,22 @@ class OpenmpCallConv(MinimalCallConv):
                     fnarg.name = arg_name
             else:
                 arginfo = self._get_arg_packer(fe_argtypes)
-                arginfo.assign_names(self.get_arguments(fn),
+                arginfo.assign_names(self.get_arguments(fn, name),
                                      ['arg.' + a for a in args])
             return fn
         else:
-            return self.normal.decorate_function(fn, args, fe_argtypes, noalias)
+            return self.normal.decorate_function(fn, args, fe_argtypes, name, noalias)
 
-    def decode_arguments(self, builder, argtypes, func):
+    def decode_arguments(self, builder, argtypes, func, name):
         if config.DEBUG_OPENMP >= 2:
-            print("========== OpenmpCallConv decode_arguments =====================", self.first)
-        if self.first:
-            raw_args = self.get_arguments(func)
+            print("========== OpenmpCallConv decode_arguments =====================")
+        if name in self.custom_funcs:
+            raw_args = self.get_arguments(func, name)
             return raw_args
             #arginfo = self._get_arg_packer(argtypes)
             #return arginfo.from_arguments(builder, raw_args)
         else:
-            return self.normal.decode_arguments(builder, argtypes, func)
+            return self.normal.decode_arguments(builder, argtypes, func, name)
 
 
 class openmp_region_start(ir.Stmt):
@@ -1165,12 +1156,10 @@ class openmp_region_start(ir.Stmt):
                 #targetoptions['debug'] = targetoptions.get('debug', False)
                 #targetoptions['opt'] = targetoptions.get('opt', True)
                 vdispatcher = v.dispatcher
-                print("overloads:", vdispatcher.overloads.keys())
                 vdispatcher.targetoptions.pop("nopython", None)
                 vdispatcher.targetoptions.pop("boundscheck", None)
                 disp = typingctx.resolve_value_type(vdispatcher)
                 fixup_dict[k] = disp
-                print(type(disp), type(disp.dispatcher))
                 for sig in vdispatcher.overloads.keys():
                     disp.dispatcher.compile_device(sig, cuda_target=cuda_target)
         
@@ -1556,8 +1545,9 @@ class openmp_region_start(ir.Stmt):
                 uid = next(bytecode.FunctionIdentity._unique_ids)
                 outlined_ir.func_id.unique_name = '{}${}'.format(outlined_ir.func_id.func_qualname, uid)
             prepend_device_to_func_name(outlined_ir)
+            device_func_name = outlined_ir.func_id.func_qualname
             if config.DEBUG_OPENMP >= 1:
-                print("outlined_ir:", type(outlined_ir), type(outlined_ir.func_id), outlined_ir.arg_names)
+                print("outlined_ir:", type(outlined_ir), type(outlined_ir.func_id), outlined_ir.arg_names, device_func_name)
                 dprint_func_ir(outlined_ir, "outlined_ir")
 
             # Create a copy of the state and the typemap inside of it so that changes
@@ -1677,7 +1667,7 @@ class openmp_region_start(ir.Stmt):
                 class OpenmpCPUTargetContext(cpu.CPUContext):
                     @cached_property
                     def call_conv(self):
-                        return OpenmpCallConv(self, CPUCallConv)
+                        return OpenmpCallConv(self, CPUCallConv, [device_func_name])
 
                 subtarget = OpenmpCPUTargetContext(targetctx.typing_context)
                 # Copy everything (like registries) from cpu context into the new OpenMPCPUTargetContext subtarget
@@ -1705,7 +1695,7 @@ class openmp_region_start(ir.Stmt):
                 class OpenmpCUDATargetContext(cuda_descriptor.CUDATargetContext):
                     @cached_property
                     def call_conv(self):
-                        return OpenmpCallConv(self, CUDACallConv)
+                        return OpenmpCallConv(self, CUDACallConv, [device_func_name])
 
                 typingctx_outlined = cuda_descriptor.cuda_target.typing_context
                 device_target = OpenmpCUDATargetContext(typingctx_outlined)
@@ -1833,8 +1823,8 @@ class openmp_region_start(ir.Stmt):
                 cc = 'sm_' + str(cc_api[0]) + str(cc_api[1])
                 filename_prefix = cres_library.name
                 allmods = cres_library.modules
-                for mod in allmods:
-                    print(type(mod))
+                #for mod in allmods:
+                #    print(type(mod))
                 cur_mod = ll.parse_assembly(str(allmods[0]))
                 for mod in allmods[1:]:
                     cur_mod.link_in(ll.parse_assembly(str(mod))) 

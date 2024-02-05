@@ -127,7 +127,7 @@ class BaseGeneratorLower(object):
         retval = self.box_generator_struct(lower, gen_struct)
 
         lower.debug_print("# low_init_func before return")
-        self.call_conv.return_value(builder, retval)
+        self.call_conv.return_value(builder, retval, "")
         lower.post_lower()
 
     def lower_next_func(self, lower):
@@ -143,7 +143,7 @@ class BaseGeneratorLower(object):
         function = lower.function
 
         # Extract argument values and other information from generator struct
-        genptr, = self.call_conv.get_arguments(function)
+        genptr, = self.call_conv.get_arguments(function, "")
         self.arg_packer.load_into(builder,
                                   self.get_args_ptr(builder, genptr),
                                   lower.fnargs)

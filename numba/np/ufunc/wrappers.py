@@ -157,10 +157,10 @@ def build_ufunc_wrapper(library, context, fname, signature, objmode, cres):
     wrapper_module = wrapperlib.create_ir_module('')
     if objmode:
         func_type = context.call_conv.get_function_type(
-            types.pyobject, [types.pyobject] * len(signature.args))
+            types.pyobject, [types.pyobject] * len(signature.args), fname)
     else:
         func_type = context.call_conv.get_function_type(
-            signature.return_type, signature.args)
+            signature.return_type, signature.args, fname)
 
     func = ir.Function(wrapper_module, func_type, name=fname)
     func.attributes.add("alwaysinline")
@@ -354,7 +354,8 @@ class _GufuncWrapper(object):
 
         wrapper_module = library.create_ir_module('_gufunc_wrapper')
         func_type = self.call_conv.get_function_type(self.fndesc.restype,
-                                                     self.fndesc.argtypes)
+                                                     self.fndesc.argtypes,
+                                                     self.fndesc.qualname)
         fname = self.fndesc.llvm_func_name
         func = ir.Function(wrapper_module, func_type, name=fname)
 

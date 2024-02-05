@@ -73,7 +73,7 @@ class BaseCallConv(object):
             with builder.if_then(validbit):
                 retval = self.context.get_return_value(builder, retty.type,
                                                        optval.data)
-                self.return_value(builder, retval)
+                self.return_value(builder, retval, "")
 
             self.return_native_none(builder)
 
@@ -83,7 +83,7 @@ class BaseCallConv(object):
                 value = self.context.cast(builder, value, fromty=valty,
                                           toty=retty.type)
             retval = self.context.get_return_value(builder, retty.type, value)
-            self.return_value(builder, retval)
+            self.return_value(builder, retval, "")
 
         else:
             raise NotImplementedError("returning {0} for {1}".format(valty,
@@ -149,12 +149,12 @@ class BaseCallConv(object):
 
         builder.position_at_end(bbend)
 
-    def decode_arguments(self, builder, argtypes, func):
+    def decode_arguments(self, builder, argtypes, func, name):
         """
         Get the decoded (unpacked) Python arguments with *argtypes*
         from LLVM function *func*.  A tuple of LLVM values is returned.
         """
-        raw_args = self.get_arguments(func)
+        raw_args = self.get_arguments(func, name)
         arginfo = self._get_arg_packer(argtypes)
         return arginfo.from_arguments(builder, raw_args)
 
@@ -182,7 +182,7 @@ class MinimalCallConv(BaseCallConv):
     def _make_call_helper(self, builder):
         return _MinimalCallHelper()
 
-    def return_value(self, builder, retval):
+    def return_value(self, builder, retval, name):
         retptr = builder.function.args[0]
         assert retval.type == retptr.type.pointee, \
             (str(retval.type), str(retptr.type.pointee))
@@ -245,7 +245,7 @@ class MinimalCallConv(BaseCallConv):
                         excinfoptr=None)
         return status
 
-    def get_function_type(self, restype, argtypes):
+    def get_function_type(self, restype, argtypes, name):
         """
         Get the implemented Function type for *restype* and *argtypes*.
         """
@@ -255,24 +255,24 @@ class MinimalCallConv(BaseCallConv):
         fnty = ir.FunctionType(errcode_t, [resptr] + argtypes)
         return fnty
 
-    def decorate_function(self, fn, args, fe_argtypes, noalias=False):
+    def decorate_function(self, fn, args, fe_argtypes, name, noalias=False):
         """
         Set names and attributes of function arguments.
         """
         assert not noalias
         arginfo = self._get_arg_packer(fe_argtypes)
-        arginfo.assign_names(self.get_arguments(fn),
+        arginfo.assign_names(self.get_arguments(fn, name),
                              ['arg.' + a for a in args])
         fn.args[0].name = ".ret"
         return fn
 
-    def get_arguments(self, func):
+    def get_arguments(self, func, name):
         """
         Get the Python-level arguments of LLVM *func*.
         """
         return func.args[1:]
 
-    def call_function(self, builder, callee, resty, argtys, args, attrs=None):
+    def call_function(self, builder, callee, resty, argtys, args, name, attrs=None):
         """
         Call the Numba-compiled *callee*.
         """
@@ -371,7 +371,7 @@ class CPUCallConv(BaseCallConv):
     def _make_call_helper(self, builder):
         return None
 
-    def return_value(self, builder, retval):
+    def return_value(self, builder, retval, name):
         retptr = self._get_return_argument(builder.function)
         assert retval.type == retptr.type.pointee, \
             (str(retval.type), str(retptr.type.pointee))
@@ -799,7 +799,7 @@ class CPUCallConv(BaseCallConv):
                         excinfoptr=excinfoptr)
         return status
 
-    def get_function_type(self, restype, argtypes):
+    def get_function_type(self, restype, argtypes, name):
         """
         Get the implemented Function type for *restype* and *argtypes*.
         """
@@ -811,12 +811,12 @@ class CPUCallConv(BaseCallConv):
                                + argtypes)
         return fnty
 
-    def decorate_function(self, fn, args, fe_argtypes, noalias=False):
+    def decorate_function(self, fn, args, fe_argtypes, name, noalias=False):
         """
         Set names of function arguments, and add useful attributes to them.
         """
         arginfo = self._get_arg_packer(fe_argtypes)
-        arginfo.assign_names(self.get_arguments(fn),
+        arginfo.assign_names(self.get_arguments(fn, name),
                              ['arg.' + a for a in args])
         retarg = self._get_return_argument(fn)
         retarg.name = "retptr"
@@ -828,7 +828,7 @@ class CPUCallConv(BaseCallConv):
         excarg.add_attribute("noalias")
 
         if noalias:
-            args = self.get_arguments(fn)
+            args = self.get_arguments(fn, name)
             for a in args:
                 if isinstance(a.type, ir.PointerType):
                     a.add_attribute("nocapture")
@@ -856,7 +856,7 @@ class CPUCallConv(BaseCallConv):
 
         return fn
 
-    def get_arguments(self, func):
+    def get_arguments(self, func, name):
         """
         Get the Python-level arguments of LLVM *func*.
         """
@@ -869,7 +869,7 @@ class CPUCallConv(BaseCallConv):
         return func.args[1]
 
     def call_function(self, builder, callee, resty, argtys, args,
-                      attrs=None):
+                      name, attrs=None):
         """
         Call the Numba-compiled *callee*.
         Parameters:

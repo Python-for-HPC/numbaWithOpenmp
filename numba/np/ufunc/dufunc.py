@@ -35,10 +35,10 @@ def make_dufunc_kernel(_dufunc):
                          zip(args, osig.args, isig.args)]
             if self.cres.objectmode:
                 func_type = self.context.call_conv.get_function_type(
-                    types.pyobject, [types.pyobject] * len(isig.args))
+                    types.pyobject, [types.pyobject] * len(isig.args), self.cres.fndesc.qualname)
             else:
                 func_type = self.context.call_conv.get_function_type(
-                    isig.return_type, isig.args)
+                    isig.return_type, isig.args, self.cres.fndesc.qualname)
             module = self.builder.block.function.module
             entry_point = cgutils.get_or_insert_function(
                 module, func_type,

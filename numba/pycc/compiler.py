@@ -172,7 +172,8 @@ class _ModuleCompiler(object):
                 wrapper.name = self._mangle_method_symbol(entry.symbol)
                 wrapper.linkage = 'external'
                 fnty = cres.target_context.call_conv.get_function_type(
-                    cres.fndesc.restype, cres.fndesc.argtypes)
+                    cres.fndesc.restype, cres.fndesc.argtypes,
+                    cres.fndesc.qualname)
                 self.exported_function_types[entry] = fnty
                 self.function_environments[entry] = cres.environment
                 self.environment_gvs[entry] = cres.fndesc.env_name

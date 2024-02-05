@@ -133,7 +133,7 @@ class PyLower(BaseLower):
                 self.genlower.return_from_generator(self)
                 return
             # No need to incref() as the reference is already owned.
-            self.call_conv.return_value(self.builder, retval)
+            self.call_conv.return_value(self.builder, retval, "")
 
         elif isinstance(inst, ir.Branch):
             cond = self.loadvar(inst.cond.name)
@@ -239,7 +239,7 @@ class PyLower(BaseLower):
         val = self.loadvar(inst.value.name)
         # Let caller own the reference
         self.pyapi.incref(val)
-        self.call_conv.return_value(self.builder, val)
+        self.call_conv.return_value(self.builder, val, "")
 
         # Resumption point
         y.lower_yield_resume()

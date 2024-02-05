@@ -446,9 +446,9 @@ class BaseContext(object):
         return fnty
 
     def declare_function(self, module, fndesc):
-        fnty = self.call_conv.get_function_type(fndesc.restype, fndesc.argtypes)
+        fnty = self.call_conv.get_function_type(fndesc.restype, fndesc.argtypes, fndesc.qualname)
         fn = cgutils.get_or_insert_function(module, fnty, fndesc.mangled_name)
-        self.call_conv.decorate_function(fn, fndesc.args, fndesc.argtypes, noalias=fndesc.noalias)
+        self.call_conv.decorate_function(fn, fndesc.args, fndesc.argtypes, fndesc.qualname, noalias=fndesc.noalias)
         if fndesc.inline:
             fn.attributes.add('alwaysinline')
             # alwaysinline overrides optnone
@@ -934,7 +934,7 @@ class BaseContext(object):
         llvm_mod = builder.module
         fn = self.declare_function(llvm_mod, fndesc)
         status, res = self.call_conv.call_function(builder, fn, sig.return_type,
-                                                   sig.args, args)
+                                                   sig.args, args, fndesc.qualname)
         return status, res
 
     def call_unresolved(self, builder, name, sig, args):
@@ -970,11 +970,11 @@ class BaseContext(object):
         """
         # Insert an unresolved reference to the function being called.
         codegen = self.codegen()
-        fnty = self.call_conv.get_function_type(sig.return_type, sig.args)
+        fnty = self.call_conv.get_function_type(sig.return_type, sig.args, name)
         fn = codegen.insert_unresolved_ref(builder, fnty, name)
         # Normal call sequence
         status, res = self.call_conv.call_function(builder, fn, sig.return_type,
-                                                   sig.args, args)
+                                                   sig.args, args, name)
         with cgutils.if_unlikely(builder, status.is_error):
             self.call_conv.return_status_propagate(builder, status)
 

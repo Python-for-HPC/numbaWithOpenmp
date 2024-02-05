@@ -228,7 +228,8 @@ class BaseLower(object):
     def extract_function_arguments(self):
         self.fnargs = self.call_conv.decode_arguments(self.builder,
                                                       self.fndesc.argtypes,
-                                                      self.function)
+                                                      self.function,
+                                                      self.fndesc.qualname)
         return self.fnargs
 
     def lower_normal_function(self, fndesc):
@@ -509,7 +510,7 @@ class Lower(BaseLower):
             assert ty == oty, (
                 "type '{}' does not match return type '{}'".format(oty, ty))
             retval = self.context.get_return_value(self.builder, ty, val)
-            self.call_conv.return_value(self.builder, retval)
+            self.call_conv.return_value(self.builder, retval, self.fndesc.qualname)
 
         elif isinstance(inst, ir.PopBlock):
             pass # this is just a marker
@@ -747,7 +748,7 @@ class Lower(BaseLower):
         )
 
         # return
-        self.call_conv.return_value(self.builder, retval)
+        self.call_conv.return_value(self.builder, retval, "")
 
         # Resumption point
         y.lower_yield_resume()

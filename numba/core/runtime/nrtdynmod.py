@@ -169,7 +169,7 @@ def _define_nrt_unresolved_abort(ctx, module):
     The function takes no args and will always raise an exception.
     It should be safe to call this function with incorrect number of arguments.
     """
-    fnty = ctx.call_conv.get_function_type(types.none, ())
+    fnty = ctx.call_conv.get_function_type(types.none, (), "nrt_unresolved_abort")
     fn = ir.Function(module, fnty, name="nrt_unresolved_abort")
     bb = fn.append_basic_block()
     builder = ir.IRBuilder(bb)

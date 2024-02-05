@@ -183,7 +183,7 @@ class CPUContext(BaseContext):
     def create_cpython_wrapper(self, library, fndesc, env, call_helper,
                                release_gil=False):
         wrapper_module = self.create_module("wrapper")
-        fnty = self.call_conv.get_function_type(fndesc.restype, fndesc.argtypes)
+        fnty = self.call_conv.get_function_type(fndesc.restype, fndesc.argtypes, fndesc.qualname)
         wrapper_callee = ir.Function(wrapper_module, fnty,
                                      fndesc.llvm_func_name)
         builder = PyCallWrapper(self, wrapper_module, wrapper_callee,
@@ -194,7 +194,7 @@ class CPUContext(BaseContext):
 
     def create_cfunc_wrapper(self, library, fndesc, env, call_helper):
         wrapper_module = self.create_module("cfunc_wrapper")
-        fnty = self.call_conv.get_function_type(fndesc.restype, fndesc.argtypes)
+        fnty = self.call_conv.get_function_type(fndesc.restype, fndesc.argtypes, fndesc.qualname)
         wrapper_callee = ir.Function(wrapper_module, fnty,
                                      fndesc.llvm_func_name)
 
@@ -207,7 +207,7 @@ class CPUContext(BaseContext):
 
         status, out = self.call_conv.call_function(
             builder, wrapper_callee, fndesc.restype, fndesc.argtypes,
-            wrapfn.args, attrs=('noinline',))
+            wrapfn.args, fndesc.qualname, attrs=('noinline',))
 
         with builder.if_then(status.is_error, likely=False):
             # If (and only if) an error occurred, acquire the GIL

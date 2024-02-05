@@ -237,7 +237,7 @@ class CUDATargetContext(BaseContext):
 
         callargs = arginfo.from_arguments(builder, wrapfn.args)
         status, _ = self.call_conv.call_function(
-            builder, func, types.void, argtypes, callargs)
+            builder, func, types.void, argtypes, callargs, "")
 
         if debug:
             # Check error status

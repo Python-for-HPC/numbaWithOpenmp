@@ -156,12 +156,12 @@ def _get_equal(context, module, datamodel, container_element_type):
     data_ptr_ty = datamodel.get_data_type().as_pointer()
 
     wrapfnty = context.call_conv.get_function_type(types.int32,
-                                                   [fe_type, fe_type])
+                                                   [fe_type, fe_type], "")
     argtypes = [fe_type, fe_type]
 
     def build_wrapper(fn):
         builder = ir.IRBuilder(fn.append_basic_block())
-        args = context.call_conv.decode_arguments(builder, argtypes, fn)
+        args = context.call_conv.decode_arguments(builder, argtypes, fn, "")
 
         sig = typing.signature(types.boolean, fe_type, fe_type)
         op = operator.eq
@@ -170,7 +170,7 @@ def _get_equal(context, module, datamodel, container_element_type):
         eqfn = context.get_function(fnop, sig)
         res = eqfn(builder, args)
         intres = context.cast(builder, res, types.boolean, types.int32)
-        context.call_conv.return_value(builder, intres)
+        context.call_conv.return_value(builder, intres, "")
 
     wrapfn = cgutils.get_or_insert_function(
         module, wrapfnty, name='.numba_{}.{}_equal.wrap'.format(

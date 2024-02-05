@@ -191,7 +191,9 @@ class DPUContext(BaseContext):
         self, library, fndesc, env, call_helper, release_gil=False
     ):
         wrapper_module = self.create_module("wrapper")
-        fnty = self.call_conv.get_function_type(fndesc.restype, fndesc.argtypes)
+        fnty = self.call_conv.get_function_type(fndesc.restype,
+                                                fndesc.argtypes,
+                                                fndesc.qualname)
         wrapper_callee = llir.Function(
             wrapper_module, fnty, fndesc.llvm_func_name
         )
