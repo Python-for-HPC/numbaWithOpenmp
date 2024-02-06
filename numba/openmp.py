@@ -997,10 +997,12 @@ class openmp_region_start(ir.Stmt):
         return None
 
     def requires_acquire_release(self):
-        self.acq_res = True
+        pass
+        #self.acq_res = True
 
     def requires_combined_acquire_release(self):
-        self.acq_rel = True
+        pass
+        #self.acq_rel = True
 
     def has_target(self):
         for t in self.tags:
@@ -2462,7 +2464,7 @@ def get_dotted_type(x, typemap, lowerer):
 
 
 def is_target_arg(name):
-    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT", "QUAL.OMP.THREAD_LIMIT"] or name.startswith("QUAL.OMP.MAP")
+    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT", "QUAL.OMP.THREAD_LIMIT", "QUAL.OMP.NUM_TEAMS"] or name.startswith("QUAL.OMP.MAP")
     #or name.startswith("QUAL.OMP.NORMALIZED")
     #return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
 
