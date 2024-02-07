@@ -4033,6 +4033,9 @@ class OpenmpVisitor(Transformer):
         or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TARGET.EXIT.DATA")], self.loc)
         sblk.body = [or_start] + [or_end] + sblk.body[:]
 
+    def teams_distribute_directive(self, args):
+        self.some_distribute_directive(args, "TEAMS.DISTRIBUTE", 2, has_loop=True)
+
     def distribute_directive(self, args):
         self.some_distribute_directive(args, "DISTRIBUTE", 1, has_loop=True)
 
@@ -4044,7 +4047,7 @@ class OpenmpVisitor(Transformer):
 
     def some_distribute_directive(self, args, dir_tag, lexer_count, has_loop=False):
         if config.DEBUG_OPENMP >= 1:
-            print("visit some_target_directive", args, type(args), self.blk_start, self.blk_end)
+            print("visit some_distribute_directive", args, type(args), self.blk_start, self.blk_end)
 
         self.check_distribute_nesting(dir_tag)
 
