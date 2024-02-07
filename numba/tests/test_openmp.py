@@ -2779,23 +2779,24 @@ class TestOpenmpTarget(TestOpenmpBase):
 
     @unittest.skipUnless(TestOpenmpBase.skip_disabled, "Abort - unimplemented")
     def target_data_nested(self, device):
-        target_pragma = f"""target data device({device}) map(to: a)
+        target_data_pragma = f"""target data device({device}) map(to: a)
                         map(tofrom: b) map(from: as1, as2, bs1, bs2)"""
+        target_pragma = f"target device({device})"
         @njit
         def test_impl(s, n1, n2):
             a = np.full(s, n1)
             as1 = np.empty(s, dtype=a.dtype)
             as2 = np.empty(s, dtype=a.dtype)
             b = n1
-            with openmp(target_pragma):
-                with openmp("target"):
+            with openmp(target_data_pragma):
+                with openmp(target_pragma):
                     as1[:] = a
                     bs1 = b
-                with openmp("target"):
+                with openmp(target_pragma):
                     for i in range(s):
                         a[i] = n2
                     b = n2
-                with openmp("target"):
+                with openmp(target_pragma):
                     as2[:] = a
                     bs2 = b
             return a, as1, as2, b, bs1, bs2
@@ -2814,6 +2815,7 @@ class TestOpenmpTarget(TestOpenmpBase):
                             map(to: a) map(to: b)"""
         target_exit_pragma = f"""target exit data device({device})
                             map(from: b, as1, as2, bs1, bs2)"""
+        target_pragma = f"target device({device})"
         @njit
         def test_impl(s, n1, n2):
             a = np.full(s, n1)
@@ -2832,15 +2834,15 @@ class TestOpenmpTarget(TestOpenmpBase):
             with openmp(target_enter_pragma):
                 pass
 
-            with openmp("target"):
+            with openmp(target_pragma):
                 as1[:] = a
                 bs1 = b
             #setToValueRegion(n2)
-            with openmp("target"):
+            with openmp(target_pragma):
                 for i in range(s):
                     a[i] = n2
                 b = n2
-            with openmp("target"):
+            with openmp(target_pragma):
                 as2[:] = a
                 bs2 = b
 
@@ -2863,6 +2865,9 @@ class TestOpenmpTarget(TestOpenmpBase):
         target_enter_pragma = f"""target enter data device({device})
                                 map(alloc: v1, v2)"""
         target_exit_pragma = f"target exit data device({device}) map(from: v1, v2)"
+        target_depend_pragma = f"target nowait depend(out: v1, v2) device({device})"
+        target_teams_pragma = f"target teams map(from: p) nowait depend(in: v1, v2) device({device})"
+
         @njit
         def test_impl(s, n1, n2):
             v1 = np.empty(s)
@@ -2872,7 +2877,7 @@ class TestOpenmpTarget(TestOpenmpBase):
             with openmp(target_enter_pragma):
                 pass
 
-            with openmp("target nowait depend(out: v1, v2)"):
+            with openmp(target_depend_pragma):
                 for i in range(s):
                     v1[i] = n1
                     v2[i] = n2
@@ -2882,7 +2887,7 @@ class TestOpenmpTarget(TestOpenmpBase):
                 for _ in range(10000):
                     sum += 1
 
-            with openmp("target teams map(from: p) nowait depend(in: v1, v2)"):
+            with openmp(target_teams_pragma):
                 with openmp("distribute parallel for"):
                     for i in range(s):
                         p[i] = v1[i] * v2[i]

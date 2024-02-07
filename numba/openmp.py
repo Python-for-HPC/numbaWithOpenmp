@@ -1662,6 +1662,9 @@ class openmp_region_start(ir.Stmt):
             # Add typemap entry for the empty tuple return type.
             state_copy.typemap[last_block.body[-1].value.name] = types.containers.Tuple(())
 
+            if config.DEBUG_OPENMP >= 1:
+                print("selected_device:", selected_device)
+
             if selected_device == 0:
                 flags = Flags()
                 device_lowerer_pipeline = OnlyLower
