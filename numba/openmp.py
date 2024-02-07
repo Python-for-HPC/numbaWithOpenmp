@@ -4081,7 +4081,7 @@ class OpenmpVisitor(Transformer):
             for clause in clauses:
                 print("target clause:", clause)
 
-        self.some_data_clause_directive(clauses, start_tags, end_tags, 0, has_loop=has_loop, for_target=True)
+        self.some_data_clause_directive(clauses, start_tags, end_tags, 0, has_loop=has_loop, for_target=False)
         #self.some_data_clause_directive(args, start_tags, end_tags, lexer_count, has_loop=has_loop)
 
     def some_target_directive(self, args, dir_tag, lexer_count, has_loop=False):
@@ -5376,23 +5376,14 @@ openmp_grammar = r"""
                 //     | reduction_default_only_clause
 
     target_teams_distribute_directive: TARGET TEAMS DISTRIBUTE [target_teams_clause*]
-    target_teams_distribute_clause: if_clause
-                                  | device_clause
-                                  | data_privatization_clause
-                                  | data_privatization_in_clause
-                           //     | in_reduction_clause
-                                  | map_clause
-                                  | is_device_ptr_clause
-                           //     | defaultmap_clause
-                                  | NOWAIT
-                                  | allocate_clause
-                                  | depend_with_modifier_clause
-                           //     | uses_allocators_clause
-                                  | num_teams_clause
+    target_teams_distribute_clause: num_teams_clause
                                   | thread_limit_clause
                                   | data_default_clause
+                                  | data_privatization_clause
+                                  | data_privatization_in_clause
                                   | data_sharing_clause
                            //     | reduction_default_only_clause
+                                  | allocate_clause
                                   | data_privatization_out_clause
                                   | collapse_clause
                                   | dist_schedule_clause
