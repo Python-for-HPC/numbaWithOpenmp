@@ -1400,8 +1400,14 @@ class openmp_region_start(ir.Stmt):
                     start_region.lowerer = None
                     start_region.target_copy = True
                     start_region.tags = copy.deepcopy(start_region.tags)
+                    # Remove unnecessary num_teams, thread_limit tags when
+                    # emitting a target directive within a kernel to avoid
+                    # extraneous arguments in the kernel function.
                     if start_region.has_target() == target_num:
                         start_region.tags.append(openmp_tag("OMP.DEVICE"))
+                        start_region.tags[:] = [ tag for tag in
+                                                 start_region.tags if tag.name not in
+                                                 ("QUAL.OMP.THREAD_LIMIT", "QUAL.OMP.NUM_TEAMS") ]
                     end_region = blocks[end_block].body[ebindex]
                     #assert(start_region.omp_region_var is None)
                     assert(len(start_region.alloca_queue) == 0)
@@ -2467,9 +2473,9 @@ def get_dotted_type(x, typemap, lowerer):
 
 
 def is_target_arg(name):
-    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT", "QUAL.OMP.THREAD_LIMIT", "QUAL.OMP.NUM_TEAMS"] or name.startswith("QUAL.OMP.MAP")
+    #return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT", "QUAL.OMP.THREAD_LIMIT", "QUAL.OMP.NUM_TEAMS"] or name.startswith("QUAL.OMP.MAP")
     #or name.startswith("QUAL.OMP.NORMALIZED")
-    #return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
+    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
 
 
 def is_pointer_target_arg(name, typ):
