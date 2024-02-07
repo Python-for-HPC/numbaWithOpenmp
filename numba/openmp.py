@@ -552,7 +552,7 @@ class openmp_tag(object):
                 add_arg(self.arg, use_set)
             else:
                 add_arg(self.arg, def_set)
-        elif self.name in ["QUAL.OMP.MAP.FROM", "QUAL.OMP.LASTPRIVATE"] or self.name.startswith("QUAL.OMP.REDUCTION"):
+        elif self.name in ["QUAL.OMP.MAP.FROM", "QUAL.OMP.LASTPRIVATE", "QUAL.OMP.MAP.FROM.STRUCT"] or self.name.startswith("QUAL.OMP.REDUCTION"):
             if not start:
                 add_arg(self.arg, def_set)
         else:
