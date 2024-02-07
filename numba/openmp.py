@@ -1460,7 +1460,7 @@ class openmp_region_start(ir.Stmt):
                     if tag.arg in ins:
                         continue
 
-                    if tag.name == "QUAL.OMP.FIRSTPRIVATE" or tag.name == "QUAL.OMP.MAP.FROM":
+                    if tag.name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.MAP.FROM"]:
                         ins.append(tag.arg)
 
             add_mapped_to_ins(ins, self.tags)
