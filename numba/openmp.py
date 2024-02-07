@@ -1454,12 +1454,16 @@ class openmp_region_start(ir.Stmt):
                 returnto=end_block,
                 body_block_ids=blocks_in_region
             )
-            def add_firstprivate_to_ins(ins, tags):
+
+            def add_mapped_to_ins(ins, tags):
                 for tag in tags:
-                    if tag.name == "QUAL.OMP.FIRSTPRIVATE" and tag.arg not in ins:
+                    if tag.arg in ins:
+                        continue
+
+                    if tag.name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.MAP.FROM"]:
                         ins.append(tag.arg)
 
-            add_firstprivate_to_ins(ins, self.tags)
+            add_mapped_to_ins(ins, self.tags)
 
             normalized_ivs = get_tags_of_type(self.tags, "QUAL.OMP.NORMALIZED.IV")
             if config.DEBUG_OPENMP >= 1:
@@ -1856,6 +1860,7 @@ class openmp_region_start(ir.Stmt):
                 if config.DEBUG_OPENMP >= 1:
                     print('libomptarget_arch', libomptarget_arch)
                 subprocess.run([numba_openmp_bin_path + '/llvm-link',
+                    '--suppress-warnings',
                     '--internalize', '-S', filename_prefix +
                     '-intrinsics_omp.ll', libomptarget_arch, libdevice_path,
                     '-o', filename_prefix + '-intrinsics_omp-linked.ll'],
