@@ -4077,6 +4077,18 @@ class OpenmpVisitor(Transformer):
         if "PARALLEL" in dir_tag:
             self.parallel_back_prop(start_tags, clauses)
 
+        enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
+        if config.DEBUG_OPENMP >= 1:
+            print("distribute enclosing_regions:", enclosing_regions)
+        if enclosing_regions:
+            for enclosing_region in enclosing_regions[::-1]:
+                if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
+                    if "TEAMS" in dir_tag:
+                        self.teams_back_prop(enclosing_region.tags, clauses)
+                    if "PARALLEL" in dir_tag:
+                        self.parallel_back_prop(enclosing_region.tags, clauses)
+                    break
+
         if config.DEBUG_OPENMP >= 1:
             for clause in clauses:
                 print("target clause:", clause)
