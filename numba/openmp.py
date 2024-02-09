@@ -3543,17 +3543,7 @@ class OpenmpVisitor(Transformer):
 
         if "PARALLEL" in main_start_tag:
             # ---- Back propagate THREAD_LIMIT to enclosed target region. ----
-            enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
-            if config.DEBUG_OPENMP >= 1:
-                print("parallel_for enclosing_regions:", enclosing_regions)
-            if enclosing_regions:
-                for enclosing_region in enclosing_regions[::-1]:
-                    if len(self.get_clauses_if_contains(enclosing_region.tags, "TEAMS")) == 1:
-                        break
-                    if len(self.get_clauses_by_start(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
-                        self.parallel_back_prop(enclosing_region.tags, clauses)
-                        break
-
+            self.parallel_back_prop(clauses)
 
         if len(list(filter(lambda x: x.name == "QUAL.OMP.NUM_THREADS", clauses))) > 1:
             raise MultipleNumThreadsClauses(f"Multiple num_threads clauses near line {self.loc} is not allowed in an OpenMP parallel region.")
@@ -3885,22 +3875,34 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for target_construct.
     # Don't need a rule for target_teams_distribute_parallel_for_simd_construct.
 
-    def teams_back_prop(self, tags, clauses):
-        nt_tag = self.get_clauses_by_name(tags, "QUAL.OMP.NUM_TEAMS")
-        assert len(nt_tag) == 1
-        cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS", remove_from_orig=True)
-        if len(cur_num_team_clauses) >= 1:
-            nt_tag[-1].arg = cur_num_team_clauses[-1].arg
-        else:
-            nt_tag[-1].arg = 0
+    def teams_back_prop(self, clauses):
+        enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
+        if config.DEBUG_OPENMP >= 1:
+            print("teams enclosing_regions:", enclosing_regions)
+        if not enclosing_regions:
+            return
 
-        nt_tag = self.get_clauses_by_name(tags, "QUAL.OMP.THREAD_LIMIT")
-        assert len(nt_tag) == 1
-        cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT", remove_from_orig=True)
-        if len(cur_num_team_clauses) >= 1:
-            nt_tag[-1].arg = cur_num_team_clauses[-1].arg
-        else:
-            nt_tag[-1].arg = 0
+        for enclosing_region in enclosing_regions[::-1]:
+            if not self.get_directive_match(enclosing_region.tags, "DIR.OMP.TARGET"):
+                continue
+
+            nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.NUM_TEAMS")
+            assert len(nt_tag) == 1
+            cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS", remove_from_orig=True)
+            if len(cur_num_team_clauses) >= 1:
+                nt_tag[-1].arg = cur_num_team_clauses[-1].arg
+            else:
+                nt_tag[-1].arg = 0
+
+            nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.THREAD_LIMIT")
+            assert len(nt_tag) == 1
+            cur_num_team_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT", remove_from_orig=True)
+            if len(cur_num_team_clauses) >= 1:
+                nt_tag[-1].arg = cur_num_team_clauses[-1].arg
+            else:
+                nt_tag[-1].arg = 0
+
+            return
 
     def check_distribute_nesting(self, dir_tag):
         if "DISTRIBUTE" in dir_tag and "TEAMS" not in dir_tag:
@@ -3915,14 +3917,7 @@ class OpenmpVisitor(Transformer):
         end_tags = [openmp_tag("DIR.OMP.END.TEAMS")]
         clauses = self.some_data_clause_directive(args, start_tags, end_tags, 1)
 
-        enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
-        if config.DEBUG_OPENMP >= 1:
-            print("teams enclosing_regions:", enclosing_regions)
-        if enclosing_regions:
-            for enclosing_region in enclosing_regions[::-1]:
-                if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
-                    self.teams_back_prop(enclosing_region.tags, clauses)
-                    break
+        self.teams_back_prop(clauses)
 
         """
         sblk = self.blocks[self.blk_start]
@@ -4007,6 +4002,18 @@ class OpenmpVisitor(Transformer):
             clauses[:] = list(filter(lambda x: any([not y in x.name for y in names]), clauses))
         return ret
 
+    def get_directive_if_contains(self, tags, name):
+        dir = [x for x in tags if x.name.startswith("DIR")]
+        assert len(dir) == 1, "Expected one directive tag"
+        ret = [x for x in dir if name in x.name]
+        return ret
+
+    def get_directive_match(self, tags, name):
+        dir = [x for x in tags if x.name.startswith("DIR")]
+        assert len(dir) == 1, "Expected one directive tag"
+        ret = [x for x in dir if name == x.name]
+        return ret
+
     def target_enter_data_directive(self, args):
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
@@ -4059,33 +4066,19 @@ class OpenmpVisitor(Transformer):
 
         sblk = self.blocks[self.blk_start]
         clauses, _ = self.flatten(args[lexer_count:], sblk)
-        #if len(self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS")) == 0:
-        #    if config.DEBUG_OPENMP >= 1:
-        #        print("Adding NUM_TEAMS implicit clause.")
-        #    start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
-        start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
-        #if len(self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")) == 0:
-        #    if config.DEBUG_OPENMP >= 1:
-        #        print("Adding THREAD_LIMIT implicit clause.")
-        #    start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
-        start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
 
         if "TEAMS" in dir_tag:
-            self.teams_back_prop(start_tags, clauses)
+            # NUM_TEAMS, THREAD_LIMIT are not in clauses, set them to 0 to
+            # use runtime defaults in teams, thread launching.
+            if len(self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS")) == 0:
+                start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 0))
+            if len(self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")) == 0:
+                start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 0))
+            self.teams_back_prop(clauses)
         elif "PARALLEL" in dir_tag:
-            self.parallel_back_prop(start_tags, clauses)
-
-        enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
-        if config.DEBUG_OPENMP >= 1:
-            print("distribute enclosing_regions:", enclosing_regions)
-        if enclosing_regions:
-            for enclosing_region in enclosing_regions[::-1]:
-                if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
-                    if "TEAMS" in dir_tag:
-                        self.teams_back_prop(enclosing_region.tags, clauses)
-                    elif "PARALLEL" in dir_tag:
-                        self.parallel_back_prop(enclosing_region.tags, clauses)
-                    break
+            if len(self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")) == 0:
+                start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 0))
+            self.parallel_back_prop(clauses)
 
         if config.DEBUG_OPENMP >= 1:
             for clause in clauses:
@@ -4109,33 +4102,50 @@ class OpenmpVisitor(Transformer):
 
         sblk = self.blocks[self.blk_start]
         clauses, _ = self.flatten(args[lexer_count:], sblk)
-        """
-        nt_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS", remove_from_orig=False)
-        if len(nt_clauses) == 0:
-            if config.DEBUG_OPENMP >= 1:
-                print("Adding NUM_TEAMS implicit clause.")
-            #clauses.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
-            start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
-        else:
-            start_tags.append(nt_clauses[-1])
-        """
-        start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
-        """
-        tl_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT", remove_from_orig=False)
-        if len(tl_clauses) == 0:
-            if config.DEBUG_OPENMP >= 1:
-                print("Adding THREAD_LIMIT implicit clause.")
-            #clauses.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
-            start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
-        else:
-            start_tags.append(tl_clauses[-1])
-        """
-        start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
 
         if "TEAMS" in dir_tag:
-            self.teams_back_prop(start_tags, clauses)
+            # When NUM_TEAMS, THREAD_LIMIT are not in clauses, set them to 0 to
+            # use runtime defaults in teams, thread launching, otherwise append
+            # existing clauses.
+            clause_num_teams = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS")
+            if not clause_num_teams:
+                start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 0))
+            else:
+                assert len(clause_num_teams) == 1, "Expected single NUM_TEAMS clause"
+                start_tags.append(clause_num_teams[0])
+
+            # Set THREAD_LIMIT to the clause value (if it exists), regardless of
+            # a combined PARALLEL (see
+            # https://www.openmp.org/spec-html/5.0/openmpse15.html) since
+            # THREAD_LIMIT takes precedence.  If clause does not exist, set to 0
+            # or to NUM_THREADS of the combined PARALLEL (if this exists).
+            clause_thread_limit = self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")
+            if not clause_thread_limit:
+                thread_limit = 0
+                if "PARALLEL" in dir_tag:
+                    clause_num_threads = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_THREADS")
+                    if clause_num_threads:
+                        assert len(clause_num_threads) == 1, "Expected single NUM_THREADS clause"
+                        thread_limit = clause_num_threads[0].arg
+                start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", thread_limit))
+            else:
+                assert len(clause_thread_limit) == 1, "Expected single THREAD_LIMIT clause"
+                start_tags.append(clause_thread_limit[0])
         elif "PARALLEL" in dir_tag:
-            self.parallel_back_prop(start_tags, clauses)
+            # PARALLEL in the directive (without TEAMS), set THREAD_LIMIT to NUM_THREADS clause
+            # (if NUM_THREADS exists), or 0 (if NUM_THREADS does not exist)
+            num_threads = 0
+            clause_num_threads = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_THREADS")
+            if clause_num_threads:
+                assert len(clause_num_threads) == 1, "Expected single NUM_THREADS clause"
+                num_threads = clause_num_threads[0].arg
+
+            clause_thread_limit = self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")
+            start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", num_threads))
+        else:
+            # Neither TEAMS or PARALLEL in directive, set teams, threads to 1.
+            start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
+            start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 1))
 
         if config.DEBUG_OPENMP >= 1:
             for clause in clauses:
@@ -4702,10 +4712,38 @@ class OpenmpVisitor(Transformer):
 
     # Don't need a rule for parallel_construct.
 
-    def parallel_back_prop(self, tags, clauses):
-        nt_tag = self.get_clauses_by_name(tags, "QUAL.OMP.THREAD_LIMIT")
-        assert len(nt_tag) > 0
-        nt_tag[-1].arg = 0
+    def parallel_back_prop(self, clauses):
+        enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
+        if config.DEBUG_OPENMP >= 1:
+            print("parallel enclosing_regions:", enclosing_regions)
+        if not enclosing_regions:
+            return
+
+        for enclosing_region in enclosing_regions[::-1]:
+            # If there is TEAMS in the enclosing region then THREAD_LIMIT is
+            # already set, do nothing.
+            if self.get_directive_if_contains(enclosing_region.tags, "TEAMS"):
+                return
+            if not self.get_directive_if_contains(enclosing_region.tags, "TARGET"):
+                continue
+
+            # Set to 0 means "don't care", use implementation specific number of threads.
+            num_threads = 0
+            num_threads_clause = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_THREADS")
+            if num_threads_clause:
+                assert len(num_threads_clause) == 1, "Expected num_threads clause defined once"
+                num_threads = num_threads_clause[0].arg
+            nt_tag = self.get_clauses_by_name(enclosing_region.tags, "QUAL.OMP.THREAD_LIMIT")
+            assert len(nt_tag) > 0
+
+            # If THREAD_LIMIT is less than requested NUM_THREADS or 1,
+            # increase it.  This is still valid if THREAD_LIMIT is 0, since this
+            # means there was a parallel region before that did not specify
+            # NUM_THREADS so we can set to the concrete value of the sibling
+            # parallel region with the max value of NUM_THREADS.
+            if num_threads > nt_tag[-1].arg or nt_tag[-1].arg == 1:
+                nt_tag[-1].arg = num_threads
+            return
          
         """
         cur_thread_limit_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_THREADS", remove_from_orig=True)
@@ -4739,16 +4777,7 @@ class OpenmpVisitor(Transformer):
                 print("final clause:", clause)
 
         # ---- Back propagate THREAD_LIMIT to enclosed target region. ----
-        enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
-        if config.DEBUG_OPENMP >= 1:
-            print("parallel enclosing_regions:", enclosing_regions)
-        if enclosing_regions:
-            for enclosing_region in enclosing_regions[::-1]:
-                if len(self.get_clauses_if_contains(enclosing_region.tags, "TEAMS")) == 1:
-                    break
-                if len(self.get_clauses_by_start(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
-                    self.parallel_back_prop(enclosing_region.tags, clauses)
-                    break
+        self.parallel_back_prop(clauses)
 
     def parallel_clause(self, args):
         (val,) = args

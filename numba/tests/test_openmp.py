@@ -2614,6 +2614,303 @@ class TestOpenmpTarget(TestOpenmpBase):
     def __init__(self, *args):
         TestOpenmpBase.__init__(self, *args)
 
+    def target_nest_parallel_default_threadlimit(self, device):
+        target_pragma = f"target device({device}) map(from: teams, threads)"
+
+        @njit
+        def test_impl():
+            teams = 0
+            threads = 0
+            with openmp(target_pragma):
+                with openmp("parallel"):
+                    teamno = omp_get_team_num()
+                    threadno = omp_get_thread_num()
+                    if teamno == 0 and threadno == 0:
+                        teams = omp_get_num_teams()
+                        threads = omp_get_num_threads()
+            return teams, threads
+
+        teams, threads = test_impl()
+        np.testing.assert_equal(teams, 1)
+        self.assertGreater(threads, 1)
+
+    def target_parallel_nested_set_numthreads(self, device):
+        target_pragma = f"target device({device}) map(from: teams, threads)"
+
+        @njit
+        def test_impl():
+            teams = 0
+            threads = 0
+            with openmp(target_pragma):
+                with openmp("parallel num_threads(32)"):
+                    teamno = omp_get_team_num()
+                    threadno = omp_get_thread_num()
+                    if teamno == 0 and threadno == 0:
+                        teams = omp_get_num_teams()
+                        threads = omp_get_num_threads()
+            return teams, threads
+
+        teams, threads = test_impl()
+        np.testing.assert_equal(teams, 1)
+        np.testing.assert_equal(threads, 32)
+
+    def target_teams_nested_default_numteams(self, device):
+        target_pragma = f"target device({device}) map(from: teams, threads)"
+
+        @njit
+        def test_impl():
+            teams = 0
+            threads = 0
+            with openmp(target_pragma):
+                with openmp("teams"):
+                    teamno = omp_get_team_num()
+                    threadno = omp_get_thread_num()
+                    if teamno == 0 and threadno == 0:
+                        teams = omp_get_num_teams()
+                        threads = omp_get_num_threads()
+            return teams, threads
+
+        teams, threads = test_impl()
+        self.assertGreater(teams, 1)
+        np.testing.assert_equal(threads, 1)
+
+    def target_teams_nested_set_numteams(self, device):
+        target_pragma = f"target device({device}) map(from: teams, threads)"
+
+        @njit
+        def test_impl():
+            teams = 0
+            threads = 0
+            with openmp(target_pragma):
+                with openmp("teams num_teams(32)"):
+                    teamno = omp_get_team_num()
+                    threadno = omp_get_thread_num()
+                    if teamno == 0 and threadno == 0:
+                        teams = omp_get_num_teams()
+                        threads = omp_get_num_threads()
+            return teams, threads
+
+        teams, threads = test_impl()
+        np.testing.assert_equal(teams, 32)
+        np.testing.assert_equal(threads, 1)
+
+    def target_nest_teams_nest_parallel_default_numteams_threadlimit(self, device):
+        target_pragma = f"target device({device}) map(from: teams, threads)"
+
+        @njit
+        def test_impl():
+            teams = 0
+            threads = 0
+            with openmp(target_pragma):
+                with openmp("teams"):
+                    with openmp("parallel"):
+                        teamno = omp_get_team_num()
+                        threadno = omp_get_thread_num()
+                        if teamno == 0 and threadno == 0:
+                            teams = omp_get_num_teams()
+                            threads = omp_get_num_threads()
+            return teams, threads
+
+        teams, threads = test_impl()
+        self.assertGreater(teams, 1)
+        self.assertGreater(threads, 1)
+
+    def target_nest_teams_nest_parallel_set_numteams(self, device):
+        target_pragma = f"target device({device}) map(from: teams, threads)"
+
+        @njit
+        def test_impl():
+            teams = 0
+            threads = 0
+            with openmp(target_pragma):
+                with openmp("teams num_teams(32)"):
+                    with openmp("parallel"):
+                        teamno = omp_get_team_num()
+                        threadno = omp_get_thread_num()
+                        if teamno == 0 and threadno == 0:
+                            teams = omp_get_num_teams()
+                            threads = omp_get_num_threads()
+            return teams, threads
+
+        teams, threads = test_impl()
+        np.testing.assert_equal(teams, 32)
+        self.assertGreater(threads, 1)
+
+    def target_nest_teams_nest_parallel_set_threadlimit(self, device):
+        target_pragma = f"target device({device}) map(from: teams, threads)"
+
+        @njit
+        def test_impl():
+            teams = 0
+            threads = 0
+            with openmp(target_pragma):
+                with openmp("teams thread_limit(32)"):
+                    with openmp("parallel"):
+                        teamno = omp_get_team_num()
+                        threadno = omp_get_thread_num()
+                        if teamno == 0 and threadno == 0:
+                            teams = omp_get_num_teams()
+                            threads = omp_get_num_threads()
+            return teams, threads
+
+        teams, threads = test_impl()
+        self.assertGreater(teams, 1)
+        np.testing.assert_equal(threads, 32)
+
+    def target_nest_teams_nest_parallel_set_numteams_threadlimit(self, device):
+        target_pragma = f"target device({device}) map(from: teams, threads)"
+
+        @njit
+        def test_impl():
+            teams = 0
+            threads = 0
+            with openmp(target_pragma):
+                with openmp("teams num_teams(32) thread_limit(32)"):
+                    with openmp("parallel"):
+                        teamno = omp_get_team_num()
+                        threadno = omp_get_thread_num()
+                        if teamno == 0 and threadno == 0:
+                            teams = omp_get_num_teams()
+                            threads = omp_get_num_threads()
+            return teams, threads
+
+        teams, threads = test_impl()
+        np.testing.assert_equal(teams, 32)
+        np.testing.assert_equal(threads, 32)
+
+    def target_nest_teams_nest_parallel_set_numteams_threadlimit_gt_numthreads(self, device):
+        target_pragma = f"target device({device}) map(from: teams, threads)"
+
+        @njit
+        def test_impl():
+            teams = 0
+            threads = 0
+            with openmp(target_pragma):
+                with openmp("teams num_teams(32) thread_limit(64)"):
+                    with openmp("parallel num_threads(32)"):
+                        teamno = omp_get_team_num()
+                        threadno = omp_get_thread_num()
+                        if teamno == 0 and threadno == 0:
+                            teams = omp_get_num_teams()
+                            threads = omp_get_num_threads()
+            return teams, threads
+
+        teams, threads = test_impl()
+        np.testing.assert_equal(teams, 32)
+        np.testing.assert_equal(threads, 32)
+
+    def target_nest_teams_nest_parallel_set_numteams_threadlimit_lt_numthreads(self, device):
+        target_pragma = f"target device({device}) map(from: teams, threads)"
+
+        @njit
+        def test_impl():
+            teams = 0
+            threads = 0
+            with openmp(target_pragma):
+                # THREAD_LIMIT takes precedence over NUM_THREADS.
+                with openmp("teams num_teams(32) thread_limit(64)"):
+                    with openmp("parallel num_threads(128)"):
+                        teamno = omp_get_team_num()
+                        threadno = omp_get_thread_num()
+                        if teamno == 0 and threadno == 0:
+                            teams = omp_get_num_teams()
+                            threads = omp_get_num_threads()
+            return teams, threads
+
+        teams, threads = test_impl()
+        np.testing.assert_equal(teams, 32)
+        np.testing.assert_equal(threads, 64)
+
+    def target_nest_parallel_multiple_set_numthreads(self, device):
+        target_pragma = f"target device({device}) map(from: teams1, threads1, teams2, threads2)"
+
+        @njit
+        def test_impl():
+            teams1 = 0
+            threads1 = 0
+            teams2 = 0
+            threads2 = 0
+            with openmp(target_pragma):
+                with openmp("parallel num_threads(32)"):
+                    teamno = omp_get_team_num()
+                    threadno = omp_get_thread_num()
+                    if teamno == 0 and threadno == 0:
+                        teams1 = omp_get_num_teams()
+                        threads1 = omp_get_num_threads()
+                with openmp("parallel num_threads(256)"):
+                    teamno = omp_get_team_num()
+                    threadno = omp_get_thread_num()
+                    if teamno == 0 and threadno == 0:
+                        teams2 = omp_get_num_teams()
+                        threads2 = omp_get_num_threads()
+            return teams1, threads1, teams2, threads2
+
+        teams1, threads1, teams2, threads2 = test_impl()
+        np.testing.assert_equal(teams1, 1)
+        np.testing.assert_equal(threads1, 32)
+        np.testing.assert_equal(teams2, 1)
+        np.testing.assert_equal(threads2, 256)
+
+    def target_nest_parallel_multiple_default_numthreads(self, device):
+        target_pragma = f"target device({device}) map(from: teams1, threads1, teams2, threads2)"
+
+        @njit
+        def test_impl():
+            teams1 = 0
+            threads1 = 0
+            teams2 = 0
+            threads2 = 0
+            with openmp(target_pragma):
+                with openmp("parallel"):
+                    teamno = omp_get_team_num()
+                    threadno = omp_get_thread_num()
+                    if teamno == 0 and threadno == 0:
+                        teams1 = omp_get_num_teams()
+                        threads1 = omp_get_num_threads()
+                with openmp("parallel"):
+                    teamno = omp_get_team_num()
+                    threadno = omp_get_thread_num()
+                    if teamno == 0 and threadno == 0:
+                        teams2 = omp_get_num_teams()
+                        threads2 = omp_get_num_threads()
+            return teams1, threads1, teams2, threads2
+
+        teams1, threads1, teams2, threads2 = test_impl()
+        np.testing.assert_equal(teams1, 1)
+        self.assertGreater(threads1, 1)
+        np.testing.assert_equal(teams2, 1)
+        self.assertGreater(threads2, 1)
+
+    def target_nest_parallel_multiple_set_numthreads_byone(self, device):
+        target_pragma = f"target device({device}) map(from: teams1, threads1, teams2, threads2)"
+
+        @njit
+        def test_impl():
+            teams1 = 0
+            threads1 = 0
+            teams2 = 0
+            threads2 = 0
+            with openmp(target_pragma):
+                with openmp("parallel"):
+                    teamno = omp_get_team_num()
+                    threadno = omp_get_thread_num()
+                    if teamno == 0 and threadno == 0:
+                        teams1 = omp_get_num_teams()
+                        threads1 = omp_get_num_threads()
+                with openmp("parallel num_threads(256)"):
+                    teamno = omp_get_team_num()
+                    threadno = omp_get_thread_num()
+                    if teamno == 0 and threadno == 0:
+                        teams2 = omp_get_num_teams()
+                        threads2 = omp_get_num_threads()
+            return teams1, threads1, teams2, threads2
+
+        teams1, threads1, teams2, threads2 = test_impl()
+        np.testing.assert_equal(teams1, 1)
+        np.testing.assert_equal(threads1, 256)
+        np.testing.assert_equal(teams2, 1)
+        np.testing.assert_equal(threads2, 256)
+
     def target_parallel_nested(self, device):
         # TODO: map should be "from" instead of "tofrom" once this is fixed.
         target_pragma = f"target device({device}) map(tofrom: a)"
@@ -2634,15 +2931,17 @@ class TestOpenmpTarget(TestOpenmpBase):
 
     def target_teams_combined(self, device):
         # TODO: change "tofrom" to "from".
-        target_pragma = f"target teams num_teams(100) device({device}) map(tofrom: a)"
+        target_pragma = f"target teams num_teams(100) device({device}) map(tofrom: a, s)"
         @njit
         def test_impl():
             a = np.zeros(100, dtype=np.int64)
+            s = 0
             with openmp(target_pragma):
                 team_id = omp_get_team_num()
                 a[team_id] = 1
-            return a
-        r = test_impl()
+                s = 1
+            return a, s
+        r, s = test_impl()
         np.testing.assert_equal(r, np.full(100, 1))
 
     def target_teams_nested(self, device):
@@ -2706,16 +3005,18 @@ class TestOpenmpTarget(TestOpenmpBase):
         @njit
         def test_impl():
             s = 0
+            ss = np.zeros(1)
             with openmp(target_pragma):
                 with openmp("teams num_teams(100)"):
                     team_id = omp_get_team_num()
                     if team_id == 0:
                         s = 1
-            return s
-        s = test_impl()
+                        ss[0] = 1
+            return s, ss
+        s, ss = test_impl()
         np.testing.assert_equal(s, 1)
+        np.testing.assert_equal(ss, 1)
 
-    # depends on fixing tofrom for scalars: see test target_teams_nested_tofrom_scalar
     def target_teams_combined_parallel_nested(self, device):
         target_pragma = f"target teams device({device}) num_teams(10) thread_limit(32) map(tofrom: teams, threads)"
         @njit
@@ -2734,7 +3035,6 @@ class TestOpenmpTarget(TestOpenmpBase):
         np.testing.assert_equal(teams, 10)
         np.testing.assert_equal(threads, 32)
 
-    # depends on fixing tofrom for scalars: see test target_teams_nested_tofrom_scalar
     def target_teams_nested_setsize(self, device):
         target_pragma = f"target device({device}) map(tofrom: teams, threads)"
         @njit
@@ -2753,7 +3053,6 @@ class TestOpenmpTarget(TestOpenmpBase):
         np.testing.assert_equal(teams, 10)
         np.testing.assert_equal(threads, 1)
 
-    # depends on fixing tofrom for scalars: see test target_teams_nested_tofrom_scalar
     def target_teams_parallel_nested_setsize(self, device):
         target_pragma = f"target device({device}) map(tofrom: teams, threads)"
         @njit
