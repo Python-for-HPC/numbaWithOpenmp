@@ -2742,7 +2742,7 @@ class TestOpenmpTarget(TestOpenmpBase):
             teams = 0
             threads = 0
             with openmp(target_pragma):
-                with openmp("teams num_teams(10) thread_limit(32)"):
+                with openmp("teams num_teams(10)"):
                     team_id = omp_get_team_num()
                     thread_id = omp_get_thread_num()
                     if team_id == 0 and thread_id == 0:
@@ -2751,7 +2751,7 @@ class TestOpenmpTarget(TestOpenmpBase):
             return teams, threads
         teams, threads = test_impl()
         np.testing.assert_equal(teams, 10)
-        np.testing.assert_equal(threads, 32)
+        np.testing.assert_equal(threads, 1)
 
     # depends on fixing tofrom for scalars: see test target_teams_nested_tofrom_scalar
     def target_teams_parallel_nested_setsize(self, device):
