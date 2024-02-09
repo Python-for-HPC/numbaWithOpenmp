@@ -2751,11 +2751,12 @@ class OpenmpVisitor(Transformer):
 
         cfg = compute_cfg_from_blocks(self.blocks)
         usedefs = compute_use_defs(self.blocks)
+        if config.DEBUG_OPENMP >= 1:
+            print("usedefs:", usedefs)
         live_map = compute_live_map(cfg, self.blocks, usedefs.usemap, usedefs.defmap)
         # Assumes enter_with is first statement in block.
         inputs_to_region = live_map[self.blk_start]
         if config.DEBUG_OPENMP >= 1:
-            print("usedefs:", usedefs)
             print("live_map:", live_map)
             print("inputs_to_region:", inputs_to_region, type(inputs_to_region))
             print("selected blocks:", selected_blocks)
@@ -2858,17 +2859,13 @@ class OpenmpVisitor(Transformer):
             for var_name in private_to_region:
                 temp_var = ir.Var(scope, var_name, self.loc)
                 if not is_internal_var(temp_var):
-                    if config.OPENMP_SHARED_PRIVATE_REGION == 0:
-                        #unver_var = temp_var.unversioned_name
-                        #if unver_var not in unversioned_privates:
-                        #    explicit_clauses.append(openmp_tag("QUAL.OMP.PRIVATE", unver_var))
-                        #    vars_in_explicit[unver_var] = explicit_clauses[-1]
-                        #    unversioned_privates.add(unver_var)
-                        explicit_clauses.append(openmp_tag("QUAL.OMP.PRIVATE", var_name))
-                        vars_in_explicit[var_name] = explicit_clauses[-1]
-                    else:
-                        explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
-                        vars_in_explicit[var_name] = explicit_clauses[-1]
+                    #unver_var = temp_var.unversioned_name
+                    #if unver_var not in unversioned_privates:
+                    #    explicit_clauses.append(openmp_tag("QUAL.OMP.PRIVATE", unver_var))
+                    #    vars_in_explicit[unver_var] = explicit_clauses[-1]
+                    #    unversioned_privates.add(unver_var)
+                    explicit_clauses.append(openmp_tag("QUAL.OMP.PRIVATE", var_name))
+                    vars_in_explicit[var_name] = explicit_clauses[-1]
 
         for var_name in private_to_region:
             temp_var = ir.Var(scope, var_name, self.loc)
@@ -2893,14 +2890,9 @@ class OpenmpVisitor(Transformer):
             for var_name in private_to_region:
                 temp_var = ir.Var(scope, var_name, self.loc)
                 if not is_internal_var(temp_var):
-                    if config.OPENMP_SHARED_PRIVATE_REGION == 0:
-                        explicit_clauses.append(openmp_tag("QUAL.OMP.PRIVATE", var_name))
-                        #explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
-                        vars_in_explicit[var_name] = explicit_clauses[-1]
-                    else:
-                        explicit_clauses.append(openmp_tag("QUAL.OMP.PRIVATE", var_name))
-                        #explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
-                        vars_in_explicit[var_name] = explicit_clauses[-1]
+                    explicit_clauses.append(openmp_tag("QUAL.OMP.PRIVATE", var_name))
+                    #explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
+                    vars_in_explicit[var_name] = explicit_clauses[-1]
 
         for var_name in private_to_region:
             temp_var = ir.Var(scope, var_name, self.loc)
@@ -2927,11 +2919,7 @@ class OpenmpVisitor(Transformer):
             for ptr in private_to_region:
                 itr_var = ir.Var(scope, ptr, self.loc)
                 if not is_internal_var(itr_var):
-                    if config.OPENMP_SHARED_PRIVATE_REGION == 0:
-                        start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", itr_var))
-                    else:
-                        start_tags.append(openmp_tag("QUAL.OMP.SHARED", itr_var))
-                        keep_alive.append(ir.Assign(itr_var, itr_var, self.loc))
+                    start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", itr_var))
         for ptr in private_to_region:
             itr_var = ir.Var(scope, ptr, self.loc)
             if is_internal_var(itr_var):
@@ -3558,7 +3546,7 @@ class OpenmpVisitor(Transformer):
                 print("parallel_for enclosing_regions:", enclosing_regions)
             if enclosing_regions:
                 for enclosing_region in enclosing_regions[::-1]:
-                    if len(self.get_clauses_by_start(enclosing_region.tags, "DIR.OMP.TEAMS")) == 1:
+                    if len(self.get_clauses_if_contains(enclosing_region.tags, "TEAMS")) == 1:
                         break
                     if len(self.get_clauses_by_start(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
                         self.parallel_back_prop(enclosing_region.tags, clauses)
@@ -4009,6 +3997,14 @@ class OpenmpVisitor(Transformer):
             clauses[:] = list(filter(lambda x: any([not x.name.startswith(y) for y in names]), clauses))
         return ret
 
+    def get_clauses_if_contains(self, clauses, names, remove_from_orig=False):
+        if not isinstance(names, list):
+            names = [names]
+        ret = list(filter(lambda x: any([y in x.name for y in names]), clauses))
+        if remove_from_orig:
+            clauses[:] = list(filter(lambda x: any([not y in x.name for y in names]), clauses))
+        return ret
+
     def target_enter_data_directive(self, args):
         sblk = self.blocks[self.blk_start]
         eblk = self.blocks[self.blk_end]
@@ -4033,18 +4029,21 @@ class OpenmpVisitor(Transformer):
         or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TARGET.EXIT.DATA")], self.loc)
         sblk.body = [or_start] + [or_end] + sblk.body[:]
 
+    def teams_distribute_directive(self, args):
+        self.some_distribute_directive(args, "TEAMS.DISTRIBUTE", 2, has_loop=True)
+
     def distribute_directive(self, args):
         self.some_distribute_directive(args, "DISTRIBUTE", 1, has_loop=True)
 
     def distribute_parallel_for_directive(self, args):
         self.some_distribute_directive(args, "DISTRIBUTE.PARALLEL.LOOP", 3, has_loop=True)
 
-    def parallel_for_simd_directive(self, args):
+    def distribute_parallel_for_simd_directive(self, args):
         self.some_distribute_directive(args, "DISTRIBUTE.PARALLEL.LOOP.SIMD", 4, has_loop=True)
 
     def some_distribute_directive(self, args, dir_tag, lexer_count, has_loop=False):
         if config.DEBUG_OPENMP >= 1:
-            print("visit some_target_directive", args, type(args), self.blk_start, self.blk_end)
+            print("visit some_distribute_directive", args, type(args), self.blk_start, self.blk_end)
 
         self.check_distribute_nesting(dir_tag)
 
@@ -4071,15 +4070,26 @@ class OpenmpVisitor(Transformer):
 
         if "TEAMS" in dir_tag:
             self.teams_back_prop(start_tags, clauses)
-        if "PARALLEL" in dir_tag:
+        elif "PARALLEL" in dir_tag:
             self.parallel_back_prop(start_tags, clauses)
+
+        enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
+        if config.DEBUG_OPENMP >= 1:
+            print("distribute enclosing_regions:", enclosing_regions)
+        if enclosing_regions:
+            for enclosing_region in enclosing_regions[::-1]:
+                if len(self.get_clauses_by_name(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
+                    if "TEAMS" in dir_tag:
+                        self.teams_back_prop(enclosing_region.tags, clauses)
+                    elif "PARALLEL" in dir_tag:
+                        self.parallel_back_prop(enclosing_region.tags, clauses)
+                    break
 
         if config.DEBUG_OPENMP >= 1:
             for clause in clauses:
                 print("target clause:", clause)
 
-        self.some_data_clause_directive(clauses, start_tags, end_tags, 0, has_loop=has_loop, for_target=True)
-        #self.some_data_clause_directive(args, start_tags, end_tags, lexer_count, has_loop=has_loop)
+        self.some_data_clause_directive(clauses, start_tags, end_tags, 0, has_loop=has_loop, for_target=False)
 
     def some_target_directive(self, args, dir_tag, lexer_count, has_loop=False):
         if config.DEBUG_OPENMP >= 1:
@@ -4122,7 +4132,7 @@ class OpenmpVisitor(Transformer):
 
         if "TEAMS" in dir_tag:
             self.teams_back_prop(start_tags, clauses)
-        if "PARALLEL" in dir_tag:
+        elif "PARALLEL" in dir_tag:
             self.parallel_back_prop(start_tags, clauses)
 
         if config.DEBUG_OPENMP >= 1:
@@ -4693,11 +4703,15 @@ class OpenmpVisitor(Transformer):
     def parallel_back_prop(self, tags, clauses):
         nt_tag = self.get_clauses_by_name(tags, "QUAL.OMP.THREAD_LIMIT")
         assert len(nt_tag) > 0
+        nt_tag[-1].arg = 0
+         
+        """
         cur_thread_limit_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_THREADS", remove_from_orig=True)
         if len(cur_thread_limit_clauses) >= 1:
             nt_tag[-1].arg = cur_thread_limit_clauses[-1].arg
         else:
             nt_tag[-1].arg = 0
+        """
 
     def parallel_directive(self, args):
         if config.DEBUG_OPENMP >= 1:
@@ -4728,7 +4742,7 @@ class OpenmpVisitor(Transformer):
             print("parallel enclosing_regions:", enclosing_regions)
         if enclosing_regions:
             for enclosing_region in enclosing_regions[::-1]:
-                if len(self.get_clauses_by_start(enclosing_region.tags, "DIR.OMP.TEAMS")) == 1:
+                if len(self.get_clauses_if_contains(enclosing_region.tags, "TEAMS")) == 1:
                     break
                 if len(self.get_clauses_by_start(enclosing_region.tags, "DIR.OMP.TARGET")) == 1:
                     self.parallel_back_prop(enclosing_region.tags, clauses)
@@ -5373,23 +5387,14 @@ openmp_grammar = r"""
                 //     | reduction_default_only_clause
 
     target_teams_distribute_directive: TARGET TEAMS DISTRIBUTE [target_teams_clause*]
-    target_teams_distribute_clause: if_clause
-                                  | device_clause
-                                  | data_privatization_clause
-                                  | data_privatization_in_clause
-                           //     | in_reduction_clause
-                                  | map_clause
-                                  | is_device_ptr_clause
-                           //     | defaultmap_clause
-                                  | NOWAIT
-                                  | allocate_clause
-                                  | depend_with_modifier_clause
-                           //     | uses_allocators_clause
-                                  | num_teams_clause
+    target_teams_distribute_clause: num_teams_clause
                                   | thread_limit_clause
                                   | data_default_clause
+                                  | data_privatization_clause
+                                  | data_privatization_in_clause
                                   | data_sharing_clause
                            //     | reduction_default_only_clause
+                                  | allocate_clause
                                   | data_privatization_out_clause
                                   | collapse_clause
                                   | dist_schedule_clause

@@ -169,7 +169,8 @@ def _ensure_llvm():
             raise ImportError(msg)
     else:
         # Not matching?
-        warnings.warn("llvmlite version format not recognized!")
+        #warnings.warn("llvmlite version format not recognized!")
+        pass
 
     from llvmlite.binding import llvm_version_info, check_jit_execution
 

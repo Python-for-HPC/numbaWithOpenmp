@@ -281,7 +281,6 @@ class _EnvReloader(object):
         DEBUG_OPENMP = _readenv("NUMBA_DEBUG_OPENMP", int, 0)
         DEBUG_OPENMP_LLVM_PASS = _readenv("NUMBA_DEBUG_OPENMP_LLVM_PASS", int, 0)
         OPENMP_DISABLED = _readenv("NUMBA_OPENMP_DISABLED", int, 0)
-        OPENMP_SHARED_PRIVATE_REGION = _readenv("NUMBA_OPENMP_SHARED_PRIVATE_REGION", int, 0)
 
         # insert debug stmts to print information at runtime
         DEBUG_ARRAY_OPT_RUNTIME = _readenv(
