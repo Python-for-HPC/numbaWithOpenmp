@@ -16,7 +16,8 @@ from numba.core.ir_utils import (
     replace_var_names,
     get_definition,
     build_definitions,
-    dead_code_elimination
+    dead_code_elimination,
+    mk_unique_var
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, filter_nested_loops
 from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils, typing, cpu, compiler_machinery
@@ -45,6 +46,7 @@ import subprocess
 import tempfile
 #from numba.cuda.cudaimpl import lower as cudaimpl_lower
 import types as python_types
+import numba
 
 
 if config.DEBUG_OPENMP_LLVM_PASS >= 1:
@@ -915,6 +917,65 @@ class OpenmpCallConv(MinimalCallConv):
             return self.normal.decode_arguments(builder, argtypes, func, name)
 
 
+def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix):
+    print("starting replace_np_empty_with_cuda_shared")
+    outlined_ir = outlined_ir.blocks
+    converted_arrays = []
+    for label in outlined_ir.keys():
+        block = outlined_ir[label]
+        new_block_body = []
+        blen = len(block.body)
+        index = 0
+        while index < blen:
+            stmt = block.body[index]
+            if (isinstance(stmt, ir.Assign) and
+                isinstance(stmt.value, ir.Global) and
+                isinstance(stmt.value.value, python_types.ModuleType) and
+                stmt.value.value.__name__ == "numpy"):
+                lhs = stmt.target
+                index += 1
+                next_stmt = block.body[index]
+                if (isinstance(next_stmt, ir.Assign) and
+                    isinstance(next_stmt.value, ir.Expr) and
+                    next_stmt.value.value == lhs and
+                    next_stmt.value.op == 'getattr' and
+                    next_stmt.value.attr == 'empty'):
+                    converted_arrays.append(next_stmt.target)
+
+                    new_block_body.append(ir.Assign(
+                                            ir.Global("numba", numba, lhs.loc),
+                                            ir.Var(
+                                              lhs.scope,
+                                              mk_unique_var("$cuda_shared_global"),
+                                              lhs.loc),
+                                            lhs.loc))
+                    new_block_body.append(ir.Assign(
+                                            ir.Expr.getattr(new_block_body[-1].target, "cuda", lhs.loc),
+                                            ir.Var(
+                                              lhs.scope,
+                                              mk_unique_var("$cuda_shared_getattr"),
+                                              lhs.loc),
+                                            lhs.loc))
+                    new_block_body.append(ir.Assign(
+                                            ir.Expr.getattr(new_block_body[-1].target, "shared", lhs.loc),
+                                            ir.Var(
+                                              lhs.scope,
+                                              mk_unique_var("$cuda_shared_getattr"),
+                                              lhs.loc),
+                                            lhs.loc))
+                    new_block_body.append(ir.Assign(
+                                            ir.Expr.getattr(new_block_body[-1].target, "array", lhs.loc),
+                                            next_stmt.target,
+                                            lhs.loc))
+                else:
+                    new_block_body.append(stmt)
+                    new_block_body.append(next_stmt)
+            else:
+                new_block_body.append(stmt)
+            index += 1
+        block.body = new_block_body
+
+
 class openmp_region_start(ir.Stmt):
     def __init__(self, tags, region_number, loc, firstprivate_dead_after=None):
         if config.DEBUG_OPENMP >= 2:
@@ -1703,6 +1764,10 @@ class openmp_region_start(ir.Stmt):
                 device_target = subtarget
                 typingctx_outlined = targetctx.typing_context
             elif selected_device == 1:
+                dprint_func_ir(outlined_ir, "outlined_ir before replace np.empty")
+                replace_np_empty_with_cuda_shared(outlined_ir, state_copy.typemap, calltypes, device_func_name)
+                dprint_func_ir(outlined_ir, "outlined_ir after replace np.empty")
+
                 from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
                 from numba.cuda.target import CUDACallConv
 
@@ -1844,7 +1909,7 @@ class openmp_region_start(ir.Stmt):
                 #    print(type(mod))
                 cur_mod = ll.parse_assembly(str(allmods[0]))
                 for mod in allmods[1:]:
-                    cur_mod.link_in(ll.parse_assembly(str(mod))) 
+                    cur_mod.link_in(ll.parse_assembly(str(mod)))
                 target_llvm_ir = str(cur_mod)
                 #target_llvm_ir = cres_library.get_llvm_str()
                 with open(filename_prefix + '.ll', 'w') as f:
@@ -4744,7 +4809,6 @@ class OpenmpVisitor(Transformer):
             if num_threads > nt_tag[-1].arg or nt_tag[-1].arg == 1:
                 nt_tag[-1].arg = num_threads
             return
-         
         """
         cur_thread_limit_clauses = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_THREADS", remove_from_orig=True)
         if len(cur_thread_limit_clauses) >= 1:
