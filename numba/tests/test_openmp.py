@@ -2634,7 +2634,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         np.testing.assert_equal(teams, 1)
         self.assertGreater(threads, 1)
 
-    def target_parallel_nested_set_numthreads(self, device):
+    def target_nest_parallel_set_numthreads(self, device):
         target_pragma = f"target device({device}) map(from: teams, threads)"
 
         @njit
@@ -2654,7 +2654,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         np.testing.assert_equal(teams, 1)
         np.testing.assert_equal(threads, 32)
 
-    def target_teams_nested_default_numteams(self, device):
+    def target_nest_teams_default_numteams(self, device):
         target_pragma = f"target device({device}) map(from: teams, threads)"
 
         @njit
@@ -2674,7 +2674,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         self.assertGreater(teams, 1)
         np.testing.assert_equal(threads, 1)
 
-    def target_teams_nested_set_numteams(self, device):
+    def target_nest_teams_set_numteams(self, device):
         target_pragma = f"target device({device}) map(from: teams, threads)"
 
         @njit
@@ -2911,9 +2911,9 @@ class TestOpenmpTarget(TestOpenmpBase):
         np.testing.assert_equal(teams2, 1)
         np.testing.assert_equal(threads2, 256)
 
-    def target_parallel_nested(self, device):
+    def target_nest_parallel(self, device):
         # TODO: map should be "from" instead of "tofrom" once this is fixed.
-        target_pragma = f"target device({device}) map(tofrom: a)"
+        target_pragma = f"target device({device}) map(from: a)"
         # NOTE: num_threads should be a multiple of warp size, e.g. for NVIDIA
         # V100 it is 32, the OpenMP runtime floors non-multiple of warp size.
         # TODO: Newer LLVM versions should not have this restriction.
@@ -2929,9 +2929,8 @@ class TestOpenmpTarget(TestOpenmpBase):
         r = test_impl()
         np.testing.assert_equal(r, np.full(32, 1))
 
-    def target_teams_combined(self, device):
-        # TODO: change "tofrom" to "from".
-        target_pragma = f"target teams num_teams(100) device({device}) map(tofrom: a, s)"
+    def target_teams(self, device):
+        target_pragma = f"target teams num_teams(100) device({device}) map(from: a, s)"
         @njit
         def test_impl():
             a = np.zeros(100, dtype=np.int64)
@@ -2944,9 +2943,8 @@ class TestOpenmpTarget(TestOpenmpBase):
         r, s = test_impl()
         np.testing.assert_equal(r, np.full(100, 1))
 
-    def target_teams_nested(self, device):
-        # TODO: change "tofrom" to "from".
-        target_pragma = f"target device({device}) map(tofrom: a)"
+    def target_nest_teams(self, device):
+        target_pragma = f"target device({device}) map(from: a)"
         @njit
         def test_impl():
             a = np.zeros(100, dtype=np.int64)
@@ -2958,7 +2956,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         r = test_impl()
         np.testing.assert_equal(r, np.full(100, 1))
 
-    def target_teams_nested_from_shared_expl_scalar(self, device):
+    def target_nest_teams_from_shared_expl_scalar(self, device):
         target_pragma = f"target device({device}) map(from: s)"
         @njit
         def test_impl():
@@ -2972,7 +2970,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         s = test_impl()
         np.testing.assert_equal(s, 1)
 
-    def target_teams_nested_from_shared_impl_scalar(self, device):
+    def target_nest_teams_from_shared_impl_scalar(self, device):
         target_pragma = f"target device({device}) map(from: s)"
         @njit
         def test_impl():
@@ -2986,7 +2984,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         s = test_impl()
         np.testing.assert_equal(s, 1)
 
-    def target_teams_nested_tofrom_shared_expl_scalar(self, device):
+    def target_nest_teams_tofrom_shared_expl_scalar(self, device):
         target_pragma = f"target device({device}) map(tofrom: s)"
         @njit
         def test_impl():
@@ -3000,7 +2998,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         s = test_impl()
         np.testing.assert_equal(s, 1)
 
-    def target_teams_nested_tofrom_shared_impl_scalar(self, device):
+    def target_nest_teams_tofrom_shared_impl_scalar(self, device):
         target_pragma = f"target device({device}) map(tofrom: s)"
         @njit
         def test_impl():
@@ -3017,7 +3015,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         np.testing.assert_equal(s, 1)
         np.testing.assert_equal(ss, 1)
 
-    def target_teams_combined_parallel_nested(self, device):
+    def target_teams_nest_parallel(self, device):
         target_pragma = f"target teams device({device}) num_teams(10) thread_limit(32) map(tofrom: teams, threads)"
         @njit
         def test_impl():
@@ -3035,7 +3033,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         np.testing.assert_equal(teams, 10)
         np.testing.assert_equal(threads, 32)
 
-    def target_teams_nested_setsize(self, device):
+    def target_nest_teams_setsize(self, device):
         target_pragma = f"target device({device}) map(tofrom: teams, threads)"
         @njit
         def test_impl():
@@ -3053,7 +3051,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         np.testing.assert_equal(teams, 10)
         np.testing.assert_equal(threads, 1)
 
-    def target_teams_parallel_nested_setsize(self, device):
+    def target_teams_nest_parallel_setsize(self, device):
         target_pragma = f"target device({device}) map(tofrom: teams, threads)"
         @njit
         def test_impl():
@@ -3160,7 +3158,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         r = test_impl(a)
         np.testing.assert_array_equal(r, np.full(n, 43))
 
-    def target_parallel_for_nested(self, device):
+    def target_nest_parallel_for(self, device):
         target_pragma = f"target device({device}) map(tofrom: a, sched)"
         @njit
         def test_impl(a, sched):
@@ -3185,7 +3183,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         for ci in c:
             self.assertGreater(ci, 0)
 
-    def target_teams_distribute_nested(self, device):
+    def target_nest_teams_distribute(self, device):
         target_pragma = f"target device({device}) map(tofrom: a, sched)"
         @njit
         def test_impl(a, sched):
@@ -3209,7 +3207,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         # each team leader executes one iteration.
         np.testing.assert_array_equal(c, np.ones(n))
 
-    def target_teams_distribute_combined(self, device):
+    def target_teams_distribute(self, device):
         target_pragma = f"target teams distribute device({device}) map(tofrom: a, sched)"
         @njit
         def test_impl(a, sched):
@@ -3256,7 +3254,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         np.testing.assert_equal(r, 42)
 
     @unittest.skipUnless(TestOpenmpBase.skip_disabled, "Abort - unimplemented")
-    def target_data_nested(self, device):
+    def target_data_nest_multiple_target(self, device):
         target_data_pragma = f"""target data device({device}) map(to: a)
                         map(tofrom: b) map(from: as1, as2, bs1, bs2)"""
         target_pragma = f"target device({device})"
@@ -3288,7 +3286,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         assert(b1 == n1)
         assert(b2 == n2)
 
-    def target_enter_data(self, device):
+    def target_enter_exit_data(self, device):
         target_enter_pragma = f"""target enter data device({device})
                             map(to: scalar) map(to: array)"""
         target_exit_pragma = f"""target exit data device({device})
@@ -3322,7 +3320,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         np.testing.assert_equal(r_s, 42)
         np.testing.assert_array_equal(r_a, np.full(n, 43))
 
-    def target_enter_data_alloc(self, device):
+    def target_enter_exit_data_alloc(self, device):
         target_enter_pragma = f"""target enter data device({device})
                                 map(alloc: a)"""
         target_exit_pragma = f"target exit data device({device}) map(from: a)"
@@ -3344,11 +3342,13 @@ class TestOpenmpTarget(TestOpenmpBase):
         r = test_impl(a)
         np.testing.assert_array_equal(r, np.ones(n))
 
-    def target_teams_distribute_parallel_for_combined(self, device):
+    def target_teams_distribute_parallel_for(self, device):
         target_pragma = f"""target teams distribute parallel for
-                        device({device}) num_teams(4) num_threads(256) map(tofrom: a, sched_team, sched_thread)"""
+                        device({device}) num_teams(4) num_threads(256)
+                        map(tofrom: s, a, sched_team, sched_thread)"""
         @njit
         def test_impl(a, sched_team, sched_thread):
+            s = 42
             with openmp(target_pragma):
                 for i in range(len(a)):
                     a[i] = 1
@@ -3356,13 +3356,16 @@ class TestOpenmpTarget(TestOpenmpBase):
                     sched_team[i] = team_id
                     thread_id = omp_get_thread_num()
                     sched_thread[i] = thread_id
-            return a, sched_team, sched_thread
+                    if i == 0 and team_id == 0 and thread_id == 0:
+                        s += 1
+            return s, a, sched_team, sched_thread
 
         n = 1024
         a = np.zeros(n)
         sched_team = np.zeros(n)
         sched_thread = np.zeros(n)
-        r, sched_team, sched_thread = test_impl(a, sched_team, sched_thread)
+        s, r, sched_team, sched_thread = test_impl(a, sched_team, sched_thread)
+        np.testing.assert_equal(s, 43)
         np.testing.assert_array_equal(r, np.ones(n))
         u_team, c_team = np.unique(sched_team, return_counts=True)
         # there are 4 teams each with a unique id starting from 0.
@@ -3379,6 +3382,87 @@ class TestOpenmpTarget(TestOpenmpBase):
             # threads from team 0 will execute more iterations (see above
             # comment on removed warp).
             self.assertGreaterEqual(c_thread_i, 4)
+
+    @unittest.skip("Fix unexpected QUAL.OMP.THREAD_LIMIT")
+    def target_teams_nest_distribute_parallel_for(self, device):
+        target_pragma = f"""target teams device({device}) num_teams(4)
+                        map(tofrom: s, a, sched_team, sched_thread)"""
+        dist_parfor_pragma = "distribute parallel for num_threads(256)"
+        @njit
+        def test_impl(a, sched_team, sched_thread):
+            s = 42
+            with openmp(target_pragma):
+                with openmp(dist_parfor_pragma):
+                    for i in range(len(a)):
+                        a[i] = 1
+                        team_id = omp_get_team_num()
+                        sched_team[i] = team_id
+                        thread_id = omp_get_thread_num()
+                        sched_thread[i] = thread_id
+                        if i == 0 and team_id == 0 and thread_id == 0:
+                            s += 1
+            return s, a, sched_team, sched_thread
+
+        n = 1024
+        a = np.zeros(n)
+        sched_team = np.zeros(n)
+        sched_thread = np.zeros(n)
+        s, r, sched_team, sched_thread = test_impl(a, sched_team, sched_thread)
+        np.testing.assert_equal(s, 43)
+        np.testing.assert_array_equal(r, np.ones(n))
+        u_team, c_team = np.unique(sched_team, return_counts=True)
+        # there are 4 teams each with a unique id starting from 0.
+        np.testing.assert_equal(len(u_team), 4)
+        np.testing.assert_array_equal(u_team, np.arange(0, len(u_team)))
+        # each team should execute 1024/4 = 256 iterations.
+        np.testing.assert_array_equal(c_team, np.full(len(c_team), n/len(u_team)))
+        u_thread, c_thread = np.unique(sched_thread, return_counts=True)
+        # testing thread scheduling is tricky: OpenMP runtime sets aside a warp
+        # for the "sequential" target region execution.
+        # TODO: update tests as newer LLVM version lift the above limitations.
+        self.assertGreaterEqual(len(u_thread), n/len(u_team) - 32)
+        for c_thread_i in c_thread:
+            # threads from team 0 will execute more iterations (see above
+            # comment on removed warp).
+            self.assertGreaterEqual(c_thread_i, 4)
+
+    def target_teams_nest_parallel_fpriv_shared_scalar(self, device):
+        target_pragma = f"target teams num_teams(1) thread_limit(32) device({device})"
+
+        @njit
+        def test_impl():
+            s = 42
+            r = np.zeros(32)
+            with openmp(target_pragma):
+                with openmp("parallel"):
+                    threadno = omp_get_thread_num()
+                    s += 1
+                    r[threadno] = s
+            return s, r
+        s, r = test_impl()
+        np.testing.assert_equal(s, 42)
+        np.testing.assert_array_equal(r, np.full(32, 43))
+
+    @unittest.skip("Frontend codegen error")
+    def target_teams_nest_parallel_fpriv_shared_array(self, device):
+        target_pragma = f"target teams num_teams(1) thread_limit(32) device({device})"
+        # FIX: frontend fails to emit copy constructor, error:
+        # add_llvm_module is not supported on the CUDACodelibrary
+        # QUESTION: in which address space does the copy constructor create the copy on the GPU?
+        @njit
+        def test_impl():
+            s = np.zeros(32)
+            with openmp(target_pragma):
+                with openmp("parallel firstprivate(s)"):
+                    print("parallel s", s[0])
+                    teams = omp_get_num_teams()
+                    threads = omp_get_num_threads()
+                    teamno = omp_get_team_num()
+                    threadno = omp_get_thread_num()
+                    if teamno == 0 and threadno == 0:
+                        print("teams", teams, "threads", threads)
+        test_impl()
+        input("ok?")
 
 for memberName in dir(TestOpenmpTarget):
     if memberName.startswith("target"):
