@@ -4170,17 +4170,14 @@ class OpenmpVisitor(Transformer):
 
         if "TEAMS" in dir_tag:
             # When NUM_TEAMS, THREAD_LIMIT are not in clauses, set them to 0 to
-            # use runtime defaults in teams, thread launching, otherwise append
+            # use runtime defaults in teams, thread launching, otherwise use
             # existing clauses.
             clause_num_teams = self.get_clauses_by_name(clauses, "QUAL.OMP.NUM_TEAMS")
             if not clause_num_teams:
                 start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 0))
-            else:
-                assert len(clause_num_teams) == 1, "Expected single NUM_TEAMS clause"
-                start_tags.append(clause_num_teams[0])
 
-            # Set THREAD_LIMIT to the clause value (if it exists), regardless of
-            # a combined PARALLEL (see
+            # Use the THREAD_LIMIT clause value if it exists, regardless of a
+            # combined PARALLEL (see
             # https://www.openmp.org/spec-html/5.0/openmpse15.html) since
             # THREAD_LIMIT takes precedence.  If clause does not exist, set to 0
             # or to NUM_THREADS of the combined PARALLEL (if this exists).
@@ -4193,9 +4190,6 @@ class OpenmpVisitor(Transformer):
                         assert len(clause_num_threads) == 1, "Expected single NUM_THREADS clause"
                         thread_limit = clause_num_threads[0].arg
                 start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", thread_limit))
-            else:
-                assert len(clause_thread_limit) == 1, "Expected single THREAD_LIMIT clause"
-                start_tags.append(clause_thread_limit[0])
         elif "PARALLEL" in dir_tag:
             # PARALLEL in the directive (without TEAMS), set THREAD_LIMIT to NUM_THREADS clause
             # (if NUM_THREADS exists), or 0 (if NUM_THREADS does not exist)
@@ -4205,8 +4199,9 @@ class OpenmpVisitor(Transformer):
                 assert len(clause_num_threads) == 1, "Expected single NUM_THREADS clause"
                 num_threads = clause_num_threads[0].arg
 
-            clause_thread_limit = self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")
-            start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", num_threads))
+            # Replace existing THREAD_LIMIT clause.
+            clause_thread_limit = self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT", remove_from_orig=True)
+            clauses.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", num_threads))
         else:
             # Neither TEAMS or PARALLEL in directive, set teams, threads to 1.
             start_tags.append(openmp_tag("QUAL.OMP.NUM_TEAMS", 1))
@@ -4443,6 +4438,13 @@ class OpenmpVisitor(Transformer):
     def teams_distribute_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit teams_distribute_clause", args, type(args), args[0])
+            if isinstance(args[0], list):
+                print(args[0][0])
+        return args[0]
+
+    def distribute_parallel_for_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit distribute_parallel_for_clause", args, type(args), args[0])
             if isinstance(args[0], list):
                 print(args[0][0])
         return args[0]
