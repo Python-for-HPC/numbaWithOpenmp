@@ -3443,6 +3443,36 @@ class TestOpenmpTarget(TestOpenmpBase):
         np.testing.assert_equal(s, 42)
         np.testing.assert_array_equal(r, np.full(32, 43))
 
+    def target_nest_parallel_float_fpriv(self, device):
+        target_pragma = f"target device({device}) map(from: r)"
+        @njit
+        def test_impl():
+            s = np.float32(42.0)
+            r = np.float(0.0)
+            with openmp(target_pragma):
+                with openmp("parallel firstprivate(s)"):
+                    threadno = omp_get_thread_num()
+                    if threadno == 0:
+                        r = s + 1
+            return r
+        r = test_impl()
+        np.testing.assert_equal(r, 43.0)
+
+    def target_nest_teams_float_fpriv(self, device):
+        target_pragma = f"target device({device}) map(from: r)"
+        @njit
+        def test_impl():
+            s = np.float32(42.0)
+            r = np.float(0.0)
+            with openmp(target_pragma):
+                with openmp("teams firstprivate(s)"):
+                    teamno = omp_get_thread_num()
+                    if teamno == 0:
+                        r = s + 1
+            return r
+        r = test_impl()
+        np.testing.assert_equal(r, 43.0)
+
     @unittest.skip("Frontend codegen error")
     def target_teams_nest_parallel_fpriv_shared_array(self, device):
         target_pragma = f"target teams num_teams(1) thread_limit(32) device({device})"
