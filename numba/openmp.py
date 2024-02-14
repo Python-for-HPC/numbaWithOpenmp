@@ -917,65 +917,6 @@ class OpenmpCallConv(MinimalCallConv):
             return self.normal.decode_arguments(builder, argtypes, func, name)
 
 
-def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix):
-    print("starting replace_np_empty_with_cuda_shared")
-    outlined_ir = outlined_ir.blocks
-    converted_arrays = []
-    for label in outlined_ir.keys():
-        block = outlined_ir[label]
-        new_block_body = []
-        blen = len(block.body)
-        index = 0
-        while index < blen:
-            stmt = block.body[index]
-            if (isinstance(stmt, ir.Assign) and
-                isinstance(stmt.value, ir.Global) and
-                isinstance(stmt.value.value, python_types.ModuleType) and
-                stmt.value.value.__name__ == "numpy"):
-                lhs = stmt.target
-                index += 1
-                next_stmt = block.body[index]
-                if (isinstance(next_stmt, ir.Assign) and
-                    isinstance(next_stmt.value, ir.Expr) and
-                    next_stmt.value.value == lhs and
-                    next_stmt.value.op == 'getattr' and
-                    next_stmt.value.attr == 'empty'):
-                    converted_arrays.append(next_stmt.target)
-
-                    new_block_body.append(ir.Assign(
-                                            ir.Global("numba", numba, lhs.loc),
-                                            ir.Var(
-                                              lhs.scope,
-                                              mk_unique_var("$cuda_shared_global"),
-                                              lhs.loc),
-                                            lhs.loc))
-                    new_block_body.append(ir.Assign(
-                                            ir.Expr.getattr(new_block_body[-1].target, "cuda", lhs.loc),
-                                            ir.Var(
-                                              lhs.scope,
-                                              mk_unique_var("$cuda_shared_getattr"),
-                                              lhs.loc),
-                                            lhs.loc))
-                    new_block_body.append(ir.Assign(
-                                            ir.Expr.getattr(new_block_body[-1].target, "shared", lhs.loc),
-                                            ir.Var(
-                                              lhs.scope,
-                                              mk_unique_var("$cuda_shared_getattr"),
-                                              lhs.loc),
-                                            lhs.loc))
-                    new_block_body.append(ir.Assign(
-                                            ir.Expr.getattr(new_block_body[-1].target, "array", lhs.loc),
-                                            next_stmt.target,
-                                            lhs.loc))
-                else:
-                    new_block_body.append(stmt)
-                    new_block_body.append(next_stmt)
-            else:
-                new_block_body.append(stmt)
-            index += 1
-        block.body = new_block_body
-
-
 class openmp_region_start(ir.Stmt):
     def __init__(self, tags, region_number, loc, firstprivate_dead_after=None):
         if config.DEBUG_OPENMP >= 2:
@@ -1227,9 +1168,9 @@ class openmp_region_start(ir.Stmt):
                 fixup_dict[k] = disp
                 for sig in vdispatcher.overloads.keys():
                     disp.dispatcher.compile_device(sig, cuda_target=cuda_target)
-        
+
         for k,v in fixup_dict.items():
-            del typemap[k]        
+            del typemap[k]
             typemap[k] = v
 
     def lower(self, lowerer):
@@ -1296,35 +1237,61 @@ class openmp_region_start(ir.Stmt):
             for i in range(len(self.tags)):
                 cur_tag = self.tags[i]
                 if cur_tag.name in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.MAP.TO", "QUAL.OMP.MAP.FROM", "QUAL.OMP.MAP.ALLOC"]:
-                    assert isinstance(cur_tag.arg, str)
-                    cur_tag_typ = typemap_lookup(typemap, cur_tag.arg)
+                    cur_tag_var = cur_tag.arg
+                    if isinstance(cur_tag_var, NameSlice):
+                        cur_tag_var = cur_tag_var.name
+                    assert isinstance(cur_tag_var, str)
+                    cur_tag_typ = typemap_lookup(typemap, cur_tag_var)
                     if isinstance(cur_tag_typ, types.npytypes.Array):
                         cur_tag_ndim = cur_tag_typ.ndim
                         stride_typ = lowerer.context.get_value_type(types.intp) #lir.Type.int(64)
                         stride_abi_size = context.get_abi_sizeof(stride_typ)
-                        array_var = var_table[cur_tag.arg]
+                        array_var = var_table[cur_tag_var]
                         if config.DEBUG_OPENMP >= 1:
                             print("Found array mapped:", cur_tag.name, cur_tag.arg, cur_tag_typ, type(cur_tag_typ), stride_typ, type(stride_typ), stride_abi_size, array_var, type(array_var))
                         uniqueness = get_unique()
-                        size_var = ir.Var(None, f"{cur_tag.arg}_size_var{target_num}{uniqueness}", array_var.loc)
-                        #size_var = array_var.scope.redefine("size_var", array_var.loc)
-                        size_getattr = ir.Expr.getattr(array_var, "size", array_var.loc)
-                        size_assign = ir.Assign(size_getattr, size_var, array_var.loc)
-                        typemap[size_var.name] = types.int64
-                        lowerer.lower_inst(size_assign)
-                        extras_before.append(size_assign)
-                        lowerer._alloca_var(size_var.name, typemap[size_var.name])
+                        if isinstance(cur_tag.arg, NameSlice):
+                            the_slice = cur_tag.arg.the_slice[0][0]
+                            assert the_slice.step is None
+                            if isinstance(the_slice.start, int):
+                                omp_slice_start = the_slice.start
+                            else:
+                                omp_slice_start = the_slice.start
+                                assert isinstance(omp_slice_start, str)
+                                omp_slice_start = ir.Var(None, omp_slice_start, array_var.loc)
+                            if isinstance(the_slice.stop, int):
+                                size_var = the_slice.stop
+                            else:
+                                size_var = the_slice.stop
+                                assert isinstance(size_var, str)
+                                size_var = ir.Var(None, size_var, array_var.loc)
+                        else:
+                            omp_slice_start = 0
+                            size_var = ir.Var(None, f"{cur_tag_var}_size_var{target_num}{uniqueness}", array_var.loc)
+                            #size_var = array_var.scope.redefine("size_var", array_var.loc)
+                            size_getattr = ir.Expr.getattr(array_var, "size", array_var.loc)
+                            size_assign = ir.Assign(size_getattr, size_var, array_var.loc)
+                            typemap[size_var.name] = types.int64
+                            lowerer.lower_inst(size_assign)
+                            extras_before.append(size_assign)
+                            lowerer._alloca_var(size_var.name, typemap[size_var.name])
+
+                            # see core/datamodel/models.py
+                            loaded_size = lowerer.loadvar(size_var.name)
+                            loaded_op = loaded_size.operands[0]
+                            loaded_pointee = loaded_op.type.pointee
+                            loaded_str = str(loaded_pointee) + " * " + loaded_size._get_reference()
 
                         #--------
                         """
-                        itemsize_var = ir.Var(None, cur_tag.arg + "_itemsize_var", array_var.loc)
+                        itemsize_var = ir.Var(None, cur_tag_var + "_itemsize_var", array_var.loc)
                         itemsize_getattr = ir.Expr.getattr(array_var, "itemsize", array_var.loc)
                         itemsize_assign = ir.Assign(itemsize_getattr, itemsize_var, array_var.loc)
                         typemap[itemsize_var.name] = types.int64
                         lowerer.lower_inst(itemsize_assign)
                         #--------
 
-                        totalsize_var = ir.Var(None, cur_tag.arg + "_totalsize_var", array_var.loc)
+                        totalsize_var = ir.Var(None, cur_tag_var + "_totalsize_var", array_var.loc)
                         totalsize_binop = ir.Expr.binop(operator.mul, size_var, itemsize_var, array_var.loc)
                         totalsize_assign = ir.Assign(totalsize_binop, totalsize_var, array_var.loc)
                         calltypes[totalsize_binop] = typing.signature(types.int64, types.int64, types.int64)
@@ -1333,26 +1300,21 @@ class openmp_region_start(ir.Stmt):
                         #--------
                         """
 
-                        # see core/datamodel/models.py
-                        loaded_size = lowerer.loadvar(size_var.name)
-                        loaded_op = loaded_size.operands[0]
-                        loaded_pointee = loaded_op.type.pointee
-                        loaded_str = str(loaded_pointee) + " * " + loaded_size._get_reference()
                         if "TO" in cur_tag.name:
-                            struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
-                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, 1)))
-                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, 1)))
+                            struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag_var + "*data", non_arg=True, omp_slice=(omp_slice_start, size_var)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag_var + "*shape", non_arg=True, omp_slice=(0, 1)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag_var + "*strides", non_arg=True, omp_slice=(0, 1)))
                         elif "ALLOC" in cur_tag.name:
-                            struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
-                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, 1)))
-                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, 1)))
+                            struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag_var + "*data", non_arg=True, omp_slice=(omp_slice_start, size_var)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag_var + "*shape", non_arg=True, omp_slice=(0, 1)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag_var + "*strides", non_arg=True, omp_slice=(0, 1)))
                             cur_tag.name = "QUAL.OMP.MAP.TO"
                         else:
                             # Must be QUAL.OMP.MAP.FROM in which case only need to get the data back but always need the array struct for metadata.
-                            #struct_tags.append(openmp_tag("QUAL.OMP.MAP.TOFROM.STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
-                            struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
-                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, 1)))
-                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, 1)))
+                            #struct_tags.append(openmp_tag("QUAL.OMP.MAP.TOFROM.STRUCT", cur_tag_var + "*data", non_arg=True, omp_slice=(0, size_var)))
+                            struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag_var + "*data", non_arg=True, omp_slice=(omp_slice_start, size_var)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag_var + "*shape", non_arg=True, omp_slice=(0, 1)))
+                            struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag_var + "*strides", non_arg=True, omp_slice=(0, 1)))
                             #cur_tag.name = cur_tag.name + ".STRUCT"
                             #cur_tag.arg = cur_tag.arg + "*data"
                             #cur_tag.non_arg = True
@@ -1764,10 +1726,6 @@ class openmp_region_start(ir.Stmt):
                 device_target = subtarget
                 typingctx_outlined = targetctx.typing_context
             elif selected_device == 1:
-                dprint_func_ir(outlined_ir, "outlined_ir before replace np.empty")
-                replace_np_empty_with_cuda_shared(outlined_ir, state_copy.typemap, calltypes, device_func_name)
-                dprint_func_ir(outlined_ir, "outlined_ir after replace np.empty")
-
                 from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
                 from numba.cuda.target import CUDACallConv
 
@@ -1782,6 +1740,7 @@ class openmp_region_start(ir.Stmt):
                 typingctx_outlined = cuda_descriptor.cuda_target.typing_context
                 device_target = OpenmpCUDATargetContext(typingctx_outlined)
                 #device_target = cuda_descriptor.cuda_target.target_context
+
                 device_lowerer_pipeline = OnlyLowerCUDA
                 openmp_cuda_target = numba_cuda.descriptor.CUDATarget("openmp_cuda")
                 openmp_cuda_target._typingctx = typingctx_outlined
@@ -5865,3 +5824,21 @@ def create_native_np_copy(arg_typ):
     copy_cres = compiler.compile_isolated(copy_np_array, (arg_typ,), arg_typ)
     copy_name = getattr(copy_cres.fndesc, 'llvm_cfunc_wrapper_name')
     return (copy_name, copy_cres)
+
+
+def omp_shared_array(size, dtype):
+    return np.empty(size, dtype=dtype)
+
+@overload(omp_shared_array, target='cpu')
+def omp_shared_array_overload(size, dtype):
+    assert isinstance(size, types.IntegerLiteral)
+    def impl(size, dtype):
+        return np.empty(size, dtype=dtype)
+    return impl
+
+@overload(omp_shared_array, target='cuda')
+def omp_shared_array_overload(size, dtype):
+    assert isinstance(size, types.IntegerLiteral)
+    def impl(size, dtype):
+        return numba_cuda.shared.array(size, dtype)
+    return impl
