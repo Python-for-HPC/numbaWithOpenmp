@@ -3286,13 +3286,14 @@ class TestOpenmpTarget(TestOpenmpBase):
         assert(b1 == n1)
         assert(b2 == n2)
 
-    @unittest.skip("Frontend error array sections")
     def target_enter_exit_data_array_sections(self, device):
-        target_enter_pragma = f"target enter data map(to: a[0:3], b[0:3]) device({device})"
+        target_enter_pragma = f"target enter data map(to: a[0:3], b[bstart:bstop]) device({device})"
         target_exit_pragma = f"target exit data map(from: a[0:3]) device({device})"
         target_pragma = f"target teams distribute parallel for device({device})"
         @njit
         def test_impl():
+            bstart = 0
+            bstop = 3
             a = np.array([1,2,3])
             b = np.array([3,2,1])
             with openmp(target_enter_pragma):
