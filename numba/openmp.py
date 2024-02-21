@@ -1364,13 +1364,14 @@ class openmp_region_start(ir.Stmt):
                         """
 
                         # see core/datamodel/models.py
-                        loaded_size = lowerer.loadvar(size_var.name)
-                        loaded_op = loaded_size.operands[0]
-                        loaded_pointee = loaded_op.type.pointee
-                        loaded_str = str(loaded_pointee) + " * " + loaded_size._get_reference()
-                        struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag.arg + "*data", non_arg=True, omp_slice=(0, size_var)))
-                        struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*shape", non_arg=True, omp_slice=(0, 1)))
-                        struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag.arg + "*strides", non_arg=True, omp_slice=(0, 1)))
+                        if isinstance(size_var, ir.Var):
+                            loaded_size = lowerer.loadvar(size_var.name)
+                            loaded_op = loaded_size.operands[0]
+                            loaded_pointee = loaded_op.type.pointee
+                            loaded_str = str(loaded_pointee) + " * " + loaded_size._get_reference()
+                        struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag_var + "*data", non_arg=True, omp_slice=(0, size_var)))
+                        struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag_var + "*shape", non_arg=True, omp_slice=(0, 1)))
+                        struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag_var + "*strides", non_arg=True, omp_slice=(0, 1)))
 
             return struct_tags, extras_before
 
