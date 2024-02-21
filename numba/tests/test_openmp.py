@@ -3253,6 +3253,245 @@ class TestOpenmpTarget(TestOpenmpBase):
         r = test_impl(s)
         np.testing.assert_equal(r, 42)
 
+    def target_data_from(self, device):
+        target_data_pragma = f"""target data device({device})
+                                map(from: a)"""
+        target_pragma = f"target device({device})"
+
+        @njit
+        def test_impl():
+            a = np.ones(10)
+            with openmp(target_data_pragma):
+                with openmp(target_pragma):
+                    for i in range(len(a)):
+                        a[i] = 42
+            return a
+
+        a = test_impl()
+        np.testing.assert_array_equal(a, np.full(10, 42))
+
+    def target_data_to(self, device):
+        target_data_pragma = f"""target data device({device})
+                                map(to: a) map(from: b)"""
+        target_pragma = f"target device({device})"
+
+        @njit
+        def test_impl():
+            a = np.ones(10)
+            b = np.zeros(10)
+            with openmp(target_data_pragma):
+                with openmp(target_pragma):
+                    for i in range(len(a)):
+                        a[i] = 42
+                        b[i] = a[i]
+            return a, b
+
+        a, b = test_impl()
+        np.testing.assert_array_equal(a, np.ones(10))
+        np.testing.assert_array_equal(b, np.full(10, 42))
+
+    def target_data_tofrom(self, device):
+        target_data_pragma = f"""target data device({device})
+                                map(tofrom: s, a)"""
+        target_pragma = f"target device({device})"
+
+        @njit
+        def test_impl():
+            s = 0
+            a = np.ones(10)
+            with openmp(target_data_pragma):
+                with openmp(target_pragma):
+                    for i in range(len(a)):
+                        a[i] += 41
+                    s = 42
+            return s, a
+
+        s, a = test_impl()
+        # s is a FIRSTPRIVATE in the target region, so changes do not affect
+        # host s despite FROM mapping.
+        np.testing.assert_equal(s, 0)
+        np.testing.assert_array_equal(a, np.full(10, 42))
+
+    def target_data_alloc_from(self, device):
+        target_data_pragma = f"""target data device({device})
+                                map(alloc: a) map(from: b)"""
+        target_pragma = f"target device({device})"
+
+        @njit
+        def test_impl():
+            a = np.ones(10)
+            b = np.zeros(10)
+            with openmp(target_data_pragma):
+                with openmp(target_pragma):
+                    for i in range(len(a)):
+                        a[i] = 42
+                        b[i] = a[i]
+            return a, b
+
+        a, b = test_impl()
+        np.testing.assert_array_equal(a, np.ones(10))
+        np.testing.assert_array_equal(b, np.full(10, 42))
+
+    def target_data_mix_to_from(self, device):
+        target_data_pragma = f"""target data device({device})
+                                map(to: a) map(from: b)"""
+        target_pragma = f"target device({device})"
+
+        @njit
+        def test_impl():
+            a = np.ones(10)
+            b = np.ones(10)
+            with openmp(target_data_pragma):
+                with openmp(target_pragma):
+                    for i in range(len(a)):
+                        a[i] = 42
+                        b[i] = 42
+            return a, b
+
+        a, b = test_impl()
+        np.testing.assert_array_equal(a, np.ones(10))
+        np.testing.assert_array_equal(b, np.full(10, 42))
+
+    def target_update_from(self, device):
+        target_data_pragma = f"""target data device({device})
+                                map(to: a)"""
+        target_pragma = f"target device({device})"
+        target_update_pragma = f"target update from(a) device({device})"
+
+        @njit
+        def test_impl():
+            a = np.ones(10)
+            with openmp(target_data_pragma):
+                with openmp(target_pragma):
+                    for i in range(len(a)):
+                        a[i] = 42
+                with openmp(target_update_pragma):
+                    pass
+            return a
+
+        a = test_impl()
+        np.testing.assert_array_equal(a, np.full(10, 42))
+
+    def target_update_to(self, device):
+        target_data_pragma = f"""target data device({device})
+                                map(from: a)"""
+        target_pragma = f"target device({device})"
+        target_update_pragma = f"target update to(a) device({device})"
+
+        @njit
+        def test_impl():
+            a = np.ones(10)
+            with openmp(target_data_pragma):
+                a += 1
+
+                with openmp(target_update_pragma):
+                    pass
+
+                with openmp(target_pragma):
+                    for i in range(len(a)):
+                        a[i] += 1
+            return a
+
+        a = test_impl()
+        np.testing.assert_array_equal(a, np.full(10, 3))
+
+    def target_update_to_from(self, device):
+        target_data_pragma = f"""target data device({device})
+                                map(to: a)"""
+        target_pragma = f"target device({device})"
+        target_update_to_pragma = f"target update to(a) device({device})"
+        target_update_from_pragma = f"target update from(a) device({device})"
+
+        @njit
+        def test_impl():
+            a = np.ones(10)
+            with openmp(target_data_pragma):
+                a += 1
+
+                with openmp(target_update_to_pragma):
+                    pass
+
+                with openmp(target_pragma):
+                    for i in range(len(a)):
+                        a[i] += 1
+
+                with openmp(target_update_from_pragma):
+                    pass
+
+                a += 1
+            return a
+
+        a = test_impl()
+        np.testing.assert_array_equal(a, np.full(10, 4))
+
+    # WEIRD: breaks when runs alone, passes if runs with all tests.
+    def target_enter_exit_data_to_from_hostonly(self, device):
+        target_enter = f"""target enter data device({device})
+                                map(to: a)"""
+
+        target_exit = f"""target exit data device({device})
+                                map(from: a)"""
+
+        @njit
+        def test_impl():
+            a = np.ones(10)
+            with openmp(target_enter):
+                pass
+
+            a += 1
+
+            # XXX: Test passes if uncommented!
+            #with openmp("target device(1)"):
+            #    pass
+
+            with openmp(target_exit):
+                pass
+
+            return a
+
+        a = test_impl()
+        np.testing.assert_array_equal(a, np.full(10, 1))
+
+    # WEIRD: breaks when runs alone, passes if runs with all tests.
+    def target_data_tofrom_hostonly(self, device):
+        target_data = f"""target data device({device})
+                                map(tofrom: a)"""
+
+        @njit
+        def test_impl():
+            a = np.ones(10)
+            with openmp(target_data):
+                a += 1
+
+            # XXX: Test passes if uncommented!
+            #with openmp("target device(1)"):
+            #    pass
+
+            return a
+
+        a = test_impl()
+        np.testing.assert_array_equal(a, np.full(10, 1))
+
+    def target_data_update(self, device):
+        target_pragma = f"target teams distribute parallel for device({device})"
+        target_data = f"target data map(from:a) device({device})"
+        target_update = f"target update to(a) device({device})"
+
+        @njit
+        def test_impl(a):
+            with openmp(target_data):
+                for rep in range(10):
+                    # Target update resets a to ones.
+                    with openmp(target_update):
+                        pass
+                    with openmp(target_pragma):
+                        for i in range(len(a)):
+                            a[i] += 1
+
+        a = np.ones(4)
+        test_impl(a)
+        np.testing.assert_array_equal(a, np.full(4, 2))
+
     @unittest.skipUnless(TestOpenmpBase.skip_disabled, "Abort - unimplemented")
     def target_data_nest_multiple_target(self, device):
         target_data_pragma = f"""target data device({device}) map(to: a)
@@ -3361,7 +3600,7 @@ class TestOpenmpTarget(TestOpenmpBase):
                 pass
 
             return a
-        
+
         n = 100
         a = np.zeros(n)
         r = test_impl(a)
