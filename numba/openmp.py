@@ -917,6 +917,69 @@ class OpenmpCallConv(MinimalCallConv):
             return self.normal.decode_arguments(builder, argtypes, func, name)
 
 
+def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix):
+    if config.DEBUG_OPENMP >= 2:
+        print("starting replace_np_empty_with_cuda_shared")
+    outlined_ir = outlined_ir.blocks
+    converted_arrays = []
+    for label in outlined_ir.keys():
+        block = outlined_ir[label]
+        new_block_body = []
+        blen = len(block.body)
+        index = 0
+        while index < blen:
+            stmt = block.body[index]
+            if (isinstance(stmt, ir.Assign) and
+                isinstance(stmt.value, ir.Global) and
+                isinstance(stmt.value.value, python_types.ModuleType) and
+                stmt.value.value.__name__ == "numpy"):
+                lhs = stmt.target
+                index += 1
+                next_stmt = block.body[index]
+                if (isinstance(next_stmt, ir.Assign) and
+                    isinstance(next_stmt.value, ir.Expr) and
+                    next_stmt.value.value == lhs and
+                    next_stmt.value.op == 'getattr' and
+                    next_stmt.value.attr == 'empty'):
+                    converted_arrays.append(next_stmt.target)
+
+                    new_block_body.append(ir.Assign(
+                                            ir.Global("numba", numba, lhs.loc),
+                                            ir.Var(
+                                              lhs.scope,
+                                              mk_unique_var("$cuda_shared_global"),
+                                              lhs.loc),
+                                            lhs.loc))
+                    typemap[new_block_body[-1].target.name] = types.Module(numba)
+                    new_block_body.append(ir.Assign(
+                                            ir.Expr.getattr(new_block_body[-1].target, "cuda", lhs.loc),
+                                            ir.Var(
+                                              lhs.scope,
+                                              mk_unique_var("$cuda_shared_getattr"),
+                                              lhs.loc),
+                                            lhs.loc))
+                    typemap[new_block_body[-1].target.name] = types.Module(numba.cuda)
+                    new_block_body.append(ir.Assign(
+                                            ir.Expr.getattr(new_block_body[-1].target, "shared", lhs.loc),
+                                            ir.Var(
+                                              lhs.scope,
+                                              mk_unique_var("$cuda_shared_getattr"),
+                                              lhs.loc),
+                                            lhs.loc))
+                    typemap[new_block_body[-1].target.name] = types.Module(numba.cuda.stubs.shared)
+                    new_block_body.append(ir.Assign(
+                                            ir.Expr.getattr(new_block_body[-1].target, "array", lhs.loc),
+                                            next_stmt.target,
+                                            lhs.loc))
+                else:
+                    new_block_body.append(stmt)
+                    new_block_body.append(next_stmt)
+            else:
+                new_block_body.append(stmt)
+            index += 1
+        block.body = new_block_body
+
+
 class openmp_region_start(ir.Stmt):
     def __init__(self, tags, region_number, loc, firstprivate_dead_after=None):
         if config.DEBUG_OPENMP >= 2:
@@ -1716,6 +1779,9 @@ class openmp_region_start(ir.Stmt):
                 device_target = subtarget
                 typingctx_outlined = targetctx.typing_context
             elif selected_device == 1:
+                from numba.core import target_extension
+                orig_target = getattr(target_extension._active_context, 'target', target_extension._active_context_default)
+                target_extension._active_context.target = 'cuda'
                 from numba.cuda import descriptor as cuda_descriptor, compiler as cuda_compiler
                 from numba.cuda.target import CUDACallConv
 
@@ -1736,6 +1802,15 @@ class openmp_region_start(ir.Stmt):
                 openmp_cuda_target._typingctx = typingctx_outlined
                 openmp_cuda_target._targetctx = device_target
                 self.fix_dispatchers(state_copy.typemap, typingctx_outlined, openmp_cuda_target)
+
+                dprint_func_ir(outlined_ir, "outlined_ir before replace np.empty")
+                replace_np_empty_with_cuda_shared(outlined_ir, state_copy.typemap, calltypes, device_func_name)
+                dprint_func_ir(outlined_ir, "outlined_ir after replace np.empty")
+
+                #breakpoint()
+                #tfnty = device_target.typing_context.resolve_value_type(omp_shared_array)
+                #tsig = tfnty.get_call_type(device_target.typing_context, (types.IntegerLiteral(7), types.DType(types.float32)), {})
+                #timpl = device_target.get_function(tfnty, tsig)
             else:
                 raise NotImplementedError("Unsupported OpenMP device number")
 
@@ -1843,6 +1918,7 @@ class openmp_region_start(ir.Stmt):
                     print("target_elf:", type(target_elf), len(target_elf))
                     sys.stdout.flush()
             elif selected_device == 1:
+                target_extension._active_context.target = orig_target
                 import numba.cuda.cudadrv.libs as cudalibs
                 libdevice_path = cudalibs.get_libdevice()
                 # Explicitly trigger post_lowering_openmp on device code since
@@ -5819,15 +5895,17 @@ def create_native_np_copy(arg_typ):
 def omp_shared_array(size, dtype):
     return np.empty(size, dtype=dtype)
 
-@overload(omp_shared_array, target='cpu')
+@overload(omp_shared_array, target='cpu', inline='always', prefer_literal=True)
 def omp_shared_array_overload(size, dtype):
+    breakpoint()
     assert isinstance(size, types.IntegerLiteral)
     def impl(size, dtype):
         return np.empty(size, dtype=dtype)
     return impl
 
-@overload(omp_shared_array, target='cuda')
+@overload(omp_shared_array, target='cuda', inline='always', prefer_literal=True)
 def omp_shared_array_overload(size, dtype):
+    breakpoint()
     assert isinstance(size, types.IntegerLiteral)
     def impl(size, dtype):
         return numba_cuda.shared.array(size, dtype)
