@@ -3082,6 +3082,12 @@ class OpenmpVisitor(Transformer):
                 if isinstance(stmt, ir.Assign) and isinstance(stmt.value, ir.Const) and stmt.target.name in privates:
                     stmt.value.use_literal_type = False
 
+    def fix_empty_header(self, block, label):
+        if len(block.body) == 1:
+            assert isinstance(block.body[0], ir.Jump)
+            return self.blocks[block.body[0].target], block.body[0].target
+        return block, label
+
     def prepare_for_directive(self, clauses, vars_in_explicit_clauses, before_start, after_start, start_tags, end_tags, scope):
         start_tags = clauses
         call_table, _ = get_call_table(self.blocks)
@@ -3113,6 +3119,7 @@ class OpenmpVisitor(Transformer):
 
         collapse_tags = get_tags_of_type(clauses, "QUAL.OMP.COLLAPSE")
         new_stmts_for_iterspace = []
+        collapse_iterspace_block = set()
         if len(collapse_tags) > 0:
             # Limit all_loops to just loops within the openmp region.
             all_loops = get_loops_in_region(all_loops)
@@ -3121,7 +3128,9 @@ class OpenmpVisitor(Transformer):
             # Remove collapse tags from clauses so they don't go to LLVM pass.
             clauses[:] = [x for x in clauses if x not in collapse_tags]
             # Add top level loop to loop_order list.
-            loop_order = [loops[0]]
+            loop_order = list(filter_nested_loops(cfg, all_loops))
+            if len(loop_order) != 1:
+                raise ParallelForWrongLoopCount(f"OpenMP parallel for region must have only one top-level loop at line {self.loc}.")
             # Determine how many nested loops we need to process.
             collapse_value = collapse_tag.arg - 1
             # Make sure initial collapse value was >= 2.
@@ -3142,6 +3151,8 @@ class OpenmpVisitor(Transformer):
                 # Delete this loop from all_loops.
                 del all_loops[loop_order[-1].header]
 
+            if config.DEBUG_OPENMP >= 2:
+                print("loop_order:", loop_order)
             stmts_to_retain = []
             loop_bounds = []
             for loop in loop_order:
@@ -3150,7 +3161,8 @@ class OpenmpVisitor(Transformer):
                 loop_header = loop.header
                 loop_entry_block = self.blocks[loop_entry]
                 loop_exit_block = self.blocks[loop_exit]
-                loop_header_block = self.blocks[loop_header]
+                loop_header_block, _ = self.fix_empty_header(self.blocks[loop_header], loop_header)
+
                 # Copy all stmts from the loop entry block up to the ir.Global
                 # for range.
                 for entry_block_index, stmt in enumerate(loop_entry_block.body):
@@ -3183,7 +3195,8 @@ class OpenmpVisitor(Transformer):
             for loop in loop_order[:-1]:
                 # Change the unneeded headers to just jump to the next block.
                 loop_header = loop.header
-                loop_header_block = self.blocks[loop_header]
+                loop_header_block, real_loop_header = self.fix_empty_header(self.blocks[loop_header], loop_header)
+                collapse_iterspace_block.add(real_loop_header)
                 loop_header_block.body[-1] = ir.Jump(loop_header_block.body[-1].truebr, loop_header_block.body[-1].loc)
                 last_eliminated_loop_header_block = loop_header_block
                 self.body_blocks = [x for x in self.body_blocks if x not in loop.entries]
@@ -3199,7 +3212,7 @@ class OpenmpVisitor(Transformer):
             last_loop_header = last_loop.header
             last_loop_entry_block = self.blocks[last_loop_entry]
             last_loop_exit_block = self.blocks[last_loop_exit]
-            last_loop_header_block = self.blocks[last_loop_header]
+            last_loop_header_block, _ = self.fix_empty_header(self.blocks[last_loop_header], loop_header)
             last_loop_first_body_block = last_loop_header_block.body[-1].truebr
             self.blocks[last_loop_first_body_block].body = stmts_to_retain + self.blocks[last_loop_first_body_block].body
             last_loop_header_block.body[-1].falsebr = list(loop_order[0].exits)[0]
@@ -3258,6 +3271,11 @@ class OpenmpVisitor(Transformer):
             all_loops = cfg.loops()
             loops = get_loops_in_region(all_loops)
             loops = list(filter_nested_loops(cfg, loops))
+            if config.DEBUG_OPENMP >= 2:
+                print("loops after collapse:", loops)
+            if config.DEBUG_OPENMP >= 1:
+                print("blocks after collapse", self.blk_start, self.blk_end)
+                dump_blocks(self.blocks)
 
         def _get_loop_kind(func_var, call_table):
             if func_var not in call_table:
@@ -3279,6 +3297,7 @@ class OpenmpVisitor(Transformer):
         loop_blocks_for_io_minus_entry = loop_blocks_for_io - {entry}
         non_loop_blocks = set(self.body_blocks)
         non_loop_blocks.difference_update(loop_blocks_for_io)
+        non_loop_blocks.difference_update(collapse_iterspace_block)
         #non_loop_blocks.difference_update({exit})
 
         if config.DEBUG_OPENMP >= 1:
