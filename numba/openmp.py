@@ -702,6 +702,8 @@ def copy_one(x, calltypes):
         return ret
     elif isinstance(x, ir.DelAttr):
         return ir.DelAttr(copy_one(x.target, calltypes), copy_one(x.attr, calltypes), copy_one(x.loc, calltypes))
+    elif isinstance(x, types.Type):
+        return x # Don't copy types.
     print("Failed to handle the following type when copying target IR.", type(x), x)
     assert False
 
