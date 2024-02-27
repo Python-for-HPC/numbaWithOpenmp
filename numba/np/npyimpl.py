@@ -243,10 +243,10 @@ def _build_array(context, builder, array_ty, input_types, inputs):
     ONE = make_intp_const(1)
 
     src_shape = cgutils.alloca_once(builder, intp_ty, array_ty.ndim,
-                                    "src_shape")
+                                    ".src_shape")
     dest_ndim = make_intp_const(array_ty.ndim)
     dest_shape = cgutils.alloca_once(builder, intp_ty, array_ty.ndim,
-                                     "dest_shape")
+                                     ".dest_shape")
     dest_shape_addrs = tuple(cgutils.gep_inbounds(builder, dest_shape, index)
                              for index in range(array_ty.ndim))
 
