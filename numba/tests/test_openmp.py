@@ -2614,6 +2614,23 @@ class TestOpenmpTarget(TestOpenmpBase):
     def __init__(self, *args):
         TestOpenmpBase.__init__(self, *args)
 
+    # How to check for nowait?
+    # Currently checks only compilation.
+    # Numba optimizes the whole target away? This runs too fast.
+    def target_nowait(self, device):
+        target_pragma = f"target nowait device({device})"
+
+        @njit
+        def test_impl():
+            with openmp(target_pragma):
+                a = 0
+                for i in range(1000000):
+                    for j in range(1000000):
+                        for k in range(1000000):
+                            a += math.sqrt(i)+math.sqrt(j)+math.sqrt(k)
+
+        test_impl()
+
     def target_nest_parallel_default_threadlimit(self, device):
         target_pragma = f"target device({device}) map(from: teams, threads)"
 
