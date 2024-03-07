@@ -464,7 +464,8 @@ class Lower(BaseLower):
             pass
 
     def lower_inst(self, inst):
-        #print("lower_inst:", inst)
+        if config.DEBUG_OPENMP >= 2:
+            print("lower_inst:", inst)
         # Set debug location for all subsequent LL instructions
         self.debuginfo.mark_location(self.builder, self.loc.line)
         self.debug_print(str(inst))
