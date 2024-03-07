@@ -1925,6 +1925,7 @@ class openmp_region_start(ir.Stmt):
                 import numba.cuda.cudadrv.libs as cudalibs
                 from numba.cuda.cudadrv import driver
                 from numba.core.llvm_bindings import create_pass_manager_builder
+                from numba.cuda.codegen import CUDA_TRIPLE
                 class OpenMPCUDACodegen:
                     def __init__(self):
                         self.cc = cudaapi.get_current_device().compute_capability
@@ -1940,6 +1941,8 @@ class openmp_region_start(ir.Stmt):
                         self.libs_mod.link_in(libomptarget_mod)
                         # Initialize asm printers to codegen ptx.
                         ll.initialize_all_asmprinters()
+                        target = ll.Target.from_triple(CUDA_TRIPLE)
+                        self.tm = target.create_target_machine(cpu=self.sm, opt=3)
 
                     def _get_target_image_in_memory(self, mod, filename_prefix):
                         if config.DEBUG_OPENMP_LLVM_PASS >= 1:
@@ -1968,15 +1971,13 @@ class openmp_region_start(ir.Stmt):
                             with open(filename_prefix + "-intrinsics_omp-linked.ll", "w") as f:
                                 f.write(str(mod))
 
-                        # Run passes for optimization, including target-specific passes.:1963,
-                        target = ll.Target.from_triple(mod.triple)
-                        tm = target.create_target_machine(cpu=omp_cuda_cg.sm, opt=3)
+                        # Run passes for optimization, including target-specific passes.
                         # Run function passes.
                         with ll.create_function_pass_manager(mod) as pm:
                             with create_pass_manager_builder(opt=3, loop_vectorize=True, slp_vectorize=True) as pmb:
-                                tm.adjust_pass_manager(pmb)
+                                self.tm.adjust_pass_manager(pmb)
                                 pmb.populate(pm)
-                            tm.add_analysis_passes(pm)
+                            self.tm.add_analysis_passes(pm)
                             for func in mod.functions:
                                 pm.initialize()
                                 pm.run(func)
@@ -1985,9 +1986,9 @@ class openmp_region_start(ir.Stmt):
                         # Run module passes.
                         with ll.create_module_pass_manager() as pm:
                             with create_pass_manager_builder(opt=3, loop_vectorize=True, slp_vectorize=True) as pmb:
-                                tm.adjust_pass_manager(pmb)
+                                self.tm.adjust_pass_manager(pmb)
                                 pmb.populate(pm)
-                            tm.add_analysis_passes(pm)
+                            self.tm.add_analysis_passes(pm)
                             pm.run(mod)
 
                         if config.DEBUG_OPENMP_LLVM_PASS >= 1:
@@ -1996,7 +1997,7 @@ class openmp_region_start(ir.Stmt):
                                 f.write(str(mod))
 
                         # Generate ptx assemlby.
-                        ptx = tm.emit_assembly(mod)
+                        ptx = self.tm.emit_assembly(mod)
 
                         if config.DEBUG_OPENMP_LLVM_PASS >= 1:
                             with open(filename_prefix + "-intrinsics_omp-linked-opt.s", "w") as f:
