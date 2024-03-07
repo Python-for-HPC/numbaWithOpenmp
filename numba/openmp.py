@@ -32,6 +32,7 @@ from numba.core.datamodel.registry import register_default as model_register
 from numba.core.datamodel.registry import default_manager as model_manager
 from numba.core.datamodel.models import OpaqueModel
 from numba.core.types.functions import Dispatcher
+from numba.np.ufunc import array_exprs
 from cffi import FFI
 import llvmlite.binding as ll
 import llvmlite.ir as lir
@@ -924,6 +925,7 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix):
         print("starting replace_np_empty_with_cuda_shared")
     outlined_ir = outlined_ir.blocks
     converted_arrays = []
+    consts = {}
     for label in outlined_ir.keys():
         block = outlined_ir[label]
         new_block_body = []
@@ -932,6 +934,20 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix):
         while index < blen:
             stmt = block.body[index]
             if (isinstance(stmt, ir.Assign) and
+                isinstance(stmt.value, ir.Expr) and
+                stmt.value.op == 'call' and
+                stmt.value.func in converted_arrays):
+
+                size = consts[stmt.value.args[0].name].value
+                signature = calltypes[stmt.value]
+                signature_args = (types.scalars.IntegerLiteral(size), types.functions.NumberClass(signature.return_type.dtype))
+                del calltypes[stmt.value]
+                calltypes[stmt.value] = typing.templates.Signature(signature.return_type, signature_args, signature.recvr)
+                #calltypes[stmt.value] = typing.templates.Signature(signature.return_type, signature_args, signature.recvr, signature.pysig)
+            elif (isinstance(stmt, ir.Assign) and
+                  isinstance(stmt.value, ir.Const)):
+                consts[stmt.target.name] = stmt.value
+            elif (isinstance(stmt, ir.Assign) and
                 isinstance(stmt.value, ir.Global) and
                 isinstance(stmt.value.value, python_types.ModuleType) and
                 stmt.value.value.__name__ == "numpy"):
@@ -1806,9 +1822,13 @@ class openmp_region_start(ir.Stmt):
                 openmp_cuda_target._targetctx = device_target
                 self.fix_dispatchers(state_copy.typemap, typingctx_outlined, openmp_cuda_target)
 
+                typingctx_outlined.refresh()
+                device_target.refresh()
                 dprint_func_ir(outlined_ir, "outlined_ir before replace np.empty")
                 replace_np_empty_with_cuda_shared(outlined_ir, state_copy.typemap, calltypes, device_func_name)
                 dprint_func_ir(outlined_ir, "outlined_ir after replace np.empty")
+                #if 'arrayexpr' not in device_target.special_ops:
+                #    device_target.special_ops['arrayexpr'] = array_exprs._lower_array_expr
 
                 #breakpoint()
                 #tfnty = device_target.typing_context.resolve_value_type(omp_shared_array)
