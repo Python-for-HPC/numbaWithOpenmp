@@ -3113,13 +3113,13 @@ class OpenmpVisitor(Transformer):
     def add_explicits_to_start(self, scope, vars_in_explicit, explicit_clauses, gen_shared, start_tags, keep_alive):
         tags_for_enclosing = []
         start_tags.extend(explicit_clauses)
-        for var in vars_in_explicit:
-            if not is_private(vars_in_explicit[var].name):
-                evar = ir.Var(scope, var, self.loc)
-                evar_copy = scope.redefine("evar_copy_aets", self.loc)
-                keep_alive.append(ir.Assign(evar, evar_copy, self.loc))
-                #keep_alive.append(ir.Assign(evar, evar, self.loc))
-                tags_for_enclosing.append(openmp_tag("QUAL.OMP.PRIVATE", evar_copy))
+        #for var in vars_in_explicit:
+        #    if not is_private(vars_in_explicit[var].name):
+        #        evar = ir.Var(scope, var, self.loc)
+        #        evar_copy = scope.redefine("evar_copy_aets", self.loc)
+        #        keep_alive.append(ir.Assign(evar, evar_copy, self.loc))
+        #        #keep_alive.append(ir.Assign(evar, evar, self.loc))
+        #        tags_for_enclosing.append(openmp_tag("QUAL.OMP.PRIVATE", evar_copy))
         return tags_for_enclosing
 
     def flatten(self, all_clauses, start_block):
