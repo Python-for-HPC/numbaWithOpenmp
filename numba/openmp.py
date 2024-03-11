@@ -1974,7 +1974,7 @@ class openmp_region_start(ir.Stmt):
                         # Run passes for optimization, including target-specific passes.
                         # Run function passes.
                         with ll.create_function_pass_manager(mod) as pm:
-                            with create_pass_manager_builder(opt=3, loop_vectorize=True, slp_vectorize=True) as pmb:
+                            with create_pass_manager_builder(opt=3) as pmb:
                                 self.tm.adjust_pass_manager(pmb)
                                 pmb.populate(pm)
                             self.tm.add_analysis_passes(pm)
@@ -1985,7 +1985,7 @@ class openmp_region_start(ir.Stmt):
 
                         # Run module passes.
                         with ll.create_module_pass_manager() as pm:
-                            with create_pass_manager_builder(opt=3, loop_vectorize=True, slp_vectorize=True) as pmb:
+                            with create_pass_manager_builder(opt=3) as pmb:
                                 self.tm.adjust_pass_manager(pmb)
                                 pmb.populate(pm)
                             self.tm.add_analysis_passes(pm)
