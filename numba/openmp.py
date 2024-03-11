@@ -17,7 +17,8 @@ from numba.core.ir_utils import (
     get_definition,
     build_definitions,
     dead_code_elimination,
-    mk_unique_var
+    mk_unique_var,
+    find_topo_order
 )
 from numba.core.analysis import compute_cfg_from_blocks, compute_use_defs, compute_live_map, filter_nested_loops
 from numba.core import ir, config, types, typeinfer, cgutils, compiler, transforms, bytecode, typed_passes, imputils, typing, cpu, compiler_machinery
@@ -920,21 +921,42 @@ class OpenmpCallConv(MinimalCallConv):
             return self.normal.decode_arguments(builder, argtypes, func, name)
 
 
-def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix):
+def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix, typingctx):
     if config.DEBUG_OPENMP >= 2:
         print("starting replace_np_empty_with_cuda_shared")
     outlined_ir = outlined_ir.blocks
     converted_arrays = []
     consts = {}
-    for label in outlined_ir.keys():
+    topo_order = find_topo_order(outlined_ir)
+    mode = 0 # 0 = non-target region, 1 = target region, 2 = teams region, 3 = teams parallel region
+    for label in topo_order:
         block = outlined_ir[label]
         new_block_body = []
         blen = len(block.body)
         index = 0
         while index < blen:
             stmt = block.body[index]
-            if (isinstance(stmt, ir.Assign) and
+            if isinstance(stmt, openmp_region_start):
+                if "TARGET" in stmt.tags[0].name:
+                    assert mode == 0
+                    mode = 1
+                if "TEAMS" in stmt.tags[0].name and mode == 1:
+                    mode = 2
+                if "PARALLEL" in stmt.tags[0].name and mode == 2:
+                    mode = 3
+                new_block_body.append(stmt)
+            elif isinstance(stmt, openmp_region_end):
+                if mode == 3 and "PARALLEL" in stmt.tags[0].name:
+                    mode = 2
+                if mode == 2 and "TEAMS" in stmt.tags[0].name:
+                    mode = 1
+                if mode == 1 and "TARGET" in stmt.tags[0].name:
+                    mode = 0
+                new_block_body.append(stmt)
+            elif (isinstance(stmt, ir.Assign) and
                 isinstance(stmt.value, ir.Expr) and
+                # Fix calltype for the np.empty call to have literal as first
+                # arg and include explicit dtype.
                 stmt.value.op == 'call' and
                 stmt.value.func in converted_arrays):
 
@@ -944,9 +966,31 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix):
                 del calltypes[stmt.value]
                 calltypes[stmt.value] = typing.templates.Signature(signature.return_type, signature_args, signature.recvr)
                 #calltypes[stmt.value] = typing.templates.Signature(signature.return_type, signature_args, signature.recvr, signature.pysig)
+                afnty = typemap[stmt.value.func.name]
+                afnty.get_call_type(typingctx, signature_args, {})
+                if len(stmt.value.args) == 1:
+                    new_block_body.append(ir.Assign(
+                                            ir.Global("np", np, lhs.loc),
+                                            ir.Var(
+                                              lhs.scope,
+                                              mk_unique_var(".np_global"),
+                                              lhs.loc),
+                                            lhs.loc))
+                    typemap[new_block_body[-1].target.name] = types.Module(np)
+                    new_block_body.append(ir.Assign(
+                                            ir.Expr.getattr(new_block_body[-1].target, str(signature.return_type.dtype), lhs.loc),
+                                            ir.Var(
+                                              lhs.scope,
+                                              mk_unique_var(".np_dtype"),
+                                              lhs.loc),
+                                            lhs.loc))
+                    typemap[new_block_body[-1].target.name] = types.functions.NumberClass(signature.return_type.dtype)
+                    stmt.value.args.append(new_block_body[-1].target)
+                new_block_body.append(stmt)
             elif (isinstance(stmt, ir.Assign) and
                   isinstance(stmt.value, ir.Const)):
                 consts[stmt.target.name] = stmt.value
+                new_block_body.append(stmt)
             elif (isinstance(stmt, ir.Assign) and
                 isinstance(stmt.value, ir.Global) and
                 isinstance(stmt.value.value, python_types.ModuleType) and
@@ -958,14 +1002,15 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix):
                     isinstance(next_stmt.value, ir.Expr) and
                     next_stmt.value.value == lhs and
                     next_stmt.value.op == 'getattr' and
-                    next_stmt.value.attr == 'empty'):
+                    next_stmt.value.attr == 'empty' and
+                    mode > 0):
                     converted_arrays.append(next_stmt.target)
 
                     new_block_body.append(ir.Assign(
                                             ir.Global("numba", numba, lhs.loc),
                                             ir.Var(
                                               lhs.scope,
-                                              mk_unique_var("$cuda_shared_global"),
+                                              mk_unique_var(".cuda_shared_global"),
                                               lhs.loc),
                                             lhs.loc))
                     typemap[new_block_body[-1].target.name] = types.Module(numba)
@@ -973,18 +1018,36 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix):
                                             ir.Expr.getattr(new_block_body[-1].target, "cuda", lhs.loc),
                                             ir.Var(
                                               lhs.scope,
-                                              mk_unique_var("$cuda_shared_getattr"),
+                                              mk_unique_var(".cuda_shared_getattr"),
                                               lhs.loc),
                                             lhs.loc))
                     typemap[new_block_body[-1].target.name] = types.Module(numba.cuda)
-                    new_block_body.append(ir.Assign(
-                                            ir.Expr.getattr(new_block_body[-1].target, "shared", lhs.loc),
-                                            ir.Var(
-                                              lhs.scope,
-                                              mk_unique_var("$cuda_shared_getattr"),
-                                              lhs.loc),
-                                            lhs.loc))
-                    typemap[new_block_body[-1].target.name] = types.Module(numba.cuda.stubs.shared)
+
+                    if mode == 1:
+                        raise NotImplementedError("np.empty used in non-teams or parallel target region")
+                        pass
+                    elif mode == 2 or mode == 3:
+                        new_block_body.append(ir.Assign(
+                                                ir.Expr.getattr(new_block_body[-1].target, "shared", lhs.loc),
+                                                ir.Var(
+                                                  lhs.scope,
+                                                  mk_unique_var(".cuda_shared_getattr"),
+                                                  lhs.loc),
+                                                lhs.loc))
+                        typemap[new_block_body[-1].target.name] = types.Module(numba.cuda.stubs.shared)
+                    elif mode == 3:
+                        new_block_body.append(ir.Assign(
+                                                ir.Expr.getattr(new_block_body[-1].target, "local", lhs.loc),
+                                                ir.Var(
+                                                  lhs.scope,
+                                                  mk_unique_var(".cuda_local_getattr"),
+                                                  lhs.loc),
+                                                lhs.loc))
+                        typemap[new_block_body[-1].target.name] = types.Module(numba.cuda.stubs.local)
+
+                    afnty = typingctx.resolve_getattr(typemap[new_block_body[-1].target.name], "array")
+                    del typemap[next_stmt.target.name]
+                    typemap[next_stmt.target.name] = afnty
                     new_block_body.append(ir.Assign(
                                             ir.Expr.getattr(new_block_body[-1].target, "array", lhs.loc),
                                             next_stmt.target,
@@ -1825,7 +1888,7 @@ class openmp_region_start(ir.Stmt):
                 typingctx_outlined.refresh()
                 device_target.refresh()
                 dprint_func_ir(outlined_ir, "outlined_ir before replace np.empty")
-                replace_np_empty_with_cuda_shared(outlined_ir, state_copy.typemap, calltypes, device_func_name)
+                replace_np_empty_with_cuda_shared(outlined_ir, state_copy.typemap, calltypes, device_func_name, typingctx_outlined)
                 dprint_func_ir(outlined_ir, "outlined_ir after replace np.empty")
                 #if 'arrayexpr' not in device_target.special_ops:
                 #    device_target.special_ops['arrayexpr'] = array_exprs._lower_array_expr
