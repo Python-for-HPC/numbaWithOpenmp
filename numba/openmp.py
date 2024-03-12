@@ -969,6 +969,12 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix, t
                 afnty = typemap[stmt.value.func.name]
                 afnty.get_call_type(typingctx, signature_args, {})
                 if len(stmt.value.args) == 1:
+                    dtype_to_use = signature.return_type.dtype
+                    if len(stmt.value.kws) > 0:
+                        for kwarg in stmt.value.kws:
+                            if kwarg[0] == 'dtype':
+                                stmt.value.kws = list(filter(lambda x: x[0] != 'dtype', stmt.value.kws))
+                                break
                     new_block_body.append(ir.Assign(
                                             ir.Global("np", np, lhs.loc),
                                             ir.Var(
@@ -978,7 +984,7 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix, t
                                             lhs.loc))
                     typemap[new_block_body[-1].target.name] = types.Module(np)
                     new_block_body.append(ir.Assign(
-                                            ir.Expr.getattr(new_block_body[-1].target, str(signature.return_type.dtype), lhs.loc),
+                                            ir.Expr.getattr(new_block_body[-1].target, str(dtype_to_use), lhs.loc),
                                             ir.Var(
                                               lhs.scope,
                                               mk_unique_var(".np_dtype"),
