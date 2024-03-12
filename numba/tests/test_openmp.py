@@ -3775,6 +3775,63 @@ class TestOpenmpTarget(TestOpenmpBase):
         test_impl()
         input("ok?")
 
+    def target_teams_shared_array(self, device):
+        target_pragma = f"target teams num_teams(10) map(tofrom: outside) device({device})"
+        @njit
+        def test_impl():
+            outside = np.zeros(10, dtype=np.int32)
+
+            with openmp (target_pragma):
+                team_shared_array = np.empty(10, dtype=np.int32)
+                for i in range(10):
+                    team_shared_array[i] = omp_get_team_num()
+
+                lasum = 0
+                for i in range(10):
+                    lasum += team_shared_array[i]
+                outside[omp_get_team_num()] = lasum
+
+            return outside
+
+        r = test_impl()
+        np.testing.assert_array_equal(r, np.arange(10) * 10)
+
+    def target_teams_parallel_shared_array(self, device):
+        target_pragma = f"target teams num_teams(10) map(tofrom: outside) device({device})"
+        @njit
+        def test_impl():
+            outside = np.zeros(10, dtype=np.int32)
+
+            with openmp (target_pragma):
+                team_shared_array = np.empty(10, dtype=np.int32)
+                outside_parallel = np.empty(10, dtype=np.int32)
+                with openmp ("parallel num_threads(32)"):
+                    thread_shared_array = np.empty(32, dtype=np.int32)
+                    for i in range(32):
+                        thread_shared_array[i] = omp_get_thread_num()
+
+                    lasum = 0
+                    for i in range(32):
+                        lasum += thread_shared_array[i]
+                    outside_parallel[omp_get_thread_num()] = lasum
+
+                for i in range(10):
+                    if outside_parallel[i] == i * 32:
+                        team_shared_array[i] = omp_get_team_num()
+                    else:
+                        team_shared_array[i] = 0
+
+                lasum = 0
+                for i in range(10):
+                    lasum += team_shared_array[i]
+                outside[omp_get_team_num()] = lasum
+
+            return outside
+
+        r = test_impl()
+        np.testing.assert_array_equal(r, np.arange(10) * 10)
+
+
 for memberName in dir(TestOpenmpTarget):
     if memberName.startswith("target"):
         test_func = getattr(TestOpenmpTarget, memberName)
