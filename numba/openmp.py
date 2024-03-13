@@ -931,13 +931,16 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix, t
     consts = {}
     topo_order = find_topo_order(outlined_ir)
     mode = 0 # 0 = non-target region, 1 = target region, 2 = teams region, 3 = teams parallel region
+    # For each block in topological order...
     for label in topo_order:
         block = outlined_ir[label]
         new_block_body = []
         blen = len(block.body)
         index = 0
+        # For each statement in the block.
         while index < blen:
             stmt = block.body[index]
+            # Adjust mode based on the start of an openmp region.
             if isinstance(stmt, openmp_region_start):
                 if "TARGET" in stmt.tags[0].name:
                     assert mode == 0
@@ -947,6 +950,7 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix, t
                 if "PARALLEL" in stmt.tags[0].name and mode == 2:
                     mode = 3
                 new_block_body.append(stmt)
+            # Adjust mode based on the end of an openmp region.
             elif isinstance(stmt, openmp_region_end):
                 if mode == 3 and "PARALLEL" in stmt.tags[0].name:
                     mode = 2
@@ -955,23 +959,34 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix, t
                 if mode == 1 and "TARGET" in stmt.tags[0].name:
                     mode = 0
                 new_block_body.append(stmt)
+            # Fix calltype for the np.empty call to have literal as first
+            # arg and include explicit dtype.
             elif (isinstance(stmt, ir.Assign) and
                 isinstance(stmt.value, ir.Expr) and
-                # Fix calltype for the np.empty call to have literal as first
-                # arg and include explicit dtype.
                 stmt.value.op == 'call' and
                 stmt.value.func in converted_arrays):
 
-                size = consts[stmt.value.args[0].name].value
-                signature = calltypes[stmt.value]
-                signature_args = (types.scalars.IntegerLiteral(size), types.functions.NumberClass(signature.return_type.dtype))
-                del calltypes[stmt.value]
-                calltypes[stmt.value] = typing.templates.Signature(signature.return_type, signature_args, signature.recvr)
-                #calltypes[stmt.value] = typing.templates.Signature(signature.return_type, signature_args, signature.recvr, signature.pysig)
+                size = consts[stmt.value.args[0].name]
+                # The 1D case where the dimension size is directly a const.
+                if isinstance(size, ir.Const):
+                    size = size.value
+                    signature = calltypes[stmt.value]
+                    signature_args = (types.scalars.IntegerLiteral(size), types.functions.NumberClass(signature.return_type.dtype))
+                    del calltypes[stmt.value]
+                    calltypes[stmt.value] = typing.templates.Signature(signature.return_type, signature_args, signature.recvr)
+                # The 2D+ case where the dimension sizes are in a tuple.
+                elif isinstance(size, ir.Expr):
+                    signature = calltypes[stmt.value]
+                    signature_args = (types.Tuple([types.scalars.IntegerLiteral(consts[x.name].value) for x in size.items]), types.functions.NumberClass(signature.return_type.dtype))
+                    del calltypes[stmt.value]
+                    calltypes[stmt.value] = typing.templates.Signature(signature.return_type, signature_args, signature.recvr)
+
+                # These lines will force the function to be in the data structures that lowering uses.
                 afnty = typemap[stmt.value.func.name]
                 afnty.get_call_type(typingctx, signature_args, {})
                 if len(stmt.value.args) == 1:
                     dtype_to_use = signature.return_type.dtype
+                    # If dtype in kwargs then remove it.
                     if len(stmt.value.kws) > 0:
                         for kwarg in stmt.value.kws:
                             if kwarg[0] == 'dtype':
@@ -994,11 +1009,19 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix, t
                                             lhs.loc))
                     typemap[new_block_body[-1].target.name] = types.functions.NumberClass(signature.return_type.dtype)
                     stmt.value.args.append(new_block_body[-1].target)
+                else:
+                    raise NotImplementedError("np.empty having more than shape and dtype arguments not yet supported.")
                 new_block_body.append(stmt)
+            # Keep track of variables assigned from consts or from build_tuples make up exclusively of
+            # variables assigned from consts.
             elif (isinstance(stmt, ir.Assign) and
-                  isinstance(stmt.value, ir.Const)):
+                 (isinstance(stmt.value, ir.Const) or
+                 (isinstance(stmt.value, ir.Expr) and
+                  stmt.value.op == 'build_tuple' and
+                  all([x.name in consts for x in stmt.value.items])))):
                 consts[stmt.target.name] = stmt.value
                 new_block_body.append(stmt)
+            # If we see a global for the numpy module.
             elif (isinstance(stmt, ir.Assign) and
                 isinstance(stmt.value, ir.Global) and
                 isinstance(stmt.value.value, python_types.ModuleType) and
@@ -1006,14 +1029,18 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix, t
                 lhs = stmt.target
                 index += 1
                 next_stmt = block.body[index]
+                # And the next statement is a getattr for the name "empty" on the numpy module
+                # and we are in a target region.
                 if (isinstance(next_stmt, ir.Assign) and
                     isinstance(next_stmt.value, ir.Expr) and
                     next_stmt.value.value == lhs and
                     next_stmt.value.op == 'getattr' and
                     next_stmt.value.attr == 'empty' and
                     mode > 0):
+                    # Remember that we are converting this np.empty into a CUDA call.
                     converted_arrays.append(next_stmt.target)
 
+                    # Create numba.cuda module variable.
                     new_block_body.append(ir.Assign(
                                             ir.Global("numba", numba, lhs.loc),
                                             ir.Var(
@@ -1035,6 +1062,7 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix, t
                         raise NotImplementedError("np.empty used in non-teams or parallel target region")
                         pass
                     elif mode == 2:
+                        # Create numba.cuda.shared module variable.
                         new_block_body.append(ir.Assign(
                                                 ir.Expr.getattr(new_block_body[-1].target, "shared", lhs.loc),
                                                 ir.Var(
@@ -1044,6 +1072,7 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix, t
                                                 lhs.loc))
                         typemap[new_block_body[-1].target.name] = types.Module(numba.cuda.stubs.shared)
                     elif mode == 3:
+                        # Create numba.cuda.local module variable.
                         new_block_body.append(ir.Assign(
                                                 ir.Expr.getattr(new_block_body[-1].target, "local", lhs.loc),
                                                 ir.Var(
@@ -1053,9 +1082,12 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix, t
                                                 lhs.loc))
                         typemap[new_block_body[-1].target.name] = types.Module(numba.cuda.stubs.local)
 
+                    # Change the typemap for the original function variable for np.empty.
                     afnty = typingctx.resolve_getattr(typemap[new_block_body[-1].target.name], "array")
                     del typemap[next_stmt.target.name]
                     typemap[next_stmt.target.name] = afnty
+                    # Change the variable that previously was assigned np.empty to now be one of
+                    # the CUDA array allocators.
                     new_block_body.append(ir.Assign(
                                             ir.Expr.getattr(new_block_body[-1].target, "array", lhs.loc),
                                             next_stmt.target,
