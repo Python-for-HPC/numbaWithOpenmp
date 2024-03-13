@@ -47,7 +47,7 @@ from numba.openmp import (omp_set_num_threads, omp_get_thread_num,
                     ParallelForExtraCode, ParallelForWrongLoopCount,
                     omp_in_parallel, omp_get_level, omp_get_active_level,
                     omp_get_team_size, omp_get_ancestor_thread_num,
-                    omp_get_team_num, omp_get_num_teams, omp_in_final)
+                    omp_get_team_num, omp_get_num_teams, omp_in_final, omp_shared_array)
 import cmath
 import unittest
 
@@ -3795,6 +3795,52 @@ class TestOpenmpTarget(TestOpenmpBase):
 
         r = test_impl()
         np.testing.assert_array_equal(r, np.arange(10) * 10)
+
+    def target_teams_shared_array_2d(self, device):
+        target_pragma = f"target teams num_teams(10) map(tofrom: a) device({device})"
+        @njit
+        def test_impl():
+            a = np.zeros((10, 2, 2), dtype=np.int32)
+
+            with openmp (target_pragma):
+                team_shared_array = np.empty((2, 2), dtype=np.int32)
+                team = omp_get_team_num()
+                for i in range(2):
+                    for j in range(2):
+                        team_shared_array[i, j] = team
+
+                for i in range(2):
+                    for j in range(2):
+                        a[team, i, j] = team_shared_array[i, j]
+            return a
+
+        a = test_impl()
+        expected = np.empty((10, 2, 2))
+        for i in range(10):
+            expected[i] = np.full((2,2), i)
+        np.testing.assert_array_equal(a, expected)
+
+    def target_local_array(self, device):
+        target_pragma = f"target teams num_teams(1) map(tofrom: a) device({device})"
+        @njit
+        def test_impl():
+            a = np.zeros((32, 10), dtype=np.int32)
+            with openmp(target_pragma):
+                with openmp("parallel num_threads(32)"):
+                    local_array = np.empty(10, dtype=np.int32)
+                    tid = omp_get_thread_num()
+                    for i in range(10):
+                        local_array[i] = tid
+                    for i in range(10):
+                        #a[tid, i] = tid
+                        a[tid, i] = local_array[i]
+            return a
+
+        a = test_impl()
+        expected = np.empty((32, 10), dtype=np.int32)
+        for i in range(32):
+            expected[i] = [i]*10
+        np.testing.assert_array_equal(a, expected)
 
     def target_teams_parallel_shared_array(self, device):
         target_pragma = f"target teams num_teams(10) map(tofrom: outside) device({device})"
