@@ -570,6 +570,8 @@ class openmp_tag(object):
     def __str__(self):
         return "openmp_tag(" + str(self.name) + "," + str(self.arg) + ")"
 
+    def __repr__(self):
+        return self.__str__()
 
 def openmp_tag_list_to_str(tag_list, lowerer, debug):
     tag_strs = [x.lower(lowerer, debug) for x in tag_list]
@@ -1032,7 +1034,7 @@ def replace_np_empty_with_cuda_shared(outlined_ir, typemap, calltypes, prefix, t
                     if mode == 1:
                         raise NotImplementedError("np.empty used in non-teams or parallel target region")
                         pass
-                    elif mode == 2 or mode == 3:
+                    elif mode == 2:
                         new_block_body.append(ir.Assign(
                                                 ir.Expr.getattr(new_block_body[-1].target, "shared", lhs.loc),
                                                 ir.Var(
@@ -1089,7 +1091,7 @@ class openmp_region_start(ir.Stmt):
                 self.normal_iv = tag.arg
         if config.DEBUG_OPENMP >= 1:
             print("tags:", self.tags)
-            print("tag_vars:", self.tag_vars)
+            print("tag_vars:", sorted(self.tag_vars))
         self.acq_res = False
         self.acq_rel = False
         self.alloca_queue = []
@@ -2977,10 +2979,10 @@ class OpenmpVisitor(Transformer):
         SSA form gets the same data clause.
         """
         if config.DEBUG_OPENMP >= 1:
-            print("remove_explicit start:", varset, vars_in_explicit_clauses)
+            print("remove_explicit start:", sorted(varset), sorted(vars_in_explicit_clauses))
         diff = set()
-        # For each variable inthe set.
-        for v in varset:
+        # For each variable in the set.
+        for v in sorted(varset):
             # Get the non-SSA form.
             flat = remove_ssa(v, scope, loc)
             # Skip non-SSA introduced variables (i.e., Python vars).
@@ -3001,7 +3003,7 @@ class OpenmpVisitor(Transformer):
         # Remove the vars from the set that we added a clause for.
         varset.difference_update(diff)
         if config.DEBUG_OPENMP >= 1:
-            print("remove_explicit end:", varset)
+            print("remove_explicit end:", sorted(varset))
 
     def remove_explicit_from_io_vars(self, inputs_to_region, def_but_live_out, private_to_region, vars_in_explicit_clauses, clauses, non_user_explicits, scope, loc):
         """Remove vars in explicit data clauses from the auto-determined vars.
@@ -3032,8 +3034,8 @@ class OpenmpVisitor(Transformer):
         inputs_to_region = live_map[self.blk_start]
         if config.DEBUG_OPENMP >= 1:
             print("live_map:", live_map)
-            print("inputs_to_region:", inputs_to_region, type(inputs_to_region))
-            print("selected blocks:", selected_blocks)
+            print("inputs_to_region:", sorted(inputs_to_region), type(inputs_to_region))
+            print("selected blocks:", sorted(selected_blocks))
         all_uses = set()
         all_defs = set()
         for label in selected_blocks:
@@ -3045,10 +3047,10 @@ class OpenmpVisitor(Transformer):
         private_to_region = all_defs.difference(inputs_to_region).difference(live_map[self.blk_end])
 
         if config.DEBUG_OPENMP >= 1:
-            print("all_uses:", all_uses)
-            print("inputs_to_region:", inputs_to_region)
-            print("private_to_region:", private_to_region)
-            print("def_but_live_out:", def_but_live_out)
+            print("all_uses:", sorted(all_uses))
+            print("inputs_to_region:", sorted(inputs_to_region))
+            print("private_to_region:", sorted(private_to_region))
+            print("def_but_live_out:", sorted(def_but_live_out))
         return inputs_to_region, def_but_live_out, private_to_region, live_map
 
     def get_explicit_vars(self, clauses):
@@ -3115,14 +3117,14 @@ class OpenmpVisitor(Transformer):
         if for_task is None:
             for_task = []
         if gen_shared:
-            for var_name in inputs_to_region:
+            for var_name in sorted(inputs_to_region):
                 if for_task != False and get_var_from_enclosing(for_task, var_name) != "QUAL.OMP.SHARED":
                     explicit_clauses.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", var_name))
                 else:
                     explicit_clauses.append(openmp_tag("QUAL.OMP.SHARED", var_name))
                 vars_in_explicit[var_name] = explicit_clauses[-1]
 
-            for var_name in def_but_live_out:
+            for var_name in sorted(def_but_live_out):
                 if for_task != False and get_var_from_enclosing(for_task, var_name) != "QUAL.OMP.SHARED":
                     explicit_clauses.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", var_name))
                 else:
@@ -3130,7 +3132,7 @@ class OpenmpVisitor(Transformer):
                 vars_in_explicit[var_name] = explicit_clauses[-1]
 
             # What to do below for task regions?
-            for var_name in private_to_region:
+            for var_name in sorted(private_to_region):
                 temp_var = ir.Var(scope, var_name, self.loc)
                 if not is_internal_var(temp_var):
                     #unver_var = temp_var.unversioned_name
@@ -3141,7 +3143,7 @@ class OpenmpVisitor(Transformer):
                     explicit_clauses.append(openmp_tag("QUAL.OMP.PRIVATE", var_name))
                     vars_in_explicit[var_name] = explicit_clauses[-1]
 
-        for var_name in private_to_region:
+        for var_name in sorted(private_to_region):
             temp_var = ir.Var(scope, var_name, self.loc)
             if is_internal_var(temp_var):
                 #unver_var = temp_var.unversioned_name
@@ -3155,20 +3157,20 @@ class OpenmpVisitor(Transformer):
     def make_implicit_explicit_target(self, scope, vars_in_explicit, explicit_clauses, gen_shared, inputs_to_region, def_but_live_out, private_to_region):
         #unversioned_privates = set() # we get rid of SSA on the first openmp region so no SSA forms should be here
         if gen_shared:
-            for var_name in inputs_to_region:
+            for var_name in sorted(inputs_to_region):
                 explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
                 vars_in_explicit[var_name] = explicit_clauses[-1]
-            for var_name in def_but_live_out:
+            for var_name in sorted(def_but_live_out):
                 explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
                 vars_in_explicit[var_name] = explicit_clauses[-1]
-            for var_name in private_to_region:
+            for var_name in sorted(private_to_region):
                 temp_var = ir.Var(scope, var_name, self.loc)
                 if not is_internal_var(temp_var):
                     explicit_clauses.append(openmp_tag("QUAL.OMP.PRIVATE", var_name))
                     #explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
                     vars_in_explicit[var_name] = explicit_clauses[-1]
 
-        for var_name in private_to_region:
+        for var_name in sorted(private_to_region):
             temp_var = ir.Var(scope, var_name, self.loc)
             if is_internal_var(temp_var):
                 explicit_clauses.append(openmp_tag("QUAL.OMP.TARGET.IMPLICIT" if user_defined_var(var_name) else "QUAL.OMP.PRIVATE", var_name))
@@ -4151,9 +4153,9 @@ class OpenmpVisitor(Transformer):
         common_keys = inputs_to_region.keys() & def_but_live_out.keys()
         in_def_live_out = {inputs_to_region[k]:def_but_live_out[k] for k in common_keys}
         if config.DEBUG_OPENMP >= 1:
-            print("inputs_to_region:", inputs_to_region)
-            print("def_but_live_out:", def_but_live_out)
-            print("in_def_live_out:", in_def_live_out)
+            print("inputs_to_region:", sorted(inputs_to_region))
+            print("def_but_live_out:", sorted(def_but_live_out))
+            print("in_def_live_out:", sorted(in_def_live_out))
 
         reset = []
         for k,v in in_def_live_out.items():
@@ -4470,7 +4472,7 @@ class OpenmpVisitor(Transformer):
         # Get a dict mapping variables explicitly mentioned in the data clauses above to their openmp_tag.
         vars_in_explicit_clauses, explicit_privates, non_user_explicits = self.get_explicit_vars(clauses)
         if config.DEBUG_OPENMP >= 1:
-            print("vars_in_explicit_clauses:", vars_in_explicit_clauses, type(vars_in_explicit_clauses))
+            print("vars_in_explicit_clauses:", sorted(vars_in_explicit_clauses), type(vars_in_explicit_clauses))
             for v in clauses:
                 print("vars_in_explicit clauses first:", v)
 
@@ -4499,9 +4501,9 @@ class OpenmpVisitor(Transformer):
         live_out_copy = copy.copy(def_but_live_out)
 
         if config.DEBUG_OPENMP >= 1:
-            print("inputs_to_region:", inputs_to_region)
-            print("def_but_live_out:", def_but_live_out)
-            print("private_to_region:", private_to_region)
+            print("inputs_to_region:", sorted(inputs_to_region))
+            print("def_but_live_out:", sorted(def_but_live_out))
+            print("private_to_region:", sorted(private_to_region))
             for v in clauses:
                 print("clause after find_io_vars:", v)
 
@@ -4522,9 +4524,9 @@ class OpenmpVisitor(Transformer):
                 print("non_user_explicits before:", k, v)
 
         if config.DEBUG_OPENMP >= 1:
-            print("inputs_to_region after remove_explicit:", inputs_to_region)
-            print("def_but_live_out after remove_explicit:", def_but_live_out)
-            print("private_to_region after remove_explicit:", private_to_region)
+            print("inputs_to_region after remove_explicit:", sorted(inputs_to_region))
+            print("def_but_live_out after remove_explicit:", sorted(def_but_live_out))
+            print("private_to_region after remove_explicit:", sorted(private_to_region))
 
         if not default_shared and (
             has_user_defined_var(inputs_to_region) or
@@ -4534,9 +4536,9 @@ class OpenmpVisitor(Transformer):
             user_defined_def_live = get_user_defined_var(def_but_live_out)
             user_defined_private = get_user_defined_var(private_to_region)
             if config.DEBUG_OPENMP >= 1:
-                print("inputs users:", user_defined_inputs)
-                print("def users:", user_defined_def_live)
-                print("private users:", user_defined_private)
+                print("inputs users:", sorted(user_defined_inputs))
+                print("def users:", sorted(user_defined_def_live))
+                print("private users:", sorted(user_defined_private))
             raise UnspecifiedVarInDefaultNone("Variables with no data env clause in OpenMP region: " + str(user_defined_inputs.union(user_defined_def_live).union(user_defined_private)))
 
         if for_target:
@@ -4564,11 +4566,11 @@ class OpenmpVisitor(Transformer):
         clause_privates = self.get_clause_privates(clauses, live_out_copy, scope, self.loc)
 
         if config.DEBUG_OPENMP >= 1:
-            print("clause_privates:", clause_privates, type(clause_privates))
-            print("inputs_to_region:", inputs_to_region)
-            print("def_but_live_out:", def_but_live_out)
-            print("live_out_copy:", live_out_copy)
-            print("private_to_region:", private_to_region)
+            print("clause_privates:", sorted(clause_privates), type(clause_privates))
+            print("inputs_to_region:", sorted(inputs_to_region))
+            print("def_but_live_out:", sorted(def_but_live_out))
+            print("live_out_copy:", sorted(live_out_copy))
+            print("private_to_region:", sorted(private_to_region))
 
         keep_alive = []
         tags_for_enclosing = self.add_explicits_to_start(scope, vars_in_explicit_clauses, clauses, True, start_tags, keep_alive)

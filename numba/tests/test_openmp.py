@@ -3542,6 +3542,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         assert(b1 == n1)
         assert(b2 == n2)
 
+    @unittest.skip("Creates map entries that aren't cleared.")
     def target_enter_exit_data_array_sections(self, device):
         target_enter_pragma = f"target enter data map(to: a[0:3], b[bstart:bstop]) device({device})"
         target_exit_pragma = f"target exit data map(from: a[0:3]) device({device})"
@@ -3729,7 +3730,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         @njit
         def test_impl():
             s = np.float32(42.0)
-            r = np.float(0.0)
+            r = np.float32(0.0)
             with openmp(target_pragma):
                 with openmp("parallel firstprivate(s)"):
                     threadno = omp_get_thread_num()
@@ -3744,7 +3745,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         @njit
         def test_impl():
             s = np.float32(42.0)
-            r = np.float(0.0)
+            r = np.float32(0.0)
             with openmp(target_pragma):
                 with openmp("teams firstprivate(s)"):
                     teamno = omp_get_thread_num()
