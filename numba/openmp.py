@@ -794,8 +794,6 @@ class OpenmpCallConv(MinimalCallConv):
             if isinstance(callee.function_type, lir.FunctionType):
                 if config.DEBUG_OPENMP >= 2:
                     print("call_function:", callee, callee.name, type(callee), argtys, args)
-                #if "compute_velocity" in callee.name:
-                #    breakpoint()
                 ft = callee.function_type
                 retty = ft.return_type
                 arginfo = self._get_arg_packer(argtys)
@@ -1508,6 +1506,8 @@ class openmp_region_start(ir.Stmt):
         elif target_num is not None and self.target_copy != True:
             var_table = get_name_var_table(lowerer.func_ir.blocks)
 
+            ompx_attrs = list(filter(lambda x: x.name == "QUAL.OMP.OMPX_ATTRIBUTE", self.tags))
+            self.tags = list(filter(lambda x: x.name != "QUAL.OMP.OMPX_ATTRIBUTE", self.tags))
             selected_device = 0
             device_tags = get_tags_of_type(self.tags, "QUAL.OMP.DEVICE")
             if len(device_tags) > 0:
@@ -1932,11 +1932,6 @@ class openmp_region_start(ir.Stmt):
                 dprint_func_ir(outlined_ir, "outlined_ir after replace np.empty")
                 #if 'arrayexpr' not in device_target.special_ops:
                 #    device_target.special_ops['arrayexpr'] = array_exprs._lower_array_expr
-
-                #breakpoint()
-                #tfnty = device_target.typing_context.resolve_value_type(omp_shared_array)
-                #tsig = tfnty.get_call_type(device_target.typing_context, (types.IntegerLiteral(7), types.DType(types.float32)), {})
-                #timpl = device_target.get_function(tfnty, tsig)
             else:
                 raise NotImplementedError("Unsupported OpenMP device number")
 
@@ -1984,7 +1979,6 @@ class openmp_region_start(ir.Stmt):
                                        is_lifted_loop=False,  # tried this as True since code derived from loop lifting code but it goes through the pipeline twice and messes things up
                                        parent_state=state_copy)
 
-            #breakpoint()
             if selected_device == 0:
                 #from numba.cpython import printimpl
                 ##subtarget.install_registry(printimpl.registry)
@@ -2126,7 +2120,10 @@ class openmp_region_start(ir.Stmt):
                             with open(filename_prefix + "-intrinsics_omp-linked-opt.s", "w") as f:
                                 f.write(str(ptx))
 
-                        linker = driver.Linker.new(cc=self.cc)
+                        linker_kwargs = {}
+                        for x in ompx_attrs:
+                            linker_kwargs[x.arg[0]] = tuple(x.arg[1]) if len(x.arg[1]) > 1 else x.arg[1][0]
+                        linker = driver.Linker.new(cc=self.cc, **linker_kwargs)
                         linker.add_ptx(ptx.encode())
                         cubin = linker.complete()
 
@@ -5325,6 +5322,21 @@ class OpenmpVisitor(Transformer):
             args[0].append(args[1])
             return args[0]
 
+    def number_list(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit number_list", args, type(args))
+        if len(args) == 1:
+            return args
+        else:
+            args[0].append(args[1])
+            return args[0]
+
+    def ompx_attribute(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit ompx_attribute", args, type(args), args[0])
+        (_, attr, number_list) = args
+        return openmp_tag("QUAL.OMP.OMPX_ATTRIBUTE", (attr, number_list))
+
     def PLUS(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit PLUS", args, type(args))
@@ -5617,6 +5629,7 @@ openmp_grammar = r"""
                  | allocate_clause
                  | depend_with_modifier_clause
           //     | uses_allocators_clause
+                 | ompx_attribute
     teams_clause: num_teams_clause
                 | thread_limit_clause
                 | data_default_clause
@@ -5668,6 +5681,7 @@ openmp_grammar = r"""
                                              //     | simdlen_clause
                                                     | aligned_clause
                                              //     | nontemporal_clause
+                                                    | ompx_attribute
 
     target_teams_distribute_parallel_for_directive: TARGET TEAMS DISTRIBUTE PARALLEL FOR [target_teams_distribute_parallel_for_clause*]
     target_teams_distribute_parallel_for_clause: if_clause
@@ -5697,9 +5711,12 @@ openmp_grammar = r"""
                                                | ORDERED
                                         //     | order_clause
                                                | dist_schedule_clause
+                                               | ompx_attribute
 
     LOOP: "loop"
 
+    ompx_attribute: OMPX_ATTRIBUTE "(" PYTHON_NAME "(" number_list ")" ")"
+    OMPX_ATTRIBUTE: "ompx_attribute"
     //target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_loop_clause*]
     target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_distribute_parallel_for_simd_clause*]
     target_teams_loop_clause: if_clause
@@ -5723,6 +5740,7 @@ openmp_grammar = r"""
                             | collapse_clause
                             | ORDERED
                             | data_privatization_out_clause
+                            | ompx_attribute
 
     target_teams_directive: TARGET TEAMS [target_teams_clause*]
     target_teams_clause: if_clause
@@ -5742,6 +5760,7 @@ openmp_grammar = r"""
                        | data_default_clause
                        | data_sharing_clause
                 //     | reduction_default_only_clause
+                       | ompx_attribute
 
     target_teams_distribute_directive: TARGET TEAMS DISTRIBUTE [target_teams_clause*]
     target_teams_distribute_clause: num_teams_clause
@@ -5755,6 +5774,7 @@ openmp_grammar = r"""
                                   | data_privatization_out_clause
                                   | collapse_clause
                                   | dist_schedule_clause
+                                  | ompx_attribute
 
     IS_DEVICE_PTR: "is_device_ptr"
     is_device_ptr_clause: IS_DEVICE_PTR "(" var_list ")"
@@ -5926,6 +5946,7 @@ openmp_grammar = r"""
     slice_list: oslice | slice_list "," oslice
     name_slice: PYTHON_NAME [ "[" slice_list "]" ]
     var_list: name_slice | var_list "," name_slice
+    number_list: NUMBER | number_list "," NUMBER
     PLUS: "+"
     reduction_operator: PLUS | "\\" | "*" | "-" | "&" | "^" | "|" | "&&" | "||"
     threadprivate_directive: "threadprivate" "(" var_list ")"
