@@ -1942,9 +1942,13 @@ class openmp_region_start(ir.Stmt):
             # What to do here?
             flags.forceinline = True
             #flags.fastmath = True
+            flags.fastmath = state_copy.flags.fastmath
             flags.release_gil = True
             flags.nogil = True
             flags.inline = "always"
+            # Giorgis: Is the following flag helping codegen optimization?
+            #if selected_device == 1:
+            #    flags.compute_capability = (7, 0)
             # Create a pipeline that only lowers the outlined target code.  No need to
             # compile because it has already gone through those passes.
             if config.DEBUG_OPENMP >= 1:
@@ -2069,20 +2073,28 @@ class openmp_region_start(ir.Stmt):
                         # Lower openmp intrinsics.
                         with ll.create_module_pass_manager() as pm:
                             pm.add_intrinsics_openmp_pass()
+                            pm.add_cfg_simplification_pass()
                             pm.run(mod)
 
                         if config.DEBUG_OPENMP_LLVM_PASS >= 1:
                             with open(filename_prefix + "-intrinsics_omp.ll", "w") as f:
                                 f.write(str(mod))
 
-                        mod.link_in(self.libs_mod)
+                        mod.link_in(self.libs_mod, preserve=True)
                         # Internalize non-kernel function definitions.
                         for func in mod.functions:
-                            if "__omp_offload_numba" in func.name:
-                                continue
                             if func.is_declaration:
                                 continue
+                            if func.linkage != ll.Linkage.external:
+                                continue
+                            if "__omp_offload_numba" in func.name:
+                                continue
                             func.linkage = "internal"
+
+                        with ll.create_module_pass_manager() as pm:
+                            self.tm.add_analysis_passes(pm)
+                            pm.add_global_dce_pass()
+                            pm.run(mod)
 
                         if config.DEBUG_OPENMP_LLVM_PASS >= 1:
                             with open(filename_prefix + "-intrinsics_omp-linked.ll", "w") as f:
@@ -2091,10 +2103,10 @@ class openmp_region_start(ir.Stmt):
                         # Run passes for optimization, including target-specific passes.
                         # Run function passes.
                         with ll.create_function_pass_manager(mod) as pm:
-                            with create_pass_manager_builder(opt=3, loop_vectorize=True, slp_vectorize=True) as pmb:
+                            self.tm.add_analysis_passes(pm)
+                            with create_pass_manager_builder(opt=3, slp_vectorize=True, loop_vectorize=True) as pmb:
                                 self.tm.adjust_pass_manager(pmb)
                                 pmb.populate(pm)
-                            self.tm.add_analysis_passes(pm)
                             for func in mod.functions:
                                 pm.initialize()
                                 pm.run(func)
@@ -2102,10 +2114,10 @@ class openmp_region_start(ir.Stmt):
 
                         # Run module passes.
                         with ll.create_module_pass_manager() as pm:
-                            with create_pass_manager_builder(opt=3, loop_vectorize=True, slp_vectorize=True) as pmb:
+                            self.tm.add_analysis_passes(pm)
+                            with create_pass_manager_builder(opt=3, slp_vectorize=True, loop_vectorize=True) as pmb:
                                 self.tm.adjust_pass_manager(pmb)
                                 pmb.populate(pm)
-                            self.tm.add_analysis_passes(pm)
                             pm.run(mod)
 
                         if config.DEBUG_OPENMP_LLVM_PASS >= 1:
@@ -2118,7 +2130,7 @@ class openmp_region_start(ir.Stmt):
 
                         if config.DEBUG_OPENMP_LLVM_PASS >= 1:
                             with open(filename_prefix + "-intrinsics_omp-linked-opt.s", "w") as f:
-                                f.write(str(ptx))
+                                f.write(ptx)
 
                         linker_kwargs = {}
                         for x in ompx_attrs:
