@@ -2607,13 +2607,13 @@ class Linker(metaclass=ABCMeta):
     """Abstract base class for linkers"""
 
     @classmethod
-    def new(cls, max_registers=0, lineinfo=False, cc=None):
+    def new(cls, max_registers=0, launch_bounds=0, lineinfo=False, cc=None):
         if config.CUDA_ENABLE_MINOR_VERSION_COMPATIBILITY:
             return MVCLinker(max_registers, lineinfo, cc)
         elif USE_NV_BINDING:
             return CudaPythonLinker(max_registers, lineinfo, cc)
         else:
-            return CtypesLinker(max_registers, lineinfo, cc)
+            return CtypesLinker(max_registers, launch_bounds, lineinfo, cc)
 
     @abstractmethod
     def __init__(self, max_registers, lineinfo, cc):
@@ -2753,7 +2753,7 @@ class CtypesLinker(Linker):
     """
     Links for current device if no CC given
     """
-    def __init__(self, max_registers=0, lineinfo=False, cc=None):
+    def __init__(self, max_registers=0, launch_bounds=0, lineinfo=False, cc=None):
         logsz = config.CUDA_LOG_SIZE
         linkerinfo = (c_char * logsz)()
         linkererrors = (c_char * logsz)()
@@ -2769,6 +2769,10 @@ class CtypesLinker(Linker):
             options[enums.CU_JIT_MAX_REGISTERS] = c_void_p(max_registers)
         if lineinfo:
             options[enums.CU_JIT_GENERATE_LINE_INFO] = c_void_p(1)
+
+        if launch_bounds:
+            options[enums.CU_JIT_THREADS_PER_BLOCK] = c_void_p(launch_bounds)
+            assert cc is None, 'Setting launch bounds is incompatible with setting cc'
 
         if cc is None:
             # No option value is needed, but we need something as a placeholder

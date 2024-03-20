@@ -2135,7 +2135,10 @@ class openmp_region_start(ir.Stmt):
                         linker_kwargs = {}
                         for x in ompx_attrs:
                             linker_kwargs[x.arg[0]] = tuple(x.arg[1]) if len(x.arg[1]) > 1 else x.arg[1][0]
-                        linker = driver.Linker.new(cc=self.cc, **linker_kwargs)
+                        # NOTE: DO NOT set cc, since the linker will always
+                        # compile for the existing GPU context and it is
+                        # incompatible with the launch_bounds ompx_attribute.
+                        linker = driver.Linker.new(**linker_kwargs)
                         linker.add_ptx(ptx.encode())
                         cubin = linker.complete()
 
