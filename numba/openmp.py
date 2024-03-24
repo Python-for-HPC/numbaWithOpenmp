@@ -5323,7 +5323,7 @@ class OpenmpVisitor(Transformer):
     def name_slice(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit name_slice", args, type(args))
-        if len(args) == 1:
+        if len(args) == 1 or args[1] is None:
             return args[0]
         else:
             return NameSlice(args[0], args[1:])
