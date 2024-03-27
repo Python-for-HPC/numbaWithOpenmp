@@ -5819,7 +5819,8 @@ openmp_grammar = r"""
                            //    | array_section
                                | name_slice
                                | variable_array_section_list "," PYTHON_NAME
-                               | variable_array_section_list "," array_section
+                               | variable_array_section_list "," name_slice
+                           //    | variable_array_section_list "," array_section
     //array_section: PYTHON_NAME array_section_subscript
     //array_section_subscript: array_section_subscript "[" [const_num_or_var] ":" [const_num_or_var] "]"
     //                       | array_section_subscript "[" const_num_or_var "]"
