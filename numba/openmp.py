@@ -568,7 +568,7 @@ class openmp_tag(object):
             assert not isinstance(self.arg, (ir.Var, str))
 
     def __str__(self):
-        return "openmp_tag(" + str(self.name) + "," + str(self.arg) + ")"
+        return "openmp_tag(" + str(self.name) + "," + str(self.arg) + ("" if self.omp_slice is None else f", omp_slice({self.omp_slice[0]},{self.omp_slice[1]})") + ")"
 
     def __repr__(self):
         return self.__str__()
@@ -1115,8 +1115,11 @@ class openmp_region_start(ir.Stmt):
         for tag in self.tags:
             if isinstance(tag.arg, ir.Var):
                 self.tag_vars.add(tag.arg.name)
-            if isinstance(tag.arg, str):
+            elif isinstance(tag.arg, str):
                 self.tag_vars.add(tag.arg)
+            elif isinstance(tag.arg, NameSlice):
+                self.tag_vars.add(tag.arg.name)
+
             if tag.name == "QUAL.OMP.NORMALIZED.IV":
                 self.normal_iv = tag.arg
         if config.DEBUG_OPENMP >= 1:
@@ -1930,6 +1933,13 @@ class openmp_region_start(ir.Stmt):
                 dprint_func_ir(outlined_ir, "outlined_ir before replace np.empty")
                 replace_np_empty_with_cuda_shared(outlined_ir, state_copy.typemap, calltypes, device_func_name, typingctx_outlined)
                 dprint_func_ir(outlined_ir, "outlined_ir after replace np.empty")
+
+                # Experimental and incomplete at this time.
+                convert_to_int32 = False
+
+                if convert_to_int32:
+                    state_copy.typemap = { k:types.int32 if (v == types.int64 and not k.startswith("arg")) else v for k,v in state_copy.typemap.items()}
+
                 #if 'arrayexpr' not in device_target.special_ops:
                 #    device_target.special_ops['arrayexpr'] = array_exprs._lower_array_expr
             else:
@@ -1941,7 +1951,7 @@ class openmp_region_start(ir.Stmt):
             flags.no_cfunc_wrapper = True
             # What to do here?
             flags.forceinline = True
-            #flags.fastmath = True
+            # Propagate fastmath flag on the outer function to the inner outlined compile.
             flags.fastmath = state_copy.flags.fastmath
             flags.release_gil = True
             flags.nogil = True
@@ -4781,15 +4791,17 @@ class OpenmpVisitor(Transformer):
             args[0].append(args[1])
             return args[0]
 
+    """
     def array_section(self, args):
-        raise NotImplementedError("No implementation for array sections.")
         if config.DEBUG_OPENMP >= 1:
             print("visit array_section", args, type(args))
+        return args
 
     def array_section_subscript(self, args):
-        raise NotImplementedError("No implementation for array section subscript.")
         if config.DEBUG_OPENMP >= 1:
             print("visit array_section_subscript", args, type(args))
+        return args
+    """
 
     # Don't need a rule for TARGET.
     # Don't need a rule for single_construct.
@@ -5804,14 +5816,15 @@ openmp_grammar = r"""
                         | if_clause
     motion_clause: update_motion_type "(" variable_array_section_list ")"
     variable_array_section_list: PYTHON_NAME
-                               | array_section
+                           //    | array_section
+                               | name_slice
                                | variable_array_section_list "," PYTHON_NAME
                                | variable_array_section_list "," array_section
-    array_section: PYTHON_NAME array_section_subscript
-    array_section_subscript: array_section_subscript "[" [const_num_or_var] ":" [const_num_or_var] "]"
-                           | array_section_subscript "[" const_num_or_var "]"
-                           | "[" [const_num_or_var] ":" [const_num_or_var] "]"
-                           | "[" const_num_or_var "]"
+    //array_section: PYTHON_NAME array_section_subscript
+    //array_section_subscript: array_section_subscript "[" [const_num_or_var] ":" [const_num_or_var] "]"
+    //                       | array_section_subscript "[" const_num_or_var "]"
+    //                       | "[" [const_num_or_var] ":" [const_num_or_var] "]"
+    //                       | "[" const_num_or_var "]"
     TARGET: "target"
     TEAMS: "teams"
     DISTRIBUTE: "distribute"
