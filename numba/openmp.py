@@ -540,6 +540,11 @@ class openmp_tag(object):
                 the_set.add(self.arg.name)
             elif isinstance(self.arg, str):
                 the_set.add(self.arg)
+            elif isinstance(self.arg, NameSlice):
+                assert isinstance(self.arg.name, str), "Expected str in NameSlice arg"
+                the_set.add(self.arg.name)
+            # TODO: Create a good error check mechanism.
+            #else: ?
 
         if self.name.startswith("DIR.OMP"):
             assert not isinstance(self.arg, (ir.Var, str))
@@ -1494,6 +1499,10 @@ class openmp_region_start(ir.Stmt):
                         struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag_var + "*data", non_arg=True, omp_slice=(0, size_var)))
                         struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag_var + "*shape", non_arg=True, omp_slice=(0, 1)))
                         struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag_var + "*strides", non_arg=True, omp_slice=(0, 1)))
+                        # Peel off NameSlice, it served its purpose and is not
+                        # needed by the rest of compilation.
+                        if isinstance(cur_tag.arg, NameSlice):
+                            cur_tag.arg = cur_tag.arg.name
 
             return struct_tags, extras_before
 
@@ -3125,6 +3134,9 @@ class OpenmpVisitor(Transformer):
                 for carg in carglist:
                     if config.DEBUG_OPENMP >= 1:
                         print("carg:", carg, type(carg), user_defined_var(carg), is_dsa(c.name))
+                    # Extract the var name from the NameSlice.
+                    if isinstance(carg, NameSlice):
+                        carg = carg.name
                     #if isinstance(carg, str) and user_defined_var(carg) and is_dsa(c.name):
                     #if isinstance(carg, str) and user_defined_var(carg) and is_dsa(c.name):
                     if isinstance(carg, str) and is_dsa(c.name):
