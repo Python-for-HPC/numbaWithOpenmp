@@ -20,7 +20,8 @@ def _build_ufunc_loop_body(load, store, context, func, builder, arrays, out,
     # Compute
     status, retval = context.call_conv.call_function(builder, func,
                                                      signature.return_type,
-                                                     signature.args, elems)
+                                                     signature.args, elems,
+                                                     func.name)
 
     # Store
     with builder.if_else(status.is_ok, likely=True) as (if_ok, if_error):
@@ -54,7 +55,8 @@ def _build_ufunc_loop_body_objmode(load, store, context, func, builder,
     with pyapi.err_push(keep_new=True):
         status, retval = context.call_conv.call_function(builder, func,
                                                          types.pyobject,
-                                                         _objargs, elems)
+                                                         _objargs, elems,
+                                                         func.name)
         # Release owned reference to arguments
         for elem in elems:
             pyapi.decref(elem)
@@ -462,7 +464,7 @@ class _GufuncWrapper(object):
     def gen_loop_body(self, builder, pyapi, func, args):
         status, retval = self.call_conv.call_function(
             builder, func, self.signature.return_type, self.signature.args,
-            args)
+            args, func.name)
 
         with builder.if_then(status.is_error, likely=False):
             gil = pyapi.gil_ensure()
@@ -583,7 +585,7 @@ def _prepare_call_to_object_mode(context, builder, pyapi, func,
 
     status, retval = context.call_conv.call_function(
         builder, func, types.pyobject, object_sig,
-        object_args)
+        object_args, func.name)
     builder.store(status.is_error, error_pointer)
 
     # Release returned object
