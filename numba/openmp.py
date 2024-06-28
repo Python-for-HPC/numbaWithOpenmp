@@ -1965,9 +1965,6 @@ class openmp_region_start(ir.Stmt):
             flags.release_gil = True
             flags.nogil = True
             flags.inline = "always"
-            # Giorgis: Is the following flag helping codegen optimization?
-            #if selected_device == 1:
-            #    flags.compute_capability = (7, 0)
             # Create a pipeline that only lowers the outlined target code.  No need to
             # compile because it has already gone through those passes.
             if config.DEBUG_OPENMP >= 1:
@@ -2041,7 +2038,6 @@ class openmp_region_start(ir.Stmt):
 
             # TODO: move device pipelines in numba proper.
             if selected_device == 0:
-                arch = 'x86_64'
                 target_elf = cres_library._get_compiled_object()
                 fd_o, filename_o = tempfile.mkstemp('.o')
                 with open(filename_o, 'wb') as f:
@@ -4318,6 +4314,9 @@ class OpenmpVisitor(Transformer):
         """
 
     def target_directive(self, args):
+        if sys.platform.startswith("darwin"):
+            print("ERROR: OpenMP target offloading is unavailable on Darwin")
+            sys.exit(-1)
         self.some_target_directive(args, "TARGET", 1)
 
     def target_teams_directive(self, args):
@@ -6061,11 +6060,15 @@ def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra
             sys.exit(-1)
 
         if omptargetlib is None:
-            print("OpenMP target runtime library could not be found.")
-            print("Make sure that libomptarget.so or")
-            print("specify the location of the OpenMP runtime library with the")
-            print("NUMBA_OMPTARGET_LIB environment variables.")
-            sys.exit(-1)
+            if sys.platform.startswith("darwin"):
+                # OpenMP GPU offloading is unavailable on Darwin
+                pass
+            else:
+                print("OpenMP target runtime library could not be found.")
+                print("Make sure that libomptarget.so or")
+                print("specify the location of the OpenMP runtime library with the")
+                print("NUMBA_OMPTARGET_LIB environment variables.")
+                sys.exit(-1)
 
     sblk = blocks[blk_start]
     scope = sblk.scope
@@ -6106,7 +6109,7 @@ def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra
         sys.exit(-2)
     except:
         print("fallthrough exception")
-        print("Internal error for OpenMp pragma '{}'".format(arg.value))
+        print("Internal error for OpenMP pragma '{}'".format(arg.value))
         sys.exit(-3)
     assert(blocks is visitor.blocks)
 
