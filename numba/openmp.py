@@ -1887,7 +1887,7 @@ class openmp_region_start(ir.Stmt):
             if config.DEBUG_OPENMP >= 1:
                 print("selected_device:", selected_device)
 
-            if selected_device == 0:
+            if selected_device == 1:
                 flags = Flags()
                 device_lowerer_pipeline = OnlyLower
 
@@ -1912,7 +1912,7 @@ class openmp_region_start(ir.Stmt):
                 subtarget.install_registry(printreg)
                 device_target = subtarget
                 typingctx_outlined = targetctx.typing_context
-            elif selected_device == 1:
+            elif selected_device == 0:
                 from numba.core import target_extension
                 orig_target = getattr(target_extension._active_context, 'target', target_extension._active_context_default)
                 target_extension._active_context.target = 'cuda'
@@ -1999,7 +1999,7 @@ class openmp_region_start(ir.Stmt):
                                        is_lifted_loop=False,  # tried this as True since code derived from loop lifting code but it goes through the pipeline twice and messes things up
                                        parent_state=state_copy)
 
-            if selected_device == 0:
+            if selected_device == 1:
                 #from numba.cpython import printimpl
                 ##subtarget.install_registry(printimpl.registry)
                 #targetctx.install_registry(printimpl.registry)
@@ -2037,7 +2037,7 @@ class openmp_region_start(ir.Stmt):
                 shared_ext = ".dll"
 
             # TODO: move device pipelines in numba proper.
-            if selected_device == 0:
+            if selected_device == 1:
                 target_elf = cres_library._get_compiled_object()
                 fd_o, filename_o = tempfile.mkstemp('.o')
                 with open(filename_o, 'wb') as f:
@@ -2056,7 +2056,7 @@ class openmp_region_start(ir.Stmt):
                 if config.DEBUG_OPENMP >= 1:
                     print("target_elf:", type(target_elf), len(target_elf))
                     sys.stdout.flush()
-            elif selected_device == 1:
+            elif selected_device == 0:
                 import numba.cuda.api as cudaapi
                 import numba.cuda.cudadrv.libs as cudalibs
                 from numba.cuda.cudadrv import driver
