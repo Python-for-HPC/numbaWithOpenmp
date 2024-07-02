@@ -149,7 +149,7 @@ class TestOpenmpBase(TestCase):
 
     skip_disabled = int(os.environ.get("OVERRIDE_TEST_SKIP", 0)) != 0
     run_target = int(os.environ.get("RUN_TARGET", 0)) != 0
-    test_devices = os.environ.get("TEST_DEVICES")
+    test_devices = os.environ.get("TEST_DEVICES", "")
 
     env_vars = {"OMP_NUM_THREADS": omp_get_num_procs(),
                 "OMP_MAX_ACTIVE_LEVELS": 1,
