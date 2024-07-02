@@ -4396,11 +4396,23 @@ class OpenmpVisitor(Transformer):
         or_end   = openmp_region_end(or_start, [openmp_tag("DIR.OMP.END.TARGET.EXIT.DATA")], self.loc)
         sblk.body = [or_start] + [or_end] + sblk.body[:]
 
+    def teams_distribute_parallel_for_simd_directive(self, args):
+        self.some_distribute_directive(args, "TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 5, has_loop=True)
+
+    def teams_distribute_parallel_for_directive(self, args):
+        self.some_distribute_directive(args, "TEAMS.DISTRIBUTE.PARALLEL.LOOP", 4, has_loop=True)
+
     def teams_distribute_directive(self, args):
         self.some_distribute_directive(args, "TEAMS.DISTRIBUTE", 2, has_loop=True)
 
+    def teams_distribute_simd_directive(self, args):
+        self.some_distribute_directive(args, "TEAMS.DISTRIBUTE.SIMD", 3, has_loop=True)
+
     def distribute_directive(self, args):
         self.some_distribute_directive(args, "DISTRIBUTE", 1, has_loop=True)
+
+    def distribute_simd_directive(self, args):
+        self.some_distribute_directive(args, "DISTRIBUTE.SIMD", 2, has_loop=True)
 
     def distribute_parallel_for_directive(self, args):
         self.some_distribute_directive(args, "DISTRIBUTE.PARALLEL.LOOP", 3, has_loop=True)
@@ -4721,6 +4733,20 @@ class OpenmpVisitor(Transformer):
                 print(args[0][0])
         return args[0]
 
+    def teams_distribute_parallel_for_simd_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit teams_distribute_parallel_for_simd_clause", args, type(args), args[0])
+            if isinstance(args[0], list):
+                print(args[0][0])
+        return args[0]
+
+    def teams_distribute_parallel_for_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit teams_distribute_parallel_for_clause", args, type(args), args[0])
+            if isinstance(args[0], list):
+                print(args[0][0])
+        return args[0]
+
     def distribute_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit distribute_clause", args, type(args), args[0])
@@ -4731,6 +4757,13 @@ class OpenmpVisitor(Transformer):
     def teams_distribute_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit teams_distribute_clause", args, type(args), args[0])
+            if isinstance(args[0], list):
+                print(args[0][0])
+        return args[0]
+
+    def teams_distribute_simd_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit teams_distribute_simd_clause", args, type(args), args[0])
             if isinstance(args[0], list):
                 print(args[0][0])
         return args[0]
@@ -4958,23 +4991,6 @@ class OpenmpVisitor(Transformer):
             print("visit data_sharing_clause", args, type(args), args[0])
         return args[0]
 
-    def data_privatization_clause(self, args):
-        if config.DEBUG_OPENMP >= 1:
-            print("visit data_privatization_clause", args, type(args), args[0])
-            if isinstance(args[0], list):
-                print(args[0][0])
-        return args[0]
-
-    def data_privatization_in_clause(self, args):
-        if config.DEBUG_OPENMP >= 1:
-            print("visit data_privatization_in_clause", args, type(args), args[0])
-        return args[0]
-
-    def data_privatization_out_clause(self, args):
-        if config.DEBUG_OPENMP >= 1:
-            print("visit data_privatization_out_clause", args, type(args), args[0])
-        return args[0]
-
     def data_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit data_clause", args, type(args), args[0])
@@ -5047,9 +5063,9 @@ class OpenmpVisitor(Transformer):
     # Don't need a rule for COPYIN.
     # Don't need a rule for REDUCTION.
 
-    def data_reduction_clause(self, args):
+    def reduction_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
-            print("visit data_reduction_clause", args, type(args), args[0])
+            print("visit reduction_clause", args, type(args), args[0])
 
         (_, red_op, red_list) = args
         ret = []
@@ -5467,15 +5483,20 @@ openmp_grammar = r"""
                     | task_construct
                     | teams_construct
                     | teams_distribute_construct
+                    | teams_distribute_simd_construct
+                    | teams_distribute_parallel_for_construct
+                    | teams_distribute_parallel_for_simd_construct
                     | target_construct
                     | target_teams_construct
                     | target_teams_distribute_construct
+                    | target_teams_distribute_simd_construct
                     | target_teams_distribute_parallel_for_simd_construct
                     | target_teams_distribute_parallel_for_construct
                     | target_teams_loop_construct
                     | target_enter_data_construct
                     | target_exit_data_construct
                     | distribute_construct
+                    | distribute_simd_construct
                     | distribute_parallel_for_construct
                     | distribute_parallel_for_simd_construct
                     | critical_construct
@@ -5501,39 +5522,76 @@ openmp_grammar = r"""
     parallel_for_simd_clause: parallel_for_clause
                             | simd_clause
     distribute_construct: distribute_directive
+    distribute_simd_construct: distribute_simd_directive
     distribute_directive: DISTRIBUTE [distribute_clause*]
-    distribute_clause: data_privatization_clause
-                     | data_privatization_in_clause
+    distribute_simd_directive: DISTRIBUTE SIMD [distribute_simd_clause*]
+    distribute_clause: private_clause
+                     | firstprivate_clause
               //     | lastprivate_distribute_clause
                      | collapse_clause
                      | dist_schedule_clause
                      | allocate_clause
+    distribute_simd_clause: private_clause
+                          | firstprivate_clause
+                   //     | lastprivate_distribute_clause
+                          | collapse_clause
+                          | dist_schedule_clause
+                          | allocate_clause
+                          | if_clause
+                   //     | safelen_clause
+                   //     | simdlen_clause
+                          | linear_clause
+                          | aligned_clause
+                   //     | nontemporal_clause
+                          | reduction_clause
+                   //     | order_clause
 
     teams_distribute_clause: num_teams_clause
                            | thread_limit_clause
                            | data_default_clause
-                           | data_privatization_clause
-                           | data_privatization_in_clause
+                           | private_clause
+                           | firstprivate_clause
                            | data_sharing_clause
-                           | data_reduction_clause
+                           | reduction_clause
                            | allocate_clause
                     //     | lastprivate_distribute_clause
                            | collapse_clause
                            | dist_schedule_clause
+                           | ompx_attribute
+
+    teams_distribute_simd_clause: num_teams_clause
+                                | thread_limit_clause
+                                | data_default_clause
+                                | private_clause
+                                | firstprivate_clause
+                                | data_sharing_clause
+                                | reduction_clause
+                                | allocate_clause
+                         //     | lastprivate_distribute_clause
+                                | collapse_clause
+                                | dist_schedule_clause
+                                | if_clause
+                         //     | safelen_clause
+                         //     | simdlen_clause
+                                | linear_clause
+                                | aligned_clause
+                         //     | nontemporal_clause
+                         //     | order_clause
+                                | ompx_attribute
 
     distribute_parallel_for_construct: distribute_parallel_for_directive
     distribute_parallel_for_directive: DISTRIBUTE PARALLEL FOR [distribute_parallel_for_clause*]
     distribute_parallel_for_clause: if_clause
                                   | num_threads_clause
                                   | data_default_clause
-                                  | data_privatization_clause
-                                  | data_privatization_in_clause
+                                  | private_clause
+                                  | firstprivate_clause
                                   | data_sharing_clause
-                                  | data_reduction_clause
+                                  | reduction_clause
                                   | copyin_clause
                            //     | proc_bind_clause
                                   | allocate_clause
-                                  | data_privatization_out_clause
+                                  | lastprivate_clause
                                   | linear_clause
                                   | schedule_clause
                                   | collapse_clause
@@ -5547,14 +5605,14 @@ openmp_grammar = r"""
     distribute_parallel_for_simd_clause: if_clause
                                   | num_threads_clause
                                   | data_default_clause
-                                  | data_privatization_clause
-                                  | data_privatization_in_clause
+                                  | private_clause
+                                  | firstprivate_clause
                                   | data_sharing_clause
-                                  | data_reduction_clause
+                                  | reduction_clause
                                   | copyin_clause
                            //     | proc_bind_clause
                                   | allocate_clause
-                                  | data_privatization_out_clause
+                                  | lastprivate_clause
                                   | linear_clause
                                   | schedule_clause
                                   | collapse_clause
@@ -5609,18 +5667,18 @@ openmp_grammar = r"""
     parallel_sections_directive: PARALLEL SECTIONS [parallel_sections_clause*]
     parallel_sections_clause: unique_parallel_clause
                             | data_default_clause
-                            | data_privatization_clause
-                            | data_privatization_in_clause
-                            | data_privatization_out_clause
+                            | private_clause
+                            | firstprivate_clause
+                            | lastprivate_clause
                             | data_sharing_clause
-                            | data_reduction_clause
+                            | reduction_clause
     sections_construct: sections_directive
     sections_directive: SECTIONS [sections_clause*]
     SECTIONS: "sections"
-    sections_clause: data_privatization_clause
-                   | data_privatization_in_clause
-                   | data_privatization_out_clause
-                   | data_reduction_clause
+    sections_clause: private_clause
+                   | firstprivate_clause
+                   | lastprivate_clause
+                   | reduction_clause
                    | NOWAIT
     section_construct: section_directive
     section_directive: SECTION
@@ -5643,21 +5701,26 @@ openmp_grammar = r"""
     teams_construct: teams_directive
     teams_directive: TEAMS [teams_clause*]
     teams_distribute_directive: TEAMS DISTRIBUTE [teams_distribute_clause*]
+    teams_distribute_simd_directive: TEAMS DISTRIBUTE SIMD [teams_distribute_simd_clause*]
     target_construct: target_directive
     target_teams_distribute_parallel_for_simd_construct: target_teams_distribute_parallel_for_simd_directive
     target_teams_distribute_parallel_for_construct: target_teams_distribute_parallel_for_directive
+    teams_distribute_parallel_for_construct: teams_distribute_parallel_for_directive
+    teams_distribute_parallel_for_simd_construct: teams_distribute_parallel_for_simd_directive
     target_teams_loop_construct: target_teams_loop_directive
     target_teams_construct: target_teams_directive
     target_teams_distribute_construct: target_teams_distribute_directive
+    target_teams_distribute_simd_construct: target_teams_distribute_simd_directive
     teams_distribute_construct: teams_distribute_directive
+    teams_distribute_simd_construct: teams_distribute_simd_directive
     target_directive: TARGET [target_clause*]
     HAS_DEVICE_ADDR: "has_device_addr"
     has_device_addr_clause: HAS_DEVICE_ADDR "(" var_list ")"
     target_clause: if_clause
                  | device_clause
                  | thread_limit_clause
-                 | data_privatization_clause
-                 | data_privatization_in_clause
+                 | private_clause
+                 | firstprivate_clause
           //     | in_reduction_clause
                  | map_clause
                  | is_device_ptr_clause
@@ -5671,10 +5734,10 @@ openmp_grammar = r"""
     teams_clause: num_teams_clause
                 | thread_limit_clause
                 | data_default_clause
-                | data_privatization_clause
-                | data_privatization_in_clause
+                | private_clause
+                | firstprivate_clause
                 | data_sharing_clause
-                | data_reduction_clause
+                | reduction_clause
                 | allocate_clause
     num_teams_clause: NUM_TEAMS "(" const_num_or_var ")"
     NUM_TEAMS: "num_teams"
@@ -5690,8 +5753,8 @@ openmp_grammar = r"""
     target_teams_distribute_parallel_for_simd_directive: TARGET TEAMS DISTRIBUTE PARALLEL FOR SIMD [target_teams_distribute_parallel_for_simd_clause*]
     target_teams_distribute_parallel_for_simd_clause: if_clause
                                                     | device_clause
-                                                    | data_privatization_clause
-                                                    | data_privatization_in_clause
+                                                    | private_clause
+                                                    | firstprivate_clause
                                              //     | in_reduction_clause
                                                     | map_clause
                                                     | is_device_ptr_clause
@@ -5704,11 +5767,11 @@ openmp_grammar = r"""
                                                     | thread_limit_clause
                                                     | data_default_clause
                                                     | data_sharing_clause
-                                                    | data_reduction_clause
+                                                    | reduction_clause
                                                     | num_threads_clause
                                                     | copyin_clause
                                              //     | proc_bind_clause
-                                                    | data_privatization_out_clause
+                                                    | lastprivate_clause
                                                     | linear_clause
                                                     | schedule_clause
                                                     | collapse_clause
@@ -5721,11 +5784,45 @@ openmp_grammar = r"""
                                              //     | nontemporal_clause
                                                     | ompx_attribute
 
+    teams_distribute_parallel_for_simd_directive: TEAMS DISTRIBUTE PARALLEL FOR SIMD [teams_distribute_parallel_for_simd_clause*]
+    teams_distribute_parallel_for_simd_clause: num_teams_clause
+                                             | thread_limit_clause
+                                      //     | default_clause
+                                             | private_clause
+                                             | firstprivate_clause
+                                             | data_sharing_clause
+                                             | reduction_clause
+                                             | if_clause
+                                             | num_threads_clause
+                                             | copyin_clause
+                                      //     | proc_bind_clause
+                                             | lastprivate_clause
+                                             | linear_clause
+                                             | schedule_clause
+                                             | collapse_clause
+                                             | ORDERED
+                                             | NOWAIT
+                                      //     | order_clause
+                                             | dist_schedule_clause
+                                      //     | safelen_clause
+                                      //     | simdlen_clause
+                                             | aligned_clause
+                                      //     | nontemporal_clause
+                                      //     | in_reduction_clause
+                                             | map_clause
+                                             | is_device_ptr_clause
+                                      //     | defaultmap_clause
+                                             | allocate_clause
+                                             | depend_with_modifier_clause
+                                      //     | uses_allocators_clause
+                                             | data_default_clause
+                                             | ompx_attribute
+
     target_teams_distribute_parallel_for_directive: TARGET TEAMS DISTRIBUTE PARALLEL FOR [target_teams_distribute_parallel_for_clause*]
     target_teams_distribute_parallel_for_clause: if_clause
                                                | device_clause
-                                               | data_privatization_clause
-                                               | data_privatization_in_clause
+                                               | private_clause
+                                               | firstprivate_clause
                                         //     | in_reduction_clause
                                                | map_clause
                                                | is_device_ptr_clause
@@ -5738,11 +5835,11 @@ openmp_grammar = r"""
                                                | thread_limit_clause
                                                | data_default_clause
                                                | data_sharing_clause
-                                               | data_reduction_clause
+                                               | reduction_clause
                                                | num_threads_clause
                                                | copyin_clause
                                         //     | proc_bind_clause
-                                               | data_privatization_out_clause
+                                               | lastprivate_clause
                                                | linear_clause
                                                | schedule_clause
                                                | collapse_clause
@@ -5750,6 +5847,29 @@ openmp_grammar = r"""
                                         //     | order_clause
                                                | dist_schedule_clause
                                                | ompx_attribute
+
+    teams_distribute_parallel_for_directive: TEAMS DISTRIBUTE PARALLEL FOR [teams_distribute_parallel_for_clause*]
+    teams_distribute_parallel_for_clause: num_teams_clause
+                                        | thread_limit_clause
+                                        | data_default_clause
+                                        | private_clause
+                                        | firstprivate_clause
+                                        | data_sharing_clause
+                                        | reduction_clause
+                                        | allocate_clause
+                                        | if_clause
+                                        | num_threads_clause
+                                        | copyin_clause
+                                 //     | proc_bind_clause
+                                        | lastprivate_clause
+                                        | linear_clause
+                                        | schedule_clause
+                                        | collapse_clause
+                                        | ORDERED
+                                        | NOWAIT
+                                 //     | order_clause
+                                        | dist_schedule_clause
+                                        | ompx_attribute
 
     LOOP: "loop"
 
@@ -5759,8 +5879,8 @@ openmp_grammar = r"""
     target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_distribute_parallel_for_simd_clause*]
     target_teams_loop_clause: if_clause
                             | device_clause
-                            | data_privatization_clause
-                            | data_privatization_in_clause
+                            | private_clause
+                            | firstprivate_clause
                      //     | in_reduction_clause
                             | map_clause
                             | is_device_ptr_clause
@@ -5777,14 +5897,14 @@ openmp_grammar = r"""
                      //     | bind_clause
                             | collapse_clause
                             | ORDERED
-                            | data_privatization_out_clause
+                            | lastprivate_clause
                             | ompx_attribute
 
     target_teams_directive: TARGET TEAMS [target_teams_clause*]
     target_teams_clause: if_clause
                        | device_clause
-                       | data_privatization_clause
-                       | data_privatization_in_clause
+                       | private_clause
+                       | firstprivate_clause
                 //     | in_reduction_clause
                        | map_clause
                        | is_device_ptr_clause
@@ -5800,16 +5920,55 @@ openmp_grammar = r"""
                 //     | reduction_default_only_clause
                        | ompx_attribute
 
-    target_teams_distribute_directive: TARGET TEAMS DISTRIBUTE [target_teams_clause*]
-    target_teams_distribute_clause: num_teams_clause
+    target_teams_distribute_simd_directive: TARGET TEAMS DISTRIBUTE SIMD [target_teams_distribute_simd_clause*]
+    target_teams_distribute_simd_clause: if_clause
+                                       | device_clause
+                                       | private_clause
+                                       | firstprivate_clause
+                                //     | in_reduction_clause
+                                       | map_clause
+                                       | is_device_ptr_clause
+                                //     | defaultmap_clause
+                                       | NOWAIT
+                                       | allocate_clause
+                                       | depend_with_modifier_clause
+                                //     | uses_allocators_clause
+                                       | num_teams_clause
+                                       | thread_limit_clause
+                                       | data_default_clause
+                                       | data_sharing_clause
+                                       | reduction_clause
+                                //     | reduction_default_only_clause
+                                       | lastprivate_clause
+                                       | collapse_clause
+                                       | dist_schedule_clause
+                                //     | safelen_clause
+                                //     | simdlen_clause
+                                       | linear_clause
+                                       | aligned_clause
+                                //     | nontemporal_clause
+                                //     | order_clause
+                                       | ompx_attribute
+
+    target_teams_distribute_directive: TARGET TEAMS DISTRIBUTE [target_teams_distribute_clause*]
+    target_teams_distribute_clause: if_clause
+                                  | device_clause
+                                  | private_clause
+                                  | firstprivate_clause
+                           //     | in_reduction_clause
+                                  | map_clause
+                                  | is_device_ptr_clause
+                           //     | defaultmap_clause
+                                  | NOWAIT
+                                  | allocate_clause
+                                  | depend_with_modifier_clause
+                           //     | uses_allocators_clause
+                                  | num_teams_clause
                                   | thread_limit_clause
                                   | data_default_clause
-                                  | data_privatization_clause
-                                  | data_privatization_in_clause
                                   | data_sharing_clause
                            //     | reduction_default_only_clause
-                                  | allocate_clause
-                                  | data_privatization_out_clause
+                                  | lastprivate_clause
                                   | collapse_clause
                                   | dist_schedule_clause
                                   | ompx_attribute
@@ -5844,8 +6003,8 @@ openmp_grammar = r"""
     single_directive: SINGLE [single_clause*]
     SINGLE: "single"
     single_clause: unique_single_clause
-                 | data_privatization_clause
-                 | data_privatization_in_clause
+                 | private_clause
+                 | firstprivate_clause
                  | NOWAIT
     unique_single_clause: copyprivate_clause
     NOWAIT: "nowait"
@@ -5858,7 +6017,7 @@ openmp_grammar = r"""
                | aligned_clause
                | linear_clause
                | uniform_clause
-               | data_reduction_clause
+               | reduction_clause
                | inbranch_clause
     aligned_clause: ALIGNED "(" var_list ")"
                   | ALIGNED "(" var_list ":" const_num_or_var ")"
@@ -5870,7 +6029,7 @@ openmp_grammar = r"""
                        | aligned_clause
                        | linear_clause
                        | uniform_clause
-                       | data_reduction_clause
+                       | reduction_clause
                        | inbranch_clause
     ALIGNED: "aligned"
     inbranch_clause: INBRANCH | NOTINBRANCH
@@ -5885,8 +6044,8 @@ openmp_grammar = r"""
     task_directive: TASK [task_clause*]
     task_clause: unique_task_clause
                | data_sharing_clause
-               | data_privatization_clause
-               | data_privatization_in_clause
+               | private_clause
+               | firstprivate_clause
                | data_default_clause
     unique_task_clause: if_clause
                       | UNTIED
@@ -5907,17 +6066,14 @@ openmp_grammar = r"""
     data_default_clause: default_shared_clause
                        | default_none_clause
     data_sharing_clause: shared_clause
-    data_privatization_clause: private_clause
-    data_privatization_in_clause: firstprivate_clause
-    data_privatization_out_clause: lastprivate_clause
-    data_clause: data_privatization_clause
+    data_clause: private_clause
                | copyprivate_clause
-               | data_privatization_in_clause
-               | data_privatization_out_clause
+               | firstprivate_clause
+               | lastprivate_clause
                | data_sharing_clause
                | data_default_clause
                | copyin_clause
-               | data_reduction_clause
+               | reduction_clause
     private_clause: PRIVATE "(" var_list ")"
     PRIVATE: "private"
     copyprivate_clause: COPYPRIVATE "(" var_list ")"
@@ -5931,18 +6087,19 @@ openmp_grammar = r"""
     copyin_clause: COPYIN "(" var_list ")"
     COPYIN: "copyin"
     REDUCTION: "reduction"
-    data_reduction_clause: REDUCTION "(" reduction_operator ":" var_list ")"
-    default_shared_clause: "default" "(" "shared" ")"
-    default_none_clause: "default" "(" "none" ")"
+    DEFAULT: "default"
+    reduction_clause: REDUCTION "(" reduction_operator ":" var_list ")"
+    default_shared_clause: DEFAULT "(" "shared" ")"
+    default_none_clause: DEFAULT "(" "none" ")"
     const_num_or_var: NUMBER | PYTHON_NAME
     parallel_construct: parallel_directive
     parallel_directive: PARALLEL [parallel_clause*]
     parallel_clause: unique_parallel_clause
                    | data_default_clause
-                   | data_privatization_clause
-                   | data_privatization_in_clause
+                   | private_clause
+                   | firstprivate_clause
                    | data_sharing_clause
-                   | data_reduction_clause
+                   | reduction_clause
     unique_parallel_clause: if_clause | num_threads_clause
     if_clause: IF "(" const_num_or_var ")"
     IF: "if"
@@ -5955,11 +6112,11 @@ openmp_grammar = r"""
     parallel_for_clause: unique_parallel_clause
                        | unique_for_clause
                        | data_default_clause
-                       | data_privatization_clause
-                       | data_privatization_in_clause
-                       | data_privatization_out_clause
+                       | private_clause
+                       | firstprivate_clause
+                       | lastprivate_clause
                        | data_sharing_clause
-                       | data_reduction_clause
+                       | reduction_clause
     for_construct: for_directive
     for_directive: FOR [for_clause*]
     for_clause: unique_for_clause | data_clause | NOWAIT
@@ -6011,20 +6168,6 @@ openmp_grammar = r"""
 
 """
     name_slice: PYTHON_NAME [ "[" slice ["," slice]* "]" ]
-    openmp_construct: parallel_construct
-                    | target_teams_distribute_construct
-                    | teams_distribute_parallel_for_simd_construct
-                    | target_teams_distribute_parallel_for_construct
-                    | target_teams_construct
-                    | target_teams_distribute_simd_construct
-                    | teams_distribute_parallel_for_construct
-                    | teams_construct
-                    | distribute_parallel_for_construct
-                    | distribute_parallel_for_simd_construct
-                    | distribute_construct
-                    | distribute_simd_construct
-                    | teams_distribute_construct
-                    | teams_distribute_simd_construct
 """
 
 openmp_parser = Lark(openmp_grammar, start='openmp_statement')
