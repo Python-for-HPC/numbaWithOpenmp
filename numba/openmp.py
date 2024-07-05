@@ -553,9 +553,11 @@ class openmp_tag(object):
         if self.name in ["QUAL.OMP.MAP.TO", "QUAL.OMP.IF", "QUAL.OMP.NUM_THREADS", "QUAL.OMP.NUM_TEAMS", "QUAL.OMP.THREAD_LIMIT", "QUAL.OMP.SCHEDULE.STATIC", "QUAL.OMP.SCHEDULE.RUNTIME", "QUAL.OMP.SCHEDULE.GUIDED", "QUAL.OMP.SCHEDULE_DYNAMIC", "QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.COPYIN", "QUAL.OMP.COPYPRIVATE", "QUAL.OMP.NORMALIZED.LB", "QUAL.OMP.NORMALIZED.START", "QUAL.OMP.NORMALIZED.UB", "QUAL.OMP.MAP.TO.STRUCT"]:
             if start:
                 add_arg(self.arg, use_set)
-        elif self.name in ["QUAL.OMP.PRIVATE", "QUAL.OMP.LINEAR", "QUAL.OMP.SHARED", "QUAL.OMP.NORMALIZED.IV", "QUAL.OMP.MAP.ALLOC", "QUAL.OMP.MAP.ALLOC.STRUCT"]:
+        elif self.name in ["QUAL.OMP.PRIVATE", "QUAL.OMP.LINEAR", "QUAL.OMP.NORMALIZED.IV", "QUAL.OMP.MAP.ALLOC", "QUAL.OMP.MAP.ALLOC.STRUCT"]:
             # Intentionally do nothing.
             pass
+        elif self.name in ["QUAL.OMP.SHARED"]:
+            add_arg(self.arg, use_set)
         elif self.name in ["QUAL.OMP.MAP.TOFROM", "QUAL.OMP.TARGET.IMPLICIT", "QUAL.OMP.MAP.TOFROM.STRUCT"]:
             if start:
                 add_arg(self.arg, use_set)
@@ -3264,16 +3266,18 @@ class OpenmpVisitor(Transformer):
                 start_tags.append(openmp_tag("QUAL.OMP.PRIVATE", itr_var))
 
     def add_explicits_to_start(self, scope, vars_in_explicit, explicit_clauses, gen_shared, start_tags, keep_alive):
-        tags_for_enclosing = []
         start_tags.extend(explicit_clauses)
-        for var in vars_in_explicit:
-            if not is_private(vars_in_explicit[var].name):
-                evar = ir.Var(scope, var, self.loc)
-                evar_copy = scope.redefine("evar_copy_aets", self.loc)
-                keep_alive.append(ir.Assign(evar, evar_copy, self.loc))
-                #keep_alive.append(ir.Assign(evar, evar, self.loc))
-                tags_for_enclosing.append(openmp_tag("QUAL.OMP.PRIVATE", evar_copy))
-        return tags_for_enclosing
+        return []
+        #tags_for_enclosing = []
+        #for var in vars_in_explicit:
+        #    if not is_private(vars_in_explicit[var].name):
+        #        print("EVAR_COPY FOR", var)
+        #        evar = ir.Var(scope, var, self.loc)
+        #        evar_copy = scope.redefine("evar_copy_aets", self.loc)
+        #        keep_alive.append(ir.Assign(evar, evar_copy, self.loc))
+        #        #keep_alive.append(ir.Assign(evar, evar, self.loc))
+        #        tags_for_enclosing.append(openmp_tag("QUAL.OMP.PRIVATE", evar_copy))
+        #return tags_for_enclosing
 
     def flatten(self, all_clauses, start_block):
         if config.DEBUG_OPENMP >= 1:
