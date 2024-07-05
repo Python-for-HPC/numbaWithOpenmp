@@ -4779,6 +4779,13 @@ class OpenmpVisitor(Transformer):
                 print(args[0][0])
         return args[0]
 
+    def target_teams_distribute_clause(self, args):
+            if config.DEBUG_OPENMP >= 1:
+                print("visit target_teams_distribute_clause", args, type(args), args[0])
+                if isinstance(args[0], list):
+                    print(args[0][0])
+            return args[0]
+
     def target_teams_distribute_parallel_for_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit target_teams_distribute_parallel_for_clause", args, type(args), args[0])
