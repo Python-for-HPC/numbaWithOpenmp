@@ -21,6 +21,9 @@ class ConstantInference(object):
         self._func_ir = weakref.proxy(func_ir)
         self._cache = {}
 
+    def __repr__(self):
+        return str(self._cache)
+
     def infer_constant(self, name, loc=None):
         """
         Infer a constant value for the given variable *name*.

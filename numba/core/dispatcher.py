@@ -1227,7 +1227,10 @@ class LiftedWith(LiftedCode):
     can_cache = True
 
     def _reduce_extras(self):
-        return dict(output_types=self.output_types)
+        if hasattr(self, "output_types"):
+            return dict(output_types=self.output_types)
+        else:
+            return dict()
 
     @property
     def _numba_type_(self):
