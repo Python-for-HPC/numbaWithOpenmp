@@ -1522,7 +1522,7 @@ class openmp_region_start(ir.Stmt):
 
             ompx_attrs = list(filter(lambda x: x.name == "QUAL.OMP.OMPX_ATTRIBUTE", self.tags))
             self.tags = list(filter(lambda x: x.name != "QUAL.OMP.OMPX_ATTRIBUTE", self.tags))
-            selected_device = 1
+            selected_device = 0
             device_tags = get_tags_of_type(self.tags, "QUAL.OMP.DEVICE")
             if len(device_tags) > 0:
                 device_tag = device_tags[-1]
