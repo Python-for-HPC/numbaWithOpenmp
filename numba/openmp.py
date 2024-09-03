@@ -1905,15 +1905,15 @@ class openmp_region_start(ir.Stmt):
                 #subtarget.install_registry(imputils.builtin_registry)
                 # Turn off the Numba runtime (incref and decref mostly) for the target compilation.
                 subtarget.enable_nrt = False
-                printreg = imputils.Registry()
-                @printreg.lower(print, types.VarArg(types.Any))
-                def print_varargs(context, builder, sig, args):
-                    #print("target print_varargs lowerer")
-                    return context.get_dummy_value()
-
-                subtarget.install_registry(printreg)
-                device_target = subtarget
                 typingctx_outlined = targetctx.typing_context
+
+                #device_target = subtarget.with_aot_codegen(mod.name+f"$device{selected_device}")
+                #device_target._internal_codegen._engine.set_object_cache(None, None)
+
+                import numba.core.codegen as codegen
+                subtarget._internal_codegen = codegen.AOTCPUCodegen(mod.name+f"$device{selected_device}")
+                subtarget._internal_codegen._engine.set_object_cache(None, None)
+                device_target = subtarget
             elif selected_device == 0:
                 from numba.core import target_extension
                 orig_target = getattr(target_extension._active_context, 'target', target_extension._active_context_default)
@@ -2001,13 +2001,6 @@ class openmp_region_start(ir.Stmt):
                                        is_lifted_loop=False,  # tried this as True since code derived from loop lifting code but it goes through the pipeline twice and messes things up
                                        parent_state=state_copy)
 
-            if selected_device == 1:
-                #from numba.cpython import printimpl
-                ##subtarget.install_registry(printimpl.registry)
-                #targetctx.install_registry(printimpl.registry)
-                #targetctx.refresh()
-                subtarget.uninstall_registry(printreg)
-
             if config.DEBUG_OPENMP >= 2:
                 print("cres:", type(cres))
                 print("fndesc:", cres.fndesc, cres.fndesc.mangled_name)
@@ -2040,16 +2033,35 @@ class openmp_region_start(ir.Stmt):
 
             # TODO: move device pipelines in numba proper.
             if selected_device == 1:
-                target_elf = cres_library._get_compiled_object()
+                if config.DEBUG_OPENMP >= 1:
+                    with open(cres_library.name +".ll", "w") as f:
+                        f.write(cres_library.get_llvm_str())
+
                 fd_o, filename_o = tempfile.mkstemp('.o')
-                with open(filename_o, 'wb') as f:
-                    f.write(target_elf)
                 fd_so, filename_so = tempfile.mkstemp(shared_ext)
-                subprocess.run(['clang', '-shared', filename_o, '-o', filename_so])
+
+                target_elf = cres_library.emit_native_object()
+                with open(filename_o, "wb") as f:
+                    f.write(target_elf)
+
+                #from numba.pycc.platform import Toolchain
+                #toolchain = Toolchain()
+                #toolchain.link_shared(filename_so, (filename_o, numba.__path__[0] + "/libbundle.a"))
+
+                # Create shared library as required by the libomptarget host
+                # plugin.
+                subprocess.run(["ld",
+                    "-shared",
+                    filename_o,
+                    numba.__path__[0] + "/libbundle.a",
+                    "-o",
+                    filename_so])
+
                 with open(filename_so, 'rb') as f:
                     target_elf = f.read()
                 if config.DEBUG_OPENMP >= 1:
                     print('filename_o', filename_o, 'filename_so', filename_so)
+
                 os.close(fd_o)
                 os.remove(filename_o)
                 os.close(fd_so)

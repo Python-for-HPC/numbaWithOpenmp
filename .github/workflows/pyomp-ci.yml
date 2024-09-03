@@ -31,7 +31,7 @@ jobs:
           conda init
           conda activate test-numba-pyomp
           pushd ${GITHUB_WORKSPACE}
-          MACOSX_DEPLOYMENT_TARGET=10.10 python setup.py build_ext build install --single-version-externally-managed --record=record.txt
+          MACOSX_DEPLOYMENT_TARGET=10.10 python setup.py build_static build_ext build install --single-version-externally-managed --record=record.txt
           mkdir -p ${GITHUB_WORKSPACE}/bin
           mkdir -p ${GITHUB_WORKSPACE}/lib
           cp ${CONDA_PREFIX}/bin/clang      ${GITHUB_WORKSPACE}/bin
@@ -42,7 +42,7 @@ jobs:
           popd
       - name: Test Numba PyOMP Host
         env:
-          TEST_DEVICES: 0
+          TEST_DEVICES: 1
           RUN_TARGET: 0
         run: |
           # Must be in a different directory to run tests.
@@ -53,7 +53,7 @@ jobs:
           numba -s
           python -m numba.runtests -v -- numba.tests.test_openmp
           popd
-      - name: Test Numba PyOMP Device
+      - name: Test Numba PyOMP Device target host device(1)
         env:
           TEST_DEVICES: 1
           RUN_TARGET: 1
@@ -64,5 +64,5 @@ jobs:
           conda activate test-numba-pyomp
           numba -h
           numba -s
-          python -m numba.runtests -v -- numba.tests.test_openmp
+          python -m numba.runtests -v -- numba.tests.test_openmp.TestOpenmpTarget
           popd

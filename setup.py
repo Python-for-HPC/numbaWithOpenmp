@@ -6,6 +6,8 @@ import sysconfig
 
 from setuptools import Command, Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
+from setuptools.command.build_clib import build_clib
+from setuptools.command.install import install
 
 import versioneer
 
@@ -107,6 +109,35 @@ class NumbaBuildExt(build_ext):
 
 cmdclass['build_ext'] = NumbaBuildExt
 
+class BuildStaticBundle(build_clib):
+    def run(self):
+        import numpy as np
+        self.libraries = [("bundle",
+            {
+                "sources" : ["numba/_helpermod.c",
+                    "numba/cext/utils.c",
+                    "numba/cext/dictobject.c",
+                    "numba/cext/listobject.c",
+                    "numba/core/runtime/_nrt_pythonmod.c",
+                    "numba/core/runtime/nrt.cpp"
+                ],
+                "include_dirs" : [sysconfig.get_paths()["include"],
+                    np.get_include()
+                ]
+            })]
+        super().run()
+
+class CustomInstall(install):
+    def run(self):
+        super().run()
+        build_static = self.distribution.get_command_obj("build_static")
+        for libname in build_static.get_library_names():
+            libname_suffix = "lib" + libname + ".a"
+            built = build_static.build_clib + "/" + libname_suffix
+            self.copy_file(built, self.install_lib + metadata["name"])
+
+
+cmdclass["build_static"] = BuildStaticBundle
 
 def is_building():
     """
@@ -119,13 +150,19 @@ def is_building():
         # User forgot to give an argument probably, let setuptools handle that.
         return True
 
-    build_commands = ['build', 'build_py', 'build_ext', 'build_clib'
+    build_commands = ['build', 'build_py', 'build_ext', 'build_clib',
                       'build_scripts', 'install', 'install_lib',
                       'install_headers', 'install_scripts', 'install_data',
                       'sdist', 'bdist', 'bdist_dumb', 'bdist_rpm',
                       'bdist_wininst', 'check', 'build_doc', 'bdist_wheel',
                       'bdist_egg', 'develop', 'easy_install', 'test']
     return any(bc in sys.argv[1:] for bc in build_commands)
+
+def is_building_static_bundle():
+    if len(sys.argv) < 2:
+        return False
+
+    return ("build_static" in sys.argv[1:])
 
 
 def get_ext_modules():
@@ -424,5 +461,8 @@ with open('README.rst') as f:
 
 if is_building():
     metadata['ext_modules'] = get_ext_modules()
+
+if is_building_static_bundle():
+    cmdclass['install'] = CustomInstall
 
 setup(**metadata)

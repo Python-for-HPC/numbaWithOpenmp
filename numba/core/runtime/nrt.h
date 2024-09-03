@@ -36,6 +36,8 @@ typedef void (*NRT_free_func)(void *ptr);
 
 /* Initialize the memory system */
 VISIBILITY_HIDDEN
+// Make it constructor to correctly initialize the static bundle.
+__attribute__((constructor))
 void NRT_MemSys_init(void);
 
 /* Shutdown the memory system */
