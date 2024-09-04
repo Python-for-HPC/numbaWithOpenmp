@@ -2829,7 +2829,7 @@ def get_dotted_type(x, typemap, lowerer):
 def is_target_arg(name):
     #return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT", "QUAL.OMP.THREAD_LIMIT", "QUAL.OMP.NUM_TEAMS"] or name.startswith("QUAL.OMP.MAP")
     #or name.startswith("QUAL.OMP.NORMALIZED")
-    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
+    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP") or name.startswith("QUAL.OMP.REDUCTION")
 
 
 def is_pointer_target_arg(name, typ):
