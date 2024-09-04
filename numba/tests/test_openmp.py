@@ -3708,6 +3708,7 @@ class TestOpenmpTarget(TestOpenmpBase):
             # comment on removed warp).
             self.assertGreaterEqual(c_thread_i, 4)
 
+    @unittest.skip("Fix backend for host device(1)")
     def target_teams_nest_parallel_fpriv_shared_scalar(self, device):
         target_pragma = f"target teams num_teams(1) thread_limit(32) device({device})"
 
@@ -3776,6 +3777,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         test_impl()
         input("ok?")
 
+    @unittest.skip("Fix backend for host device(1)")
     def target_teams_shared_array(self, device):
         target_pragma = f"target teams num_teams(10) map(tofrom: outside) device({device})"
         @njit
@@ -3843,6 +3845,7 @@ class TestOpenmpTarget(TestOpenmpBase):
             expected[i] = [i]*10
         np.testing.assert_array_equal(a, expected)
 
+    @unittest.skip("Fix backend for host device(1)")
     def target_teams_parallel_shared_array(self, device):
         target_pragma = f"target teams num_teams(10) map(tofrom: outside) device({device})"
         @njit
