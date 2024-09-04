@@ -4332,8 +4332,6 @@ class OpenmpVisitor(Transformer):
 
     def target_teams_loop_directive(self, args):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP", 3, has_loop=True)
-        #self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 3, has_loop=True)
-        #self.some_target_directive(args, "TARGET.TEAMS.LOOP", 3, has_loop=True)
 
     def target_teams_distribute_parallel_for_directive(self, args):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP", 5, has_loop=True)
@@ -4414,6 +4412,9 @@ class OpenmpVisitor(Transformer):
 
     def teams_distribute_simd_directive(self, args):
         self.some_distribute_directive(args, "TEAMS.DISTRIBUTE.SIMD", 3, has_loop=True)
+
+    def teams_loop_directive(self, args):
+        self.some_distribute_directive(args, "TEAMS.DISTRIBUTE.PARALLEL.LOOP", 2, has_loop=True)
 
     def distribute_directive(self, args):
         self.some_distribute_directive(args, "DISTRIBUTE", 1, has_loop=True)
@@ -4792,13 +4793,6 @@ class OpenmpVisitor(Transformer):
     def target_teams_distribute_parallel_for_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit target_teams_distribute_parallel_for_clause", args, type(args), args[0])
-            if isinstance(args[0], list):
-                print(args[0][0])
-        return args[0]
-
-    def target_teams_loop_clause(self, args):
-        if config.DEBUG_OPENMP >= 1:
-            print("visit target_teams_loop_clause", args, type(args), args[0])
             if isinstance(args[0], list):
                 print(args[0][0])
         return args[0]
@@ -5514,6 +5508,7 @@ openmp_grammar = r"""
                     | teams_distribute_simd_construct
                     | teams_distribute_parallel_for_construct
                     | teams_distribute_parallel_for_simd_construct
+                    | teams_loop_construct
                     | target_construct
                     | target_teams_construct
                     | target_teams_distribute_construct
@@ -5539,8 +5534,6 @@ openmp_grammar = r"""
                     | parallel_sections_construct
                     | master_construct
                     | ordered_construct
-    //teams_distribute_parallel_for_simd_clause: target_clause
-    //                                         | teams_distribute_parallel_for_simd_clause
     for_simd_construct: for_simd_directive
     for_simd_directive: FOR SIMD [for_simd_clause*]
     for_simd_clause: for_clause
@@ -5735,6 +5728,7 @@ openmp_grammar = r"""
     target_teams_distribute_parallel_for_construct: target_teams_distribute_parallel_for_directive
     teams_distribute_parallel_for_construct: teams_distribute_parallel_for_directive
     teams_distribute_parallel_for_simd_construct: teams_distribute_parallel_for_simd_directive
+    teams_loop_construct: teams_loop_directive
     target_teams_loop_construct: target_teams_loop_directive
     target_teams_construct: target_teams_directive
     target_teams_distribute_construct: target_teams_distribute_directive
@@ -5903,30 +5897,10 @@ openmp_grammar = r"""
 
     ompx_attribute: OMPX_ATTRIBUTE "(" PYTHON_NAME "(" number_list ")" ")"
     OMPX_ATTRIBUTE: "ompx_attribute"
-    //target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_loop_clause*]
-    target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_distribute_parallel_for_simd_clause*]
-    target_teams_loop_clause: if_clause
-                            | device_clause
-                            | private_clause
-                            | firstprivate_clause
-                     //     | in_reduction_clause
-                            | map_clause
-                            | is_device_ptr_clause
-                     //     | defaultmap_clause
-                            | NOWAIT
-                            | allocate_clause
-                            | depend_with_modifier_clause
-                     //     | uses_allocators_clause
-                            | num_teams_clause
-                            | thread_limit_clause
-                            | data_default_clause
-                            | data_sharing_clause
-                     //     | reduction_default_only_clause
-                     //     | bind_clause
-                            | collapse_clause
-                            | ORDERED
-                            | lastprivate_clause
-                            | ompx_attribute
+    teams_loop_directive: TEAMS LOOP [teams_distribute_parallel_for_clause*]
+    //teams_loop_directive: TEAMS LOOP [teams_distribute_parallel_for_simd_clause*]
+    target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_distribute_parallel_for_clause*]
+    //target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_distribute_parallel_for_simd_clause*]
 
     target_teams_directive: TARGET TEAMS [target_teams_clause*]
     target_teams_clause: if_clause
