@@ -4409,6 +4409,25 @@ class TestOpenmpTarget(TestOpenmpBase):
         c = test_impl(n)
         np.testing.assert_array_equal(c, np.full((n,n), 2))
 
+    def target_nest_teams_nest_loop_collapse(self, device):
+        target_pragma = f"""target device({device}) map(tofrom: a, b, c)"""
+        @njit
+        def test_impl(n):
+            a = np.ones((n,n))
+            b = np.ones((n,n))
+            c = np.zeros((n,n))
+            with openmp(target_pragma):
+                with openmp("teams"):
+                    with openmp("loop collapse(2)"):
+                        for i in range(n):
+                            for j in range(n):
+                                c[i,j] = a[i,j] + b[i,j]
+            return c
+
+        n = 10
+        c = test_impl(n)
+        np.testing.assert_array_equal(c, np.full((n,n), 2))
+
 
 for memberName in dir(TestOpenmpTarget):
     if memberName.startswith("target"):

@@ -515,7 +515,7 @@ class openmp_tag(object):
 
     def add_to_usedef_set(self, use_set, def_set, start):
         assert start==True or start==False
-        if config.DEBUG_OPENMP >= 1:
+        if config.DEBUG_OPENMP >= 3:
             print("add_to_usedef_set", start, self.name, "is_dsa=", is_dsa(self.name))
 
         def add_arg(arg, the_set):
@@ -3873,7 +3873,7 @@ class OpenmpVisitor(Transformer):
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_start_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_lb_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_ub_var.name))
-                    tags_for_enclosing = [cmp_var.name, omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
+                    tags_for_enclosing = [cmp_var.name, omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name, get_itercount_var.name] + [x.name for x in iterspace_vars]
                     #tags_for_enclosing = [omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
                     tags_for_enclosing = [openmp_tag("QUAL.OMP.PRIVATE", x) for x in tags_for_enclosing]
                     # Don't blindly copy code here...this isn't doing what the other spots are doing with privatization.
@@ -4267,7 +4267,7 @@ class OpenmpVisitor(Transformer):
     def check_distribute_nesting(self, dir_tag):
         if "DISTRIBUTE" in dir_tag and "TEAMS" not in dir_tag:
             enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
-            if len(enclosing_regions) < 1 or "TEAMS" not in enclosing_regions[0].tags[0].name:
+            if len(enclosing_regions) < 1 or "TEAMS" not in enclosing_regions[-1].tags[0].name:
                 raise NotImplementedError("DISTRIBUTE must be nested under or combined with TEAMS.")
 
     def teams_directive(self, args):
@@ -4416,6 +4416,9 @@ class OpenmpVisitor(Transformer):
     def teams_loop_directive(self, args):
         self.some_distribute_directive(args, "TEAMS.DISTRIBUTE.PARALLEL.LOOP", 2, has_loop=True)
 
+    def loop_directive(self, args):
+        self.some_distribute_directive(args, "DISTRIBUTE.PARALLEL.LOOP", 1, has_loop=True)
+
     def distribute_directive(self, args):
         self.some_distribute_directive(args, "DISTRIBUTE", 1, has_loop=True)
 
@@ -4454,8 +4457,8 @@ class OpenmpVisitor(Transformer):
                 start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 0))
             self.teams_back_prop(clauses)
         elif "PARALLEL" in dir_tag:
-            if len(self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")) == 0:
-                start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 0))
+            #if len(self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")) == 0:
+            #    start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 0))
             self.parallel_back_prop(clauses)
 
         if config.DEBUG_OPENMP >= 1:
@@ -5508,6 +5511,7 @@ openmp_grammar = r"""
                     | teams_distribute_simd_construct
                     | teams_distribute_parallel_for_construct
                     | teams_distribute_parallel_for_simd_construct
+                    | loop_construct
                     | teams_loop_construct
                     | target_construct
                     | target_teams_construct
@@ -5728,6 +5732,7 @@ openmp_grammar = r"""
     target_teams_distribute_parallel_for_construct: target_teams_distribute_parallel_for_directive
     teams_distribute_parallel_for_construct: teams_distribute_parallel_for_directive
     teams_distribute_parallel_for_simd_construct: teams_distribute_parallel_for_simd_directive
+    loop_construct: loop_directive
     teams_loop_construct: teams_loop_directive
     target_teams_loop_construct: target_teams_loop_directive
     target_teams_construct: target_teams_directive
@@ -5897,10 +5902,9 @@ openmp_grammar = r"""
 
     ompx_attribute: OMPX_ATTRIBUTE "(" PYTHON_NAME "(" number_list ")" ")"
     OMPX_ATTRIBUTE: "ompx_attribute"
+    loop_directive: LOOP [distribute_parallel_for_clause*]
     teams_loop_directive: TEAMS LOOP [teams_distribute_parallel_for_clause*]
-    //teams_loop_directive: TEAMS LOOP [teams_distribute_parallel_for_simd_clause*]
     target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_distribute_parallel_for_clause*]
-    //target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_distribute_parallel_for_simd_clause*]
 
     target_teams_directive: TARGET TEAMS [target_teams_clause*]
     target_teams_clause: if_clause
