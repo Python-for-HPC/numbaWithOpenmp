@@ -3360,6 +3360,7 @@ class OpenmpVisitor(Transformer):
         collapse_tags = get_tags_of_type(clauses, "QUAL.OMP.COLLAPSE")
         new_stmts_for_iterspace = []
         collapse_iterspace_block = set()
+        iterspace_vars = []
         if len(collapse_tags) > 0:
             # Limit all_loops to just loops within the openmp region.
             all_loops = get_loops_in_region(all_loops)
@@ -3469,7 +3470,6 @@ class OpenmpVisitor(Transformer):
             new_var_scope = last_loop_entry_block.body[0].target.scope
 
             # -------- Add vars to remember cumulative product of iteration space sizes.
-            iterspace_vars = []
             new_iterspace_var = new_var_scope.redefine("new_iterspace0", self.loc)
             start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", new_iterspace_var.name))
             iterspace_vars.append(new_iterspace_var)
