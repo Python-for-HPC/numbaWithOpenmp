@@ -50,52 +50,35 @@ import tempfile
 import types as python_types
 import numba
 
+llvm_binpath=None
+llvm_libpath=None
+def _init():
+    global llvm_binpath
+    global llvm_libpath
 
-if config.DEBUG_OPENMP_LLVM_PASS >= 1:
-    ll.set_option('openmp', '-debug')
-    ll.set_option('openmp', '-debug-only=intrinsics-openmp')
+    sys_platform = sys.platform
 
-library_missing = False
+    llvm_version = subprocess.check_output(['llvm-config', '--version']).decode().strip()
+    if llvm_version != "14.0.6":
+        raise RuntimeError(f"Incompatible LLVM version {llvm_version}, PyOMP expects LLVM 14.0.6")
 
-numba_openmp_path = os.path.dirname(os.path.realpath(__file__))
-numba_openmp_lib_path = numba_openmp_path + "/lib"
-numba_openmp_bin_path = numba_openmp_path + "/bin"
-
-iomplib = os.getenv('NUMBA_OMP_LIB',None)
-if iomplib is None:
-    lib_name = numba_openmp_lib_path + "/libomp.so"
-    if os.path.isfile(lib_name):
-        iomplib = lib_name
-if iomplib is None:
-    iomplib = ctypes.util.find_library("libomp.so")
-if iomplib is None:
-    iomplib = ctypes.util.find_library("libiomp5.so")
-if iomplib is None:
-    iomplib = ctypes.util.find_library("omp")
-if iomplib is None:
-    iomplib = ctypes.util.find_library("libomp")
-if iomplib is None:
-    library_missing = True
-else:
+    llvm_binpath = subprocess.check_output(['llvm-config', '--bindir']).decode().strip()
+    llvm_libpath = subprocess.check_output(['llvm-config', '--libdir']).decode().strip()
+    iomplib = llvm_libpath + "/libomp" + (".dylib" if sys_platform == "darwin" else ".so")
     if config.DEBUG_OPENMP >= 1:
         print("Found OpenMP runtime library at", iomplib)
     ll.load_library_permanently(iomplib)
 
-omptargetlib = os.getenv('NUMBA_OMPTARGET_LIB', None)
-if omptargetlib is None:
-    lib_name = numba_openmp_lib_path + "/libomptarget.so"
-    if os.path.isfile(lib_name):
-        omptargetlib = lib_name
-if omptargetlib is None:
-    omptargetlib = ctypes.util.find_library("libomptarget.so")
-if omptargetlib is None:
-    omptargetlib = ctypes.util.find_library("omptarget")
-if omptargetlib is None:
-    library_missing = True
-else:
+    # libomptarget is unavailable on apple, windows, so return.
+    if sys_platform.startswith("darwin") or sys_platform.startswith("win32"):
+        return
+
+    omptargetlib = llvm_libpath + "/libomptarget.so"
     if config.DEBUG_OPENMP >= 1:
         print("Found OpenMP target runtime library at", omptargetlib)
     ll.load_library_permanently(omptargetlib)
+
+_init()
 
 #----------------------------------------------------------------------------------------------
 
@@ -2083,7 +2066,7 @@ class openmp_region_start(ir.Stmt):
                         self.libdevice_path = cudalibs.get_libdevice()
                         with open(self.libdevice_path, "rb") as f:
                             self.libs_mod = ll.parse_bitcode(f.read())
-                        self.libomptarget_arch = numba_openmp_lib_path + \
+                        self.libomptarget_arch = llvm_libpath + \
                             '/libomptarget-new-nvptx-' + self.sm + '.bc'
                         with open(self.libomptarget_arch, "rb") as f:
                             libomptarget_mod = ll.parse_bitcode(f.read())
@@ -2181,25 +2164,27 @@ class openmp_region_start(ir.Stmt):
                         with open(filename_prefix + '.ll', 'w') as f:
                             f.write(str(mod))
 
-                        if config.DEBUG_OPENMP_LLVM_PASS >= 1:
-                            cmd_list = [numba_openmp_bin_path + '/opt', '-S', '--intrinsics-openmp', '-debug-only=intrinsics-openmp',
-                                filename_prefix + '.ll', '-o', filename_prefix + '-intrinsics_omp.ll']
-                        else:
-                            cmd_list = [numba_openmp_bin_path + '/opt', '-S', '--intrinsics-openmp',
-                                filename_prefix + '.ll', '-o', filename_prefix + '-intrinsics_omp.ll']
-                        subprocess.run(cmd_list, check=True)
+                        # Lower openmp intrinsics.
+                        with ll.create_module_pass_manager() as pm:
+                            pm.add_intrinsics_openmp_pass()
+                            pm.add_cfg_simplification_pass()
+                            pm.run(mod)
+
+                        with open(filename_prefix + '-intrinsics_omp.ll', 'w') as f:
+                            f.write(str(mod))
+
                         if config.DEBUG_OPENMP >= 1:
                             print('libomptarget_arch', self.libomptarget_arch)
-                        subprocess.run([numba_openmp_bin_path + '/llvm-link',
+                        subprocess.run([llvm_binpath + '/llvm-link',
                             '--suppress-warnings',
                             '--internalize', '-S', filename_prefix +
                             '-intrinsics_omp.ll', self.libomptarget_arch, self.libdevice_path,
                             '-o', filename_prefix + '-intrinsics_omp-linked.ll'],
                             check=True)
-                        subprocess.run([numba_openmp_bin_path + '/opt', '-S', '-O3', filename_prefix + '-intrinsics_omp-linked.ll',
+                        subprocess.run([llvm_binpath + '/opt', '-S', '-O3', filename_prefix + '-intrinsics_omp-linked.ll',
                             '-o', filename_prefix + '-intrinsics_omp-linked-opt.ll'], check=True)
 
-                        subprocess.run([numba_openmp_bin_path + '/llc', '-O3', '-march=nvptx64', f'-mcpu={self.sm}', f'-mattr=+ptx64,+{self.sm}',
+                        subprocess.run([llvm_binpath + '/llc', '-O3', '-march=nvptx64', f'-mcpu={self.sm}', f'-mattr=+ptx64,+{self.sm}',
                                         filename_prefix + '-intrinsics_omp-linked-opt.ll',
                                         '-o', filename_prefix + '-intrinsics_omp-linked-opt.s'], check=True)
 
@@ -6216,26 +6201,6 @@ def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra
     openmp ir nodes in it and adds the ending openmp ir nodes to
     the end block.
     """
-    # First check for presence of required libraries.
-    if library_missing:
-        if iomplib is None:
-            print("OpenMP runtime library could not be found.")
-            print("Make sure that libomp.so or libiomp5.so is in your library path or")
-            print("specify the location of the OpenMP runtime library with the")
-            print("NUMBA_OMP_LIB environment variables.")
-            sys.exit(-1)
-
-        if omptargetlib is None:
-            if sys.platform.startswith("darwin"):
-                # OpenMP GPU offloading is unavailable on Darwin
-                pass
-            else:
-                print("OpenMP target runtime library could not be found.")
-                print("Make sure that libomptarget.so or")
-                print("specify the location of the OpenMP runtime library with the")
-                print("NUMBA_OMPTARGET_LIB environment variables.")
-                sys.exit(-1)
-
     sblk = blocks[blk_start]
     scope = sblk.scope
     loc = sblk.loc
