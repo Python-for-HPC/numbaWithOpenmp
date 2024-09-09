@@ -2811,7 +2811,7 @@ def get_dotted_type(x, typemap, lowerer):
 def is_target_arg(name):
     #return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT", "QUAL.OMP.THREAD_LIMIT", "QUAL.OMP.NUM_TEAMS"] or name.startswith("QUAL.OMP.MAP")
     #or name.startswith("QUAL.OMP.NORMALIZED")
-    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP") or name.startswith("QUAL.OMP.REDUCTION")
+    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
 
 
 def is_pointer_target_arg(name, typ):
@@ -3408,15 +3408,25 @@ class OpenmpVisitor(Transformer):
 
                 # Copy all stmts from the loop entry block up to the ir.Global
                 # for range.
+                call_offset = None
                 for entry_block_index, stmt in enumerate(loop_entry_block.body):
+                    found_range = False
                     if isinstance(stmt, ir.Assign) and isinstance(stmt.value, ir.Global) and stmt.value.name == "range":
+                        found_range = True
                         range_target = stmt.target
-                        call_stmt = loop_entry_block.body[entry_block_index + 1]
-                        assert isinstance(call_stmt, ir.Assign) and isinstance(call_stmt.value, ir.Expr) and call_stmt.value.op == 'call' and call_stmt.value.func == range_target
-                        # Remove stmts that were retained.
-                        loop_entry_block.body = loop_entry_block.body[entry_block_index:]
+                        found_call = False
+                        for call_index in range(entry_block_index + 1, len(loop_entry_block.body)):
+                            call_stmt = loop_entry_block.body[call_index]
+                            if isinstance(call_stmt, ir.Assign) and isinstance(call_stmt.value, ir.Expr) and call_stmt.value.op == 'call' and call_stmt.value.func == range_target:
+                                found_call = True
+                                # Remove stmts that were retained.
+                                loop_entry_block.body = loop_entry_block.body[entry_block_index:]
+                                call_offset = call_index - entry_block_index
+                                break
+                        assert found_call
                         break
                     stmts_to_retain.append(stmt)
+                assert found_range
                 for header_block_index, stmt in enumerate(loop_header_block.body):
                     if isinstance(stmt, ir.Assign) and isinstance(stmt.value, ir.Expr) and stmt.value.op == "iternext":
                         iternext_inst = loop_header_block.body[header_block_index]
@@ -3475,7 +3485,7 @@ class OpenmpVisitor(Transformer):
                 new_stmts_for_iterspace.append(ir.Assign(mul_op, new_iterspace_var, self.loc))
             # Change iteration space of innermost loop to the product of all the
             # loops' iteration spaces.
-            last_loop_entry_block.body[1].value.args[0] = new_iterspace_var
+            last_loop_entry_block.body[call_offset].value.args[0] = new_iterspace_var
 
             last_eliminated_loop_header_block.body = new_stmts_for_iterspace + last_eliminated_loop_header_block.body
 
@@ -4324,7 +4334,8 @@ class OpenmpVisitor(Transformer):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE", 3, has_loop=True)
 
     def target_teams_loop_directive(self, args):
-        self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 3, has_loop=True)
+        self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP", 3, has_loop=True)
+        #self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 3, has_loop=True)
         #self.some_target_directive(args, "TARGET.TEAMS.LOOP", 3, has_loop=True)
 
     def target_teams_distribute_parallel_for_directive(self, args):

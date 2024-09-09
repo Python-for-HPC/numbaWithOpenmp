@@ -4390,6 +4390,25 @@ class TestOpenmpTarget(TestOpenmpBase):
         else:
             raise ValueError(f"Device {device} must be 0 or 1")
 
+    def target_teams_loop_collapse(self, device):
+        target_pragma = f"""target teams loop collapse(2)
+                        device({device})
+                        map(tofrom: a, b, c)"""
+        @njit
+        def test_impl(n):
+            a = np.ones((n,n))
+            b = np.ones((n,n))
+            c = np.zeros((n,n))
+            with openmp(target_pragma):
+                for i in range(n):
+                    for j in range(n):
+                        c[i,j] = a[i,j] + b[i,j]
+            return c
+
+        n = 10
+        c = test_impl(n)
+        np.testing.assert_array_equal(c, np.full((n,n), 2))
+
 
 for memberName in dir(TestOpenmpTarget):
     if memberName.startswith("target"):
