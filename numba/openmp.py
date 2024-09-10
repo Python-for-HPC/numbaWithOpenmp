@@ -2809,9 +2809,7 @@ def get_dotted_type(x, typemap, lowerer):
 
 
 def is_target_arg(name):
-    #return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT", "QUAL.OMP.THREAD_LIMIT", "QUAL.OMP.NUM_TEAMS"] or name.startswith("QUAL.OMP.MAP")
-    #or name.startswith("QUAL.OMP.NORMALIZED")
-    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP")
+    return name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.TARGET.IMPLICIT"] or name.startswith("QUAL.OMP.MAP") or name.startswith("QUAL.OMP.REDUCTION")
 
 
 def is_pointer_target_arg(name, typ):
@@ -2824,7 +2822,6 @@ def is_pointer_target_arg(name, typ):
     if name.startswith("QUAL.OMP.MAP"):
         if isinstance(typ, types.npytypes.Array):
             return True
-            #return False
         else:
             return True
     if name in ["QUAL.OMP.FIRSTPRIVATE", "QUAL.OMP.PRIVATE"]:
@@ -4342,7 +4339,8 @@ class OpenmpVisitor(Transformer):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP", 5, has_loop=True)
 
     def target_teams_distribute_parallel_for_simd_directive(self, args):
-        self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP.SIMD", 6, has_loop=True)
+        # Intentionally dropping "SIMD" from string as that typically isn't implemented on GPU.
+        self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP", 6, has_loop=True)
 
     def get_clauses_by_name(self, clauses, names, remove_from_orig=False):
         if not isinstance(names, list):
