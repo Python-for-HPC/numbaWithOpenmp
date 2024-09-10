@@ -3874,7 +3874,6 @@ class OpenmpVisitor(Transformer):
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_lb_var.name))
                     start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", omp_ub_var.name))
                     tags_for_enclosing = [cmp_var.name, omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name, get_itercount_var.name] + [x.name for x in iterspace_vars]
-                    #tags_for_enclosing = [omp_lb_var.name, omp_start_var.name, omp_iv_var.name, types_mod_var.name, int64_var.name, itercount_var.name, omp_ub_var.name, const1_var.name, const1_latch_var.name]
                     tags_for_enclosing = [openmp_tag("QUAL.OMP.PRIVATE", x) for x in tags_for_enclosing]
                     # Don't blindly copy code here...this isn't doing what the other spots are doing with privatization.
                     #self.add_private_to_enclosing(replace_vardict, tags_for_enclosing)
@@ -3891,15 +3890,6 @@ class OpenmpVisitor(Transformer):
         start_tags = [openmp_tag(main_start_tag)]
         end_tags = [openmp_tag(main_end_tag)]
         clauses = self.some_data_clause_directive(args, start_tags, end_tags, first_clause, has_loop=True)
-        #sblk = self.blocks[self.blk_start]
-        #scope = sblk.scope
-        #eblk = self.blocks[self.blk_end]
-        #clauses, default_shared = self.flatten(args[first_clause:], sblk)
-
-        #if config.DEBUG_OPENMP >= 1:
-        #    print("visit", main_start_tag, args, type(args), default_shared)
-        #    for clause in clauses:
-        #        print("post-process clauses:", clause)
 
         if "PARALLEL" in main_start_tag:
             # ---- Back propagate THREAD_LIMIT to enclosed target region. ----
@@ -3966,6 +3956,18 @@ class OpenmpVisitor(Transformer):
     def for_simd_clause(self, args):
         if config.DEBUG_OPENMP >= 1:
             print("visit for_simd_clause",
+                  args, type(args), args[0])
+        return args[0]
+
+    def schedule_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit schedule_clause",
+                  args, type(args), args[0])
+        return args[0]
+
+    def dist_schedule_clause(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit dist_schedule_clause",
                   args, type(args), args[0])
         return args[0]
 
@@ -4417,7 +4419,11 @@ class OpenmpVisitor(Transformer):
         self.some_distribute_directive(args, "TEAMS.DISTRIBUTE.PARALLEL.LOOP", 2, has_loop=True)
 
     def loop_directive(self, args):
-        self.some_distribute_directive(args, "DISTRIBUTE.PARALLEL.LOOP", 1, has_loop=True)
+        enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
+        if not enclosing_regions or len(enclosing_regions) < 1 or "TEAMS" not in enclosing_regions[-1].tags[0].name:
+            self.some_for_directive(args, "DIR.OMP.PARALLEL.LOOP", "DIR.OMP.END.PARALLEL.LOOP", 1, True)
+        else:
+            self.some_distribute_directive(args, "DISTRIBUTE.PARALLEL.LOOP", 1, has_loop=True)
 
     def distribute_directive(self, args):
         self.some_distribute_directive(args, "DISTRIBUTE", 1, has_loop=True)
@@ -4457,8 +4463,6 @@ class OpenmpVisitor(Transformer):
                 start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 0))
             self.teams_back_prop(clauses)
         elif "PARALLEL" in dir_tag:
-            #if len(self.get_clauses_by_name(clauses, "QUAL.OMP.THREAD_LIMIT")) == 0:
-            #    start_tags.append(openmp_tag("QUAL.OMP.THREAD_LIMIT", 0))
             self.parallel_back_prop(clauses)
 
         if config.DEBUG_OPENMP >= 1:
@@ -6127,8 +6131,7 @@ openmp_grammar = r"""
     for_directive: FOR [for_clause*]
     for_clause: unique_for_clause | data_clause | NOWAIT
     unique_for_clause: ORDERED
-                     | sched_no_expr
-                     | sched_expr
+                     | schedule_clause
                      | collapse_clause
     LINEAR: "linear"
     linear_clause: LINEAR "(" var_list ":" const_num_or_var ")"
