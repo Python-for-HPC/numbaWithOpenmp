@@ -59,7 +59,7 @@ import unittest
 # process starts which enables the tests within the process. The decorator
 # @needs_subprocess is used to ensure the appropriate test skips are made.
 
-#@linux_only
+#
 #class TestOpenmpRunner(TestCase):
 #    _numba_parallel_test_ = False
 #
@@ -323,7 +323,7 @@ class TestPipeline(object):
         self.state.metadata = {}
 
 
-#@linux_only
+#
 #class TestOpenmpBasic(TestOpenmpBase):
 #    """OpenMP smoke tests. These tests check the most basic
 #    functionality"""
@@ -332,7 +332,7 @@ class TestPipeline(object):
 #        TestOpenmpBase.__init__(self, *args)
 
 
-@linux_only
+
 class TestOpenmpRoutinesEnvVariables(TestOpenmpBase):
     MAX_THREADS = 5
 
@@ -551,7 +551,7 @@ class TestOpenmpRoutinesEnvVariables(TestOpenmpBase):
         np.testing.assert_array_equal(r[0], r[1])
 
 
-@linux_only
+
 class TestOpenmpParallelForResults(TestOpenmpBase):
 
     def __init__(self, *args):
@@ -702,7 +702,7 @@ class TestOpenmpParallelForResults(TestOpenmpBase):
                 np.testing.assert_equal(ja[a1i][a2i], ka[a1i][a2i])
 
 
-@linux_only
+
 class TestOpenmpWorksharingSchedule(TestOpenmpBase):
 
     def __init__(self, *args):
@@ -861,7 +861,7 @@ class TestOpenmpWorksharingSchedule(TestOpenmpBase):
         assert(ca[-2] >= cs)
 
 
-@linux_only
+
 class TestOpenmpParallelClauses(TestOpenmpBase):
 
     def __init__(self, *args):
@@ -997,7 +997,7 @@ class TestOpenmpParallelClauses(TestOpenmpBase):
         self.check(test_impl)
 
 
-@linux_only
+
 class TestOpenmpDataClauses(TestOpenmpBase):
 
     def __init__(self, *args):
@@ -1446,7 +1446,7 @@ class TestOpenmpDataClauses(TestOpenmpBase):
         assert(r[1] == N//2-1)
 
 
-@linux_only
+
 class TestOpenmpConstraints(TestOpenmpBase):
     """Tests designed to confirm that errors occur when expected, or
     to see how OpenMP behaves in various circumstances"""
@@ -1655,7 +1655,7 @@ class TestOpenmpConstraints(TestOpenmpBase):
             test_impl()
 
 
-@linux_only
+
 class TestOpenmpConcurrency(TestOpenmpBase):
 
     def __init__(self, *args):
@@ -2082,7 +2082,7 @@ class TestOpenmpConcurrency(TestOpenmpBase):
         for i in range(N):
             np.testing.assert_array_equal(r[i], np.array([1, 2]))
 
-@linux_only
+
 class TestOpenmpTask(TestOpenmpBase):
 
     def __init__(self, *args):
@@ -2507,7 +2507,7 @@ class TestOpenmpTask(TestOpenmpBase):
         self.check(test_impl, 2)
 
 
-@linux_only
+
 @unittest.skipUnless(TestOpenmpBase.skip_disabled, "Unimplemented")
 class TestOpenmpTaskloop(TestOpenmpBase):
 
@@ -2594,6 +2594,7 @@ class TestOpenmpTaskloop(TestOpenmpBase):
         with self.assertRaises(AssertionError) as raises:
             np.testing.assert_array_equal(r[0], r[1])
         np.testing.assert_array_equal(r[1], r[2])
+
 
 
 @linux_only
@@ -3893,7 +3894,7 @@ for memberName in dir(TestOpenmpTarget):
             return func_with_subtest
         setattr(TestOpenmpTarget, "test_" + test_func.__name__, make_func_with_subtest(test_func))
 
-@linux_only
+
 class TestOpenmpPi(TestOpenmpBase):
 
     def __init__(self, *args):

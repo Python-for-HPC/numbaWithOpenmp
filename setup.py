@@ -442,8 +442,6 @@ metadata = dict(
         "numba.misc": ["cmdlang.gdb"],
         "numba.typed": ["py.typed"],
         "numba.cuda" : ["cpp_function_wrappers.cu"],
-        "numba.lib" : ["numba/lib/*.bc", "numba/lib/lib*omp*so"],
-        "numba.bin" : ["numba/bin/opt", "numba/bin/llc", "numba/bin/llvm-link", "numba/bin/clang"]
     },
     scripts=["bin/numba"],
     url="https://numba.pydata.org",
