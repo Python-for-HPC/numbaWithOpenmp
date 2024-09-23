@@ -4420,10 +4420,16 @@ class OpenmpVisitor(Transformer):
 
     def loop_directive(self, args):
         enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
-        if not enclosing_regions or len(enclosing_regions) < 1 or "TEAMS" not in enclosing_regions[-1].tags[0].name:
+        if not enclosing_regions or len(enclosing_regions) < 1:
             self.some_for_directive(args, "DIR.OMP.PARALLEL.LOOP", "DIR.OMP.END.PARALLEL.LOOP", 1, True)
         else:
-            self.some_distribute_directive(args, "DISTRIBUTE.PARALLEL.LOOP", 1, has_loop=True)
+            if "TEAMS" in enclosing_regions[-1].tags[0].name:
+                self.some_distribute_directive(args, "DISTRIBUTE.PARALLEL.LOOP", 1, has_loop=True)
+            else:
+                if "TARGET" in enclosing_regions[-1].tags[0].name:
+                    self.some_distribute_directive(args, "TEAMS.DISTRIBUTE.PARALLEL.LOOP", 1, has_loop=True)
+                else:
+                    self.some_for_directive(args, "DIR.OMP.PARALLEL.LOOP", "DIR.OMP.END.PARALLEL.LOOP", 1, True)
 
     def distribute_directive(self, args):
         self.some_distribute_directive(args, "DISTRIBUTE", 1, has_loop=True)
