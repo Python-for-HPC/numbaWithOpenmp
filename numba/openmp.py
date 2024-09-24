@@ -4073,7 +4073,7 @@ class OpenmpVisitor(Transformer):
             assert(len(args) == 2)
         else:
             map_type = "TOFROM"  # is this default right?  FIX ME
-            var_list = args
+            var_list = args[0]
         ret = []
         for var in var_list:
             ret.append(openmp_tag("QUAL.OMP.MAP." + map_type, var))
@@ -4423,7 +4423,9 @@ class OpenmpVisitor(Transformer):
         if not enclosing_regions or len(enclosing_regions) < 1:
             self.some_for_directive(args, "DIR.OMP.PARALLEL.LOOP", "DIR.OMP.END.PARALLEL.LOOP", 1, True)
         else:
-            if "TEAMS" in enclosing_regions[-1].tags[0].name:
+            if "DISTRIBUTE" in enclosing_regions[-1].tags[0].name:
+                self.some_distribute_directive(args, "PARALLEL.LOOP", 1, has_loop=True)
+            elif "TEAMS" in enclosing_regions[-1].tags[0].name:
                 self.some_distribute_directive(args, "DISTRIBUTE.PARALLEL.LOOP", 1, has_loop=True)
             else:
                 if "TARGET" in enclosing_regions[-1].tags[0].name:
