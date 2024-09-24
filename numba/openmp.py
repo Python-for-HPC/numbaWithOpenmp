@@ -4419,6 +4419,8 @@ class OpenmpVisitor(Transformer):
         self.some_distribute_directive(args, "TEAMS.DISTRIBUTE.PARALLEL.LOOP", 2, has_loop=True)
 
     def loop_directive(self, args):
+        # TODO Add error checking that a clause that the parser accepts if we find that
+        # loop can even take clauses, which we're not sure that it can.
         enclosing_regions = get_enclosing_region(self.func_ir, self.blk_start)
         if not enclosing_regions or len(enclosing_regions) < 1:
             self.some_for_directive(args, "DIR.OMP.PARALLEL.LOOP", "DIR.OMP.END.PARALLEL.LOOP", 1, True)
@@ -5914,7 +5916,7 @@ openmp_grammar = r"""
 
     ompx_attribute: OMPX_ATTRIBUTE "(" PYTHON_NAME "(" number_list ")" ")"
     OMPX_ATTRIBUTE: "ompx_attribute"
-    loop_directive: LOOP [distribute_parallel_for_clause*]
+    loop_directive: LOOP [teams_distribute_parallel_for_clause*]
     teams_loop_directive: TEAMS LOOP [teams_distribute_parallel_for_clause*]
     target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_distribute_parallel_for_clause*]
 
