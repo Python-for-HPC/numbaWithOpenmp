@@ -4332,6 +4332,9 @@ class OpenmpVisitor(Transformer):
     def target_teams_distribute_directive(self, args):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE", 3, has_loop=True)
 
+    def target_loop_directive(self, args):
+        self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP", 2, has_loop=True)
+
     def target_teams_loop_directive(self, args):
         self.some_target_directive(args, "TARGET.TEAMS.DISTRIBUTE.PARALLEL.LOOP", 3, has_loop=True)
 
@@ -5533,6 +5536,7 @@ openmp_grammar = r"""
                     | target_teams_distribute_simd_construct
                     | target_teams_distribute_parallel_for_simd_construct
                     | target_teams_distribute_parallel_for_construct
+                    | target_loop_construct
                     | target_teams_loop_construct
                     | target_enter_data_construct
                     | target_exit_data_construct
@@ -5748,6 +5752,7 @@ openmp_grammar = r"""
     teams_distribute_parallel_for_simd_construct: teams_distribute_parallel_for_simd_directive
     loop_construct: loop_directive
     teams_loop_construct: teams_loop_directive
+    target_loop_construct: target_loop_directive
     target_teams_loop_construct: target_teams_loop_directive
     target_teams_construct: target_teams_directive
     target_teams_distribute_construct: target_teams_distribute_directive
@@ -5918,6 +5923,7 @@ openmp_grammar = r"""
     OMPX_ATTRIBUTE: "ompx_attribute"
     loop_directive: LOOP [teams_distribute_parallel_for_clause*]
     teams_loop_directive: TEAMS LOOP [teams_distribute_parallel_for_clause*]
+    target_loop_directive: TARGET LOOP [target_teams_distribute_parallel_for_clause*]
     target_teams_loop_directive: TARGET TEAMS LOOP [target_teams_distribute_parallel_for_clause*]
 
     target_teams_directive: TARGET TEAMS [target_teams_clause*]
