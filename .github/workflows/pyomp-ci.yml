@@ -1,4 +1,4 @@
-name: Test Numba PyOMP 
+name: Test Numba PyOMP
 
 on:
   pull_request:
@@ -16,18 +16,31 @@ jobs:
         shell: bash -el {0}
     steps:
       - uses: actions/checkout@v4
-      - name: Create conda environment
+      - name: Setup miniconda
         uses: conda-incubator/setup-miniconda@v3
         with:
           auto-update-conda: false
           auto-activate-base: false
           show-channel-urls: true
-      - name: Build Numba PyOMP
+      - name: Create conda environment
         run: |
           conda create -c python-for-hpc -c conda-forge --override-channels -n test-numba-pyomp \
             compilers llvmdev=14.0.6  numpy=1.24 lark-parser cffi python=3.10 \
-            llvmlite=pyomp_0.40 \
             llvm-openmp-dev=14.0.6
+      - name: Build llvmlite PyOMP
+        run: |
+          conda init
+          conda activate test-numba-pyomp
+          git clone https://github.com/Python-for-HPC/llvmliteWithOpenmp.git
+          cd llvmliteWithOpenmp
+          # Change checkout ref to "develop" or desired commit.
+          git checkout develop
+          export PYTHONNOUSERSITE=1
+          export LLVMLITE_CXX_STATIC_LINK=1
+          export LLVMLITE_SHARED=1
+          python setup.py build install
+      - name: Build Numba PyOMP
+        run: |
           conda init
           conda activate test-numba-pyomp
           pushd ${GITHUB_WORKSPACE}
@@ -46,17 +59,16 @@ jobs:
           numba -s
           python -m numba.runtests -v -- numba.tests.test_openmp
           popd
-        # TODO: Re-enable when fixed.
-        #- name: Test Numba PyOMP Device target host device(1)
-        #  env:
-        #    TEST_DEVICES: 1
-        #    RUN_TARGET: 1
-        #  run: |
-        #    # Must be in a different directory to run tests.
-        #    pushd ${RUNNER_WORKSPACE}
-        #    conda init
-        #    conda activate test-numba-pyomp
-        #    numba -h
-        #    numba -s
-        #    python -m numba.runtests -v -- numba.tests.test_openmp.TestOpenmpTarget
-        #    popd
+      - name: Test Numba PyOMP Device target host device(1)
+        env:
+          TEST_DEVICES: 1
+          RUN_TARGET: 1
+        run: |
+          # Must be in a different directory to run tests.
+          pushd ${RUNNER_WORKSPACE}
+          conda init
+          conda activate test-numba-pyomp
+          numba -h
+          numba -s
+          python -m numba.runtests -v -- numba.tests.test_openmp.TestOpenmpTarget
+          popd

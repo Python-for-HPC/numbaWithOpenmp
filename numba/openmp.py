@@ -1602,9 +1602,6 @@ class openmp_region_start(ir.Stmt):
                     # extraneous arguments in the kernel function.
                     if start_region.has_target() == target_num:
                         start_region.tags.append(openmp_tag("OMP.DEVICE"))
-                        start_region.tags[:] = [ tag for tag in
-                                                 start_region.tags if tag.name not in
-                                                 ("QUAL.OMP.THREAD_LIMIT", "QUAL.OMP.NUM_TEAMS") ]
                     end_region = blocks[end_block].body[ebindex]
                     #assert(start_region.omp_region_var is None)
                     assert(len(start_region.alloca_queue) == 0)
