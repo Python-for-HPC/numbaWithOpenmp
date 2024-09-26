@@ -8,6 +8,7 @@ from setuptools import Command, Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_clib import build_clib
 from setuptools.command.install import install
+from setuptools.command.develop import develop
 
 import versioneer
 
@@ -126,6 +127,15 @@ class BuildStaticBundle(build_clib):
                 ]
             })]
         super().run()
+
+class CustomDevelop(develop):
+    def run(self):
+        super().run()
+        build_static = self.distribution.get_command_obj("build_static")
+        for libname in build_static.get_library_names():
+            libname_suffix = "lib" + libname + ".a"
+            built = build_static.build_clib + "/" + libname_suffix
+            self.copy_file(built, os.path.abspath(metadata["name"]))
 
 class CustomInstall(install):
     def run(self):
@@ -404,7 +414,10 @@ packages = find_packages(include=["numba", "numba.*"])
 build_requires = ['numpy >={},<{}'.format(min_numpy_build_version,
                                           max_numpy_run_version)]
 install_requires = [
-    'llvmlite >={},<{}'.format(min_llvmlite_version, max_llvmlite_version),
+    # TODO: remove version checking for now, will re-instate when we decide
+    # versioning.
+    #'llvmlite >={},<{}'.format(min_llvmlite_version, max_llvmlite_version),
+    'llvmlite',
     'numpy >={},<{}'.format(min_numpy_run_version, max_numpy_run_version),
     'importlib_metadata; python_version < "3.9"',
 ]
@@ -461,6 +474,7 @@ if is_building():
     metadata['ext_modules'] = get_ext_modules()
 
 if is_building_static_bundle():
+    cmdclass['develop'] = CustomDevelop
     cmdclass['install'] = CustomInstall
 
 setup(**metadata)
