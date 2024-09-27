@@ -996,7 +996,261 @@ class TestOpenmpParallelClauses(TestOpenmpBase):
             return a
         self.check(test_impl)
 
+class TestReductions(TestOpenmpBase):
+    def __init__(self, *args):
+        TestOpenmpBase.__init__(self, *args)
 
+    def test_parallel_reduction_add_int(self):
+        @njit
+        def test_impl():
+            redux = 0
+            nthreads = 0
+            with openmp("parallel reduction(+:redux)"):
+                thread_id = omp_get_thread_num()
+                if thread_id == 0:
+                    nthreads = omp_get_num_threads()
+                redux = 1
+            return redux, nthreads
+
+        redux, nthreads = test_impl()
+        self.assertGreater(nthreads, 1)
+        self.assertEqual(redux, nthreads)
+
+    def test_parallel_reduction_sub_int(self):
+        @njit
+        def test_impl():
+            redux = 0
+            nthreads = 0
+            with openmp("parallel reduction(-:redux)"):
+                thread_id = omp_get_thread_num()
+                if thread_id == 0:
+                    nthreads = omp_get_num_threads()
+                redux = 1
+            return redux, nthreads
+
+        redux, nthreads = test_impl()
+        self.assertGreater(nthreads, 1)
+        self.assertEqual(redux, nthreads)
+
+    def test_parallel_reduction_mul_int(self):
+        @njit
+        def test_impl():
+            redux = 1
+            nthreads = 0
+            with openmp("parallel reduction(*:redux) num_threads(8)"):
+                thread_id = omp_get_thread_num()
+                if thread_id == 0:
+                    nthreads = omp_get_num_threads()
+                redux = 2
+            return redux, nthreads
+
+        redux, nthreads = test_impl()
+        self.assertGreater(nthreads, 1)
+        self.assertEqual(redux, 2**nthreads)
+
+    def test_parallel_reduction_add_fp64(self):
+        @njit
+        def test_impl():
+            redux = np.float64(0.0)
+            nthreads = np.float64(0.0)
+            with openmp("parallel reduction(+:redux)"):
+                thread_id = omp_get_thread_num()
+                if thread_id == 0:
+                    nthreads = omp_get_num_threads()
+                redux = np.float64(1.5)
+            return redux, nthreads
+
+        redux, nthreads = test_impl()
+        self.assertGreater(nthreads, 1)
+        self.assertEqual(redux, 1.5*nthreads)
+
+    def test_parallel_reduction_sub_fp64(self):
+        @njit
+        def test_impl():
+            redux = np.float64(0.0)
+            nthreads = np.float64(0.0)
+            with openmp("parallel reduction(-:redux)"):
+                thread_id = omp_get_thread_num()
+                if thread_id == 0:
+                    nthreads = omp_get_num_threads()
+                redux = np.float64(1.0)
+            return redux, nthreads
+
+        redux, nthreads = test_impl()
+        self.assertGreater(nthreads, 1)
+        self.assertEqual(redux, 1.0*nthreads)
+
+    def test_parallel_reduction_mul_fp64(self):
+        @njit
+        def test_impl():
+            redux = np.float64(1.0)
+            nthreads = np.float64(0.0)
+            with openmp("parallel reduction(*:redux) num_threads(8)"):
+                thread_id = omp_get_thread_num()
+                if thread_id == 0:
+                    nthreads = omp_get_num_threads()
+                redux = np.float64(2.0)
+            return redux, nthreads
+
+        redux, nthreads = test_impl()
+        self.assertGreater(nthreads, 1)
+        self.assertEqual(redux, 2.0**nthreads)
+
+    def test_parallel_reduction_add_fp32(self):
+        @njit
+        def test_impl():
+            redux = np.float32(0.0)
+            nthreads = np.float32(0.0)
+            with openmp("parallel reduction(+:redux)"):
+                thread_id = omp_get_thread_num()
+                if thread_id == 0:
+                    nthreads = omp_get_num_threads()
+                redux = np.float32(1.5)
+            return redux, nthreads
+
+        redux, nthreads = test_impl()
+        self.assertGreater(nthreads, 1)
+        self.assertEqual(redux, 1.5*nthreads)
+
+    def test_parallel_reduction_sub_fp32(self):
+        @njit
+        def test_impl():
+            redux = np.float32(0.0)
+            nthreads = np.float32(0.0)
+            with openmp("parallel reduction(-:redux)"):
+                thread_id = omp_get_thread_num()
+                if thread_id == 0:
+                    nthreads = omp_get_num_threads()
+                redux = np.float32(1.0)
+            return redux, nthreads
+
+        redux, nthreads = test_impl()
+        self.assertGreater(nthreads, 1)
+        self.assertEqual(redux, 1.0*nthreads)
+
+    def test_parallel_reduction_mul_fp32(self):
+        @njit
+        def test_impl():
+            redux = np.float32(1.0)
+            nthreads = np.float32(0.0)
+            with openmp("parallel reduction(*:redux) num_threads(8)"):
+                thread_id = omp_get_thread_num()
+                if thread_id == 0:
+                    nthreads = omp_get_num_threads()
+                redux = np.float32(2.0)
+            return redux, nthreads
+
+        redux, nthreads = test_impl()
+        self.assertGreater(nthreads, 1)
+        self.assertEqual(redux, 2.0**nthreads)
+
+    def test_parallel_for_reduction_add_int(self):
+        @njit
+        def test_impl():
+            redux = 0
+            with openmp("parallel for reduction(+:redux)"):
+                for i in range(10):
+                    redux += 1
+            return redux
+
+        redux = test_impl()
+        self.assertEqual(redux, 10)
+
+    def test_parallel_for_reduction_sub_int(self):
+        @njit
+        def test_impl():
+            redux = 0
+            with openmp("parallel for reduction(-:redux)"):
+                for i in range(10):
+                    redux += 1
+            return redux
+
+        redux = test_impl()
+        self.assertEqual(redux, 10)
+
+    def test_parallel_for_reduction_mul_int(self):
+        @njit
+        def test_impl():
+            redux = 1
+            with openmp("parallel for reduction(*:redux)"):
+                for i in range(10):
+                    redux *= 2
+            return redux
+
+        redux = test_impl()
+        self.assertEqual(redux, 2**10)
+
+    def test_parallel_for_reduction_add_fp64(self):
+        @njit
+        def test_impl():
+            redux = np.float64(0.0)
+            with openmp("parallel for reduction(+:redux)"):
+                for i in range(10):
+                    redux += np.float64(1.0)
+            return redux
+
+        redux = test_impl()
+        self.assertEqual(redux, 10.0)
+
+    def test_parallel_for_reduction_sub_fp64(self):
+        @njit
+        def test_impl():
+            redux = np.float64(0.0)
+            with openmp("parallel for reduction(-:redux)"):
+                for i in range(10):
+                    redux += np.float64(1.0)
+            return redux
+
+        redux = test_impl()
+        self.assertEqual(redux, 10.0)
+
+    def test_parallel_for_reduction_mul_fp64(self):
+        @njit
+        def test_impl():
+            redux = np.float64(1.0)
+            with openmp("parallel for reduction(*:redux)"):
+                for i in range(10):
+                    redux *= np.float64(2.0)
+            return redux
+
+        redux = test_impl()
+        self.assertEqual(redux, 2.0**10)
+
+    def test_parallel_for_reduction_add_fp32(self):
+        @njit
+        def test_impl():
+            redux = np.float32(0.0)
+            with openmp("parallel for reduction(+:redux)"):
+                for i in range(10):
+                    redux += np.float32(1.0)
+            return redux
+
+        redux = test_impl()
+        self.assertEqual(redux, 10.0)
+
+    def test_parallel_for_reduction_sub_fp32(self):
+        @njit
+        def test_impl():
+            redux = np.float32(0.0)
+            with openmp("parallel for reduction(-:redux)"):
+                for i in range(10):
+                    redux += np.float32(1.0)
+            return redux
+
+        redux = test_impl()
+        self.assertEqual(redux, 10.0)
+
+    def test_parallel_for_reduction_mul_fp32(self):
+        @njit
+        def test_impl():
+            redux = np.float32(1.0)
+            with openmp("parallel for reduction(*:redux)"):
+                for i in range(10):
+                    redux *= np.float32(2.0)
+            return redux
+
+        redux = test_impl()
+        self.assertEqual(redux, 2.0**10)
 
 class TestOpenmpDataClauses(TestOpenmpBase):
 
