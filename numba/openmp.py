@@ -5401,12 +5401,26 @@ class OpenmpVisitor(Transformer):
             print("visit PLUS", args, type(args))
         return "+"
 
+    def MINUS(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit MINUS", args, type(args))
+        return "-"
+
+    def STAR(self, args):
+        if config.DEBUG_OPENMP >= 1:
+            print("visit STAR", args, type(args))
+        return "*"
+
     def reduction_operator(self, args):
         arg = args[0]
         if config.DEBUG_OPENMP >= 1:
             print("visit reduction_operator", args, type(args), arg, type(arg))
         if arg == "+":
             return "ADD"
+        elif arg == "-":
+            return "SUB"
+        elif arg == "*":
+            return "MUL"
         assert(0)
 
     def threadprivate_directive(self, args):
@@ -6150,7 +6164,9 @@ openmp_grammar = r"""
     var_list: name_slice | var_list "," name_slice
     number_list: NUMBER | number_list "," NUMBER
     PLUS: "+"
-    reduction_operator: PLUS | "\\" | "*" | "-" | "&" | "^" | "|" | "&&" | "||"
+    MINUS: "-"
+    STAR: "*"
+    reduction_operator: PLUS | "\\" | STAR | MINUS | "&" | "^" | "|" | "&&" | "||"
     threadprivate_directive: "threadprivate" "(" var_list ")"
     cancellation_point_directive: "cancellation point" construct_type_clause
     construct_type_clause: PARALLEL
