@@ -1057,12 +1057,12 @@ class TestReductions(TestOpenmpBase):
                 thread_id = omp_get_thread_num()
                 if thread_id == 0:
                     nthreads = omp_get_num_threads()
-                redux = np.float64(1.5)
+                redux = np.float64(1.0)
             return redux, nthreads
 
         redux, nthreads = test_impl()
         self.assertGreater(nthreads, 1)
-        self.assertEqual(redux, 1.5*nthreads)
+        self.assertEqual(redux, 1.0*nthreads)
 
     def test_parallel_reduction_sub_fp64(self):
         @njit
@@ -1105,12 +1105,12 @@ class TestReductions(TestOpenmpBase):
                 thread_id = omp_get_thread_num()
                 if thread_id == 0:
                     nthreads = omp_get_num_threads()
-                redux = np.float32(1.5)
+                redux = np.float32(1.0)
             return redux, nthreads
 
         redux, nthreads = test_impl()
         self.assertGreater(nthreads, 1)
-        self.assertEqual(redux, 1.5*nthreads)
+        self.assertEqual(redux, 1.0*nthreads)
 
     def test_parallel_reduction_sub_fp32(self):
         @njit
@@ -1251,6 +1251,90 @@ class TestReductions(TestOpenmpBase):
 
         redux = test_impl()
         self.assertEqual(redux, 2.0**10)
+
+    def test_parallel_reduction_add_int_10(self):
+        @njit
+        def test_impl():
+            redux = 10
+            nthreads = 0
+            with openmp("parallel reduction(+:redux)"):
+                thread_id = omp_get_thread_num()
+                if thread_id == 0:
+                    nthreads = omp_get_num_threads()
+                redux = 1
+            return redux, nthreads
+
+        redux, nthreads = test_impl()
+        self.assertGreater(nthreads, 1)
+        self.assertEqual(redux, nthreads+10)
+
+    def test_parallel_reduction_add_fp32_10(self):
+        @njit
+        def test_impl():
+            redux = np.float32(10.0)
+            nthreads = np.float32(0.0)
+            with openmp("parallel reduction(+:redux)"):
+                thread_id = omp_get_thread_num()
+                if thread_id == 0:
+                    nthreads = omp_get_num_threads()
+                redux = np.float32(1.0)
+            return redux, nthreads
+
+        redux, nthreads = test_impl()
+        self.assertGreater(nthreads, 1)
+        self.assertEqual(redux, 1.0*nthreads+10.0)
+
+    def test_parallel_reduction_add_fp64_10(self):
+        @njit
+        def test_impl():
+            redux = np.float64(10.0)
+            nthreads = np.float64(0.0)
+            with openmp("parallel reduction(+:redux)"):
+                thread_id = omp_get_thread_num()
+                if thread_id == 0:
+                    nthreads = omp_get_num_threads()
+                redux = np.float64(1.0)
+            return redux, nthreads
+
+        redux, nthreads = test_impl()
+        self.assertGreater(nthreads, 1)
+        self.assertEqual(redux, 1.0*nthreads+10.0)
+
+    def test_parallel_for_reduction_add_int_10(self):
+        @njit
+        def test_impl():
+            redux = 10
+            with openmp("parallel for reduction(+:redux)"):
+                for i in range(10):
+                    redux += 1
+            return redux
+
+        redux = test_impl()
+        self.assertEqual(redux, 10+10)
+
+    def test_parallel_for_reduction_add_fp32(self):
+        @njit
+        def test_impl():
+            redux = np.float32(0.0)
+            with openmp("parallel for reduction(+:redux)"):
+                for i in range(10):
+                    redux += np.float32(1.0)
+            return redux
+
+        redux = test_impl()
+        self.assertEqual(redux, 10.0)
+
+    def test_parallel_for_reduction_add_fp64_10(self):
+        @njit
+        def test_impl():
+            redux = np.float64(10.0)
+            with openmp("parallel for reduction(+:redux)"):
+                for i in range(10):
+                    redux += np.float64(1.0)
+            return redux
+
+        redux = test_impl()
+        self.assertEqual(redux, 10.0+10.0)
 
 class TestOpenmpDataClauses(TestOpenmpBase):
 
