@@ -2953,6 +2953,10 @@ class TestOpenmpTarget(TestOpenmpBase):
     def __init__(self, *args):
         TestOpenmpBase.__init__(self, *args)
 
+    @classmethod
+    def is_testing_cpu(cls):
+        return 1 in cls.devices
+
     # How to check for nowait?
     # Currently checks only compilation.
     # Numba optimizes the whole target away? This runs too fast.
@@ -4409,6 +4413,25 @@ class TestOpenmpTarget(TestOpenmpBase):
         c = test_impl(n)
         np.testing.assert_array_equal(c, np.full((n,n), 2))
 
+    def target_nest_teams_nest_loop_collapse(self, device):
+        target_pragma = f"""target device({device}) map(tofrom: a, b, c)"""
+        @njit
+        def test_impl(n):
+            a = np.ones((n,n))
+            b = np.ones((n,n))
+            c = np.zeros((n,n))
+            with openmp(target_pragma):
+                with openmp("teams"):
+                    with openmp("loop collapse(2)"):
+                        for i in range(n):
+                            for j in range(n):
+                                c[i,j] = a[i,j] + b[i,j]
+            return c
+
+        n = 10
+        c = test_impl(n)
+        np.testing.assert_array_equal(c, np.full((n,n), 2))
+
 
 for memberName in dir(TestOpenmpTarget):
     if memberName.startswith("target"):
@@ -4453,6 +4476,23 @@ class TestOpenmpPi(TestOpenmpBase):
             omp_set_num_threads(4)
 
             with openmp("parallel for reduction(+:the_sum) schedule(static)"):
+                for j in range(num_steps):
+                    x = ((j-1) - 0.5) * step
+                    the_sum += 4.0 / (1.0 + x * x)
+
+            pi = step * the_sum
+            return pi
+
+        self.check(test_impl, 100000)
+
+    def test_pi_loop_directive(self):
+        def test_impl(num_steps):
+            step = 1.0 / num_steps
+
+            the_sum = 0.0
+            omp_set_num_threads(4)
+
+            with openmp("loop reduction(+:the_sum) schedule(static)"):
                 for j in range(num_steps):
                     x = ((j-1) - 0.5) * step
                     the_sum += 4.0 / (1.0 + x * x)
