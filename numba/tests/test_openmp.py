@@ -3575,6 +3575,39 @@ class TestOpenmpTarget(TestOpenmpBase):
         r = test_impl(n)
         np.testing.assert_array_equal(r, np.full(n, 42))
 
+    def target_map_slice_good(self, device):
+        target_pragma = f"target device({device}) map(a[50:100]) map(to: b[100:150])"
+        @njit
+        def test_impl(n):
+            a = np.zeros(n)
+            b = np.arange(n)
+            with openmp(target_pragma):
+                for i in range(50):
+                    a[i+50] = b[i+100]
+            return a
+        n = 200
+        r = test_impl(n)
+        np.testing.assert_array_equal(r[0:50], np.zeros(50))
+        np.testing.assert_array_equal(r[50:100], np.arange(n)[100:150])
+        np.testing.assert_array_equal(r[100:200], np.zeros(100))
+
+    def target_map_slice_bad(self, device):
+        target_pragma = f"target device({device}) map(a[50:100]) map(to: b[100:150])"
+        @njit
+        def test_impl(n):
+            a = np.zeros(n)
+            b = np.arange(n)
+            with openmp(target_pragma):
+                for i in range(50):
+                    a[i+50] = b[i+50]
+            return a
+        n = 200
+        r = test_impl(n)
+        np.testing.assert_array_equal(r[0:50], np.zeros(50))
+        # Make sure that the range 50-100 was not transferred.
+        np.testing.assert_array_not_equal(r[50:100], np.arange(n)[50:100])
+        np.testing.assert_array_equal(r[100:200], np.zeros(100))
+
     def target_map_tofrom_array(self, device):
         target_pragma = f"target device({device}) map(tofrom: a)"
         @njit
