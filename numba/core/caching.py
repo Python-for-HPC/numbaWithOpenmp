@@ -443,67 +443,6 @@ class CodeLibraryCacheImpl(CacheImpl):
         res = parent.get_filename_base(fullname, abiflags)
         return '-'.join([self._filename_prefix, res])
 
-"""
-def rec_pickle(x, cur, max):
-    from numba.core.consts import ConstantInference
-    from numba.core.postproc import VariableLifetime
-    from numba.core.ir import Block
-    from numba.core.lowering import Lower
-    from numba.core import typing, cpu, typeconv
-    import weakref
-    from numba.core.ir_utils import dump_block
-    from types import ModuleType
-    import llvmlite.ir as lir
-
-    if isinstance(x, (weakref.ProxyType, ModuleType, lir.instructions.AllocaInstr, lir.instructions.CallInstr, lir.builder.IRBuilder, Lower, typing.context.Context, cpu.CPUContext)):
-        return
-    if hasattr(x, "__dict__") and cur < max:
-        for prop, val in vars(x).items():
-            print("starting:", cur, prop, type(val))
-        for prop, val in vars(x).items():
-            if callable(val):
-                continue
-            print("prop:", cur, prop, type(val), val)
-            #if prop == "typingctx":
-            #    breakpoint()
-            rec_pickle(val, cur + 1, max)
-    else:
-        if isinstance(x, ConstantInference):
-            for zprop, zval in x._cache.items():
-                print("zprop:", zprop, cur, type(zval), zval)
-                rec_pickle(zval, cur + 1, max)
-            #dumps(x._func_ir)
-            dumps(x._cache)
-        elif isinstance(x, list):
-            if cur < max:
-                for z in x:
-                    print("z:", z, cur, type(z))
-                    rec_pickle(z, cur + 1, max)
-            else:
-                dumps(x)
-        elif isinstance(x, dict):
-            if cur < max:
-                for zprop, zval in x.items():
-                    print("zprop:", zprop, cur, type(zval), zval)
-                    rec_pickle(zprop, cur + 1, max)
-                    print("before zval", zval)
-                    if isinstance(zval, Block):
-                        dump_block(zprop, zval)
-                        if zprop == 38:
-                            rec_pickle(zval, cur, max)
-                        else:
-                            rec_pickle(zval, cur + 1, max)
-                    else:
-                        rec_pickle(zval, cur + 1, max)
-                    #rec_pickle(zval, cur + 1, max)
-            else:
-                dumps(x)
-        elif isinstance(x, VariableLifetime):
-            pass
-        else:
-            dumps(x)
-"""
-
 
 class IndexDataCacheFile(object):
     """
@@ -608,13 +547,6 @@ class IndexDataCacheFile(object):
         return os.path.join(self._cache_path, name)
 
     def _dump(self, obj):
-        #print("_dump:", obj, type(obj))
-        #for i in range(len(obj)):
-        #    print("i:", i)
-        #    if i == 5:
-        #        print(dir(obj[i][0]))
-        #        rec_pickle(obj[i][0], 0, 11)
-        #    dumps(obj[i])
         return dumps(obj)
 
     @contextlib.contextmanager
