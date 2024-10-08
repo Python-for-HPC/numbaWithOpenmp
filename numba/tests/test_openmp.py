@@ -3605,7 +3605,7 @@ class TestOpenmpTarget(TestOpenmpBase):
         r = test_impl(n)
         np.testing.assert_array_equal(r[0:50], np.zeros(50))
         # Make sure that the range 50-100 was not transferred.
-        np.testing.assert_array_not_equal(r[50:100], np.arange(n)[50:100])
+        assert not np.array_equal(r[50:100], np.arange(n)[50:100])
         np.testing.assert_array_equal(r[100:200], np.zeros(100))
 
     def target_map_tofrom_array(self, device):
