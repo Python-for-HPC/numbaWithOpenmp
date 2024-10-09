@@ -52,13 +52,11 @@ import numba
 
 llvm_binpath=None
 llvm_libpath=None
-omp_libraries_found = False
 
 def _init():
     global llvm_binpath
     global llvm_libpath
 
-    omp_libraries_found = True
     sys_platform = sys.platform
 
     llvm_version = subprocess.check_output(['llvm-config', '--version']).decode().strip()
@@ -81,6 +79,7 @@ def _init():
         print("Found OpenMP target runtime library at", omptargetlib)
     ll.load_library_permanently(omptargetlib)
 
+_init()
 
 if config.DEBUG_OPENMP_LLVM_PASS >= 1:
     ll.set_option('openmp', '-debug')
@@ -6244,24 +6243,12 @@ def remove_ssa_from_func_ir(func_ir):
     func_ir._definitions = build_definitions(func_ir.blocks)
 
 
-def check_libs():
-    global omp_libraries_found
-    if omp_libraries_found:
-        return
-
-    _init()
-
-
 def _add_openmp_ir_nodes(func_ir, blocks, blk_start, blk_end, body_blocks, extra, state):
     """Given the starting and ending block of the with-context,
     replaces the head block with a new block that has the starting
     openmp ir nodes in it and adds the ending openmp ir nodes to
     the end block.
     """
-    # First check for presence of required libraries.
-    check_libs()
-    #state.reload_init.append(check_libs)  # Not sure about this one.
-
     sblk = blocks[blk_start]
     scope = sblk.scope
     loc = sblk.loc
