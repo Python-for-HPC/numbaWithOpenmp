@@ -1429,33 +1429,51 @@ class openmp_region_start(ir.Stmt):
                             the_slice = cur_tag.arg.the_slice[0][0]
                             assert the_slice.step is None
                             if isinstance(the_slice.start, int):
-                                omp_slice_start = the_slice.start
-                            else:
-                                omp_slice_start = the_slice.start
-                                assert isinstance(omp_slice_start, str)
-                                omp_slice_start = ir.Var(None, omp_slice_start, array_var.loc)
-                            if isinstance(the_slice.stop, int):
-                                size_var = the_slice.stop
-                            else:
-                                size_var = the_slice.stop
-                                assert isinstance(size_var, str)
-                                size_var = ir.Var(None, size_var, array_var.loc)
-                        else:
-                            omp_slice_start = 0
-                            size_var = ir.Var(None, f"{cur_tag_var}_size_var{target_num}{uniqueness}", array_var.loc)
-                            #size_var = array_var.scope.redefine("size_var", array_var.loc)
-                            size_getattr = ir.Expr.getattr(array_var, "size", array_var.loc)
-                            size_assign = ir.Assign(size_getattr, size_var, array_var.loc)
-                            typemap[size_var.name] = types.int64
-                            lowerer.lower_inst(size_assign)
-                            extras_before.append(size_assign)
-                            lowerer._alloca_var(size_var.name, typemap[size_var.name])
+                                start_index_var = ir.Var(None, f"{cur_tag_var}_start_index_var{target_num}{uniqueness}", array_var.loc)
+                                start_assign = ir.Assign(ir.Const(the_slice.start, array_var.loc), start_index_var, array_var.loc)
 
-                            # see core/datamodel/models.py
-                            loaded_size = lowerer.loadvar(size_var.name)
-                            loaded_op = loaded_size.operands[0]
-                            loaded_pointee = loaded_op.type.pointee
-                            loaded_str = str(loaded_pointee) + " * " + loaded_size._get_reference()
+                                typemap[start_index_var.name] = types.int64
+                                lowerer.lower_inst(start_assign)
+                                extras_before.append(start_assign)
+                                lowerer._alloca_var(start_index_var.name, typemap[start_index_var.name])
+                                lowerer.loadvar(start_index_var.name)
+                            else:
+                                start_index_var = the_slice.start
+                                assert isinstance(start_index_var, str)
+                                start_index_var = ir.Var(None, start_index_var, array_var.loc)
+                            if isinstance(the_slice.stop, int):
+                                end_index_var = ir.Var(None, f"{cur_tag_var}_end_index_var{target_num}{uniqueness}", array_var.loc)
+                                end_assign = ir.Assign(ir.Const(the_slice.stop, array_var.loc), end_index_var, array_var.loc)
+                                typemap[end_index_var.name] = types.int64
+                                lowerer.lower_inst(end_assign)
+                                extras_before.append(end_assign)
+                                lowerer._alloca_var(end_index_var.name, typemap[end_index_var.name])
+                                lowerer.loadvar(end_index_var.name)
+                            else:
+                                end_index_var = the_slice.stop
+                                assert isinstance(end_index_var, str)
+                                end_index_var = ir.Var(None, end_index_var, array_var.loc)
+
+                            num_elements_var = ir.Var(None, f"{cur_tag_var}_num_elements_var{target_num}{uniqueness}", array_var.loc)
+                            size_binop = ir.Expr.binop(operator.sub, end_index_var, start_index_var, array_var.loc)
+                            size_assign = ir.Assign(size_binop, num_elements_var, array_var.loc)
+                            calltypes[size_binop] = typing.signature(types.int64, types.int64, types.int64)
+                        else:
+                            start_index_var = 0
+                            num_elements_var = ir.Var(None, f"{cur_tag_var}_num_elements_var{target_num}{uniqueness}", array_var.loc)
+                            size_getattr = ir.Expr.getattr(array_var, "size", array_var.loc)
+                            size_assign = ir.Assign(size_getattr, num_elements_var, array_var.loc)
+
+                        typemap[num_elements_var.name] = types.int64
+                        lowerer.lower_inst(size_assign)
+                        extras_before.append(size_assign)
+                        lowerer._alloca_var(num_elements_var.name, typemap[num_elements_var.name])
+
+                        # see core/datamodel/models.py
+                        loaded_size = lowerer.loadvar(num_elements_var.name)  # Need side-effect?
+                        #loaded_op = loaded_size.operands[0]
+                        #loaded_pointee = loaded_op.type.pointee
+                        #loaded_str = str(loaded_pointee) + " * " + loaded_size._get_reference()
 
                         #--------
                         """
@@ -1476,12 +1494,17 @@ class openmp_region_start(ir.Stmt):
                         """
 
                         # see core/datamodel/models.py
-                        if isinstance(size_var, ir.Var):
-                            loaded_size = lowerer.loadvar(size_var.name)
-                            loaded_op = loaded_size.operands[0]
-                            loaded_pointee = loaded_op.type.pointee
-                            loaded_str = str(loaded_pointee) + " * " + loaded_size._get_reference()
-                        struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag_var + "*data", non_arg=True, omp_slice=(0, size_var)))
+                        if isinstance(start_index_var, ir.Var):
+                            loaded_size = lowerer.loadvar(start_index_var.name) # Need side-effect?
+                            #loaded_op = loaded_size.operands[0]
+                            #loaded_pointee = loaded_op.type.pointee
+                            #loaded_str = str(loaded_pointee) + " * " + loaded_size._get_reference()
+                        if isinstance(num_elements_var, ir.Var):
+                            loaded_size = lowerer.loadvar(num_elements_var.name) # Need side-effect?
+                            #loaded_op = loaded_size.operands[0]
+                            #loaded_pointee = loaded_op.type.pointee
+                            #loaded_str = str(loaded_pointee) + " * " + loaded_size._get_reference()
+                        struct_tags.append(openmp_tag(cur_tag.name + ".STRUCT", cur_tag_var + "*data", non_arg=True, omp_slice=(start_index_var, num_elements_var)))
                         struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag_var + "*shape", non_arg=True, omp_slice=(0, 1)))
                         struct_tags.append(openmp_tag("QUAL.OMP.MAP.TO.STRUCT", cur_tag_var + "*strides", non_arg=True, omp_slice=(0, 1)))
                         # Peel off NameSlice, it served its purpose and is not
