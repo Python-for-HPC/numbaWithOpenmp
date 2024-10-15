@@ -1101,6 +1101,11 @@ class LiftedCode(serialize.ReduceMixin, _MemoMixin, _DispatcherBase):
                                  can_fallback=True,
                                  exact_match_required=False)
 
+    class LCFuncIR:
+        def __init__(self, arg_count, func_id):
+            self.arg_count = arg_count
+            self.func_id = func_id
+
     def _reduce_states(self):
         """
         Reduce the instance for pickling.  This will serialize
@@ -1110,8 +1115,8 @@ class LiftedCode(serialize.ReduceMixin, _MemoMixin, _DispatcherBase):
         NOTE: part of ReduceMixin protocol
         """
         return dict(
-            uuid=self._uuid, func_ir=self.func_ir, flags=self.flags,
-            locals=self.locals, extras=self._reduce_extras(),
+            uuid=self._uuid, func_ir=self.LCFuncIR(self.func_ir.arg_count, self.func_ir.func_id),
+            flags=self.flags, locals=self.locals, extras=self._reduce_extras(),
         )
 
     def _reduce_extras(self):
