@@ -52,6 +52,7 @@ import numba
 
 llvm_binpath=None
 llvm_libpath=None
+
 def _init():
     global llvm_binpath
     global llvm_libpath
@@ -79,6 +80,11 @@ def _init():
     ll.load_library_permanently(omptargetlib)
 
 _init()
+
+if config.DEBUG_OPENMP_LLVM_PASS >= 1:
+    ll.set_option('openmp', '-debug')
+    ll.set_option('openmp', '-debug-only=intrinsics-openmp')
+
 
 #----------------------------------------------------------------------------------------------
 
@@ -165,6 +171,17 @@ class openmp_tag(object):
         self.xarginfo = []
         self.non_arg = non_arg
         self.omp_slice = omp_slice
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        if isinstance(self.arg, lir.instructions.AllocaInstr):
+            del state['arg']
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        if not hasattr(self, "arg"):
+            self.arg = None
 
     def var_in(self, var):
         assert isinstance(var, str)
@@ -1119,6 +1136,13 @@ class openmp_region_start(ir.Stmt):
         self.acq_rel = False
         self.alloca_queue = []
         self.end_region = None
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
     def replace_var_names(self, namedict):
         for i in range(len(self.tags)):
