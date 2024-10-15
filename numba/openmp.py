@@ -1138,13 +1138,8 @@ class openmp_region_start(ir.Stmt):
         self.end_region = None
 
     def __getstate__(self):
-        return {}
-        #state = self.__dict__.copy()
-        #if isinstance(self.arg, lir.instructions.AllocaInstr):
-        #    print("set arg to None")
-        #    del state['arg']
-        #    #state['arg'] = None
-        #return state
+        state = self.__dict__.copy()
+        return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
