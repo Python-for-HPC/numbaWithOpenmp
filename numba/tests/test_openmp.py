@@ -612,6 +612,16 @@ class TestOpenmpParallelForResults(TestOpenmpBase):
             return a
         self.check(test_impl, 12)
 
+    def test_parallel_for_range_step_arg(self):
+        def test_impl(N, step):
+            a = np.zeros(N, dtype=np.int32)
+            with openmp("parallel for"):
+                for i in range(0, 10, step):
+                    a[i] = i + 1
+
+            return a
+        self.check(test_impl, 12, 2)
+
     def test_parallel_for_range_backward_step(self):
         def test_impl(N):
             a = np.zeros(N, dtype=np.int32)

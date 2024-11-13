@@ -3550,9 +3550,7 @@ class OpenmpVisitor(Transformer):
             if len(call) == 0:
                 return False
 
-            return call[0] # or call[0] == prange
-                    #or call[0] == 'internal_prange' or call[0] == internal_prange
-                    #$or call[0] == 'pndindex' or call[0] == pndindex)
+            return call[0]
 
         loop = loops[0]
         entry = list(loop.entries)[0]
@@ -3744,19 +3742,16 @@ class OpenmpVisitor(Transformer):
                         size_var = range_args[1]
                         try:
                             step = self.func_ir.get_definition(range_args[2])
+                            # get_definition with return arg.foo if foo is an
+                            # argument instead of simply foo.  Fix that here.
+                            if isinstance(step, ir.Arg):
+                                step = ir.Var(loop_index.scope, step.name, inst.loc)
                         except KeyError:
                             raise NotImplementedError(
-                                "Only known step size is supported for prange")
-                        if not isinstance(step, ir.Const):
-                            raise NotImplementedError(
-                                "Only constant step size is supported for prange")
-                        step = step.value
-#                        if step != 1:
-#                            print("unsupported step:", step, type(step))
-#                            raise NotImplementedError(
-#                                "Only constant step size of 1 is supported for prange")
+                                "Only known step size is supported for range")
+                        if isinstance(step, ir.Const):
+                            step = step.value
 
-                    #assert(start == 0 or (isinstance(start, ir.Const) and start.value == 0))
                     if config.DEBUG_OPENMP >= 1:
                         print("size_var:", size_var, type(size_var))
 
@@ -3848,7 +3843,14 @@ class OpenmpVisitor(Transformer):
                     detect_step_assign = ir.Assign(ir.Const(0, inst.loc), step_var, inst.loc)
                     after_start.append(detect_step_assign)
 
-                    step_assign = ir.Assign(ir.Const(step, inst.loc), step_var, inst.loc)
+                    if isinstance(step, int):
+                        step_assign = ir.Assign(ir.Const(step, inst.loc), step_var, inst.loc)
+                    elif isinstance(step, ir.Var):
+                        step_assign = ir.Assign(step, step_var, inst.loc)
+                    else:
+                        print("Unsupported step:", step, type(step))
+                        raise NotImplementedError(
+                            f"Unknown step type that isn't a constant or variable but {type(step)} instead.")
                     scale_var = loop_index.scope.redefine("$scale", inst.loc)
                     fake_iternext = ir.Assign(ir.Const(0, inst.loc), iternext_inst.target, inst.loc)
                     fake_second = ir.Assign(ir.Const(0, inst.loc), pair_second_inst.target, inst.loc)
