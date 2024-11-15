@@ -622,6 +622,17 @@ class TestOpenmpParallelForResults(TestOpenmpBase):
             return a
         self.check(test_impl, 12, 2)
 
+    def test_parallel_for_incremented_step(self):
+        @njit
+        def test_impl(v, n):
+            for i in range(n):
+                with openmp("parallel for"):
+                    for j in range(0, len(v), i + 1):
+                        v[j] = i + 1
+            return v
+
+        self.check(test_impl, np.zeros(100), 3)
+
     def test_parallel_for_range_backward_step(self):
         def test_impl(N):
             a = np.zeros(N, dtype=np.int32)
@@ -1853,19 +1864,6 @@ class TestOpenmpConstraints(TestOpenmpBase):
         with self.assertRaises(ParallelForExtraCode) as raises:
             test_impl()
         self.assertIn("Extra code near line", str(raises.exception))
-
-    def test_parallel_for_incremented_step(self):
-        @njit
-        def test_impl(v, n):
-            for i in range(n):
-                with openmp("parallel for"):
-                    for j in range(0, len(v), i):
-                        v[j] = i
-            return v
-
-        with self.assertRaises(NotImplementedError) as raises:
-            test_impl(np.zeros(100), 3)
-        self.assertIn("Only constant step", str(raises.exception))
 
     def test_nonstring_var_omp_statement(self):
         @njit
