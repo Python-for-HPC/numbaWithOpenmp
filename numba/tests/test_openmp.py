@@ -606,7 +606,7 @@ class TestOpenmpParallelForResults(TestOpenmpBase):
         def test_impl(N):
             a = np.zeros(N, dtype=np.int32)
             with openmp("parallel for"):
-                for i in range(0, 10, 2):
+                for i in range(0, len(a), 2):
                     a[i] = i + 1
 
             return a
@@ -616,7 +616,7 @@ class TestOpenmpParallelForResults(TestOpenmpBase):
         def test_impl(N, step):
             a = np.zeros(N, dtype=np.int32)
             with openmp("parallel for"):
-                for i in range(0, 10, step):
+                for i in range(0, len(a), step):
                     a[i] = i + 1
 
             return a
@@ -3357,6 +3357,41 @@ class TestOpenmpTarget(TestOpenmpBase):
             return a
         r = test_impl()
         np.testing.assert_equal(r, np.full(32, 1))
+
+    def target_parallel_for_range_step_arg(self, device):
+        target_pragma = f"target device({device}) map(tofrom: a)"
+        parallel_pragma = "parallel for"
+        N = 10
+        step = 2
+        @njit
+        def test_impl():
+            a = np.zeros(N, dtype=np.int32)
+            with openmp(target_pragma):
+                with openmp(parallel_pragma):
+                    for i in range(0, len(a), step):
+                        a[i] = i + 1
+
+            return a
+        r = test_impl()
+        np.testing.assert_equal(r, np.array([1,0,3,0,5,0,7,0,9,0]))
+
+    def target_parallel_for_incremented_step(self, device):
+        target_pragma = f"target device({device}) map(tofrom: a)"
+        parallel_pragma = "parallel for"
+        N = 10
+        step_range = 3
+        @njit
+        def test_impl():
+            a = np.zeros(N, dtype=np.int32)
+            for i in range(step_range):
+                with openmp(target_pragma):
+                    with openmp(parallel_pragma):
+                        for j in range(0, len(a), i + 1):
+                            a[j] = i + 1
+            return a
+
+        r = test_impl()
+        np.testing.assert_equal(r, np.array([3,1,2,3,2,1,3,1,2,3]))
 
     def target_teams(self, device):
         target_pragma = f"target teams num_teams(100) device({device}) map(from: a, nteams)"
