@@ -330,7 +330,7 @@ class openmp_tag(object):
                     elif isinstance(arg_str, lir.instructions.AllocaInstr):
                         decl = arg_str.get_decl()
                     else:
-                        breakpoint()
+                        assert False
 
                 if struct_lower and isinstance(xtyp, types.npytypes.Array):
                     dm = lowerer.context.data_model_manager.lookup(xtyp)
@@ -3742,10 +3742,10 @@ class OpenmpVisitor(Transformer):
                         size_var = range_args[1]
                         try:
                             step = self.func_ir.get_definition(range_args[2])
-                            # get_definition with return arg.foo if foo is an
-                            # argument instead of simply foo.  Fix that here.
-                            if isinstance(step, ir.Arg):
-                                step = ir.Var(loop_index.scope, step.name, inst.loc)
+                            # Only use get_definition to get a const if
+                            # available.  Otherwise use the variable.
+                            if not isinstance(step, int):
+                                step = range_args[2]
                         except KeyError:
                             raise NotImplementedError(
                                 "Only known step size is supported for range")
@@ -3847,6 +3847,7 @@ class OpenmpVisitor(Transformer):
                         step_assign = ir.Assign(ir.Const(step, inst.loc), step_var, inst.loc)
                     elif isinstance(step, ir.Var):
                         step_assign = ir.Assign(step, step_var, inst.loc)
+                        start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", step.name))
                     else:
                         print("Unsupported step:", step, type(step))
                         raise NotImplementedError(
@@ -4608,9 +4609,7 @@ class OpenmpVisitor(Transformer):
                                                      end_tags,
                                                      scope)
             vars_in_explicit_clauses, explicit_privates, non_user_explicits = self.get_explicit_vars(clauses)
-
             found_loop, blocks_for_io, blocks_in_region, entry_pred, exit_block, inst, size_var, step_var, latest_index, loop_index = prepare_out
-
             assert(found_loop)
         else:
             blocks_for_io = self.body_blocks
@@ -6365,7 +6364,6 @@ def omp_shared_array(size, dtype):
 
 @overload(omp_shared_array, target='cpu', inline='always', prefer_literal=True)
 def omp_shared_array_overload(size, dtype):
-    breakpoint()
     assert isinstance(size, types.IntegerLiteral)
     def impl(size, dtype):
         return np.empty(size, dtype=dtype)
@@ -6373,7 +6371,6 @@ def omp_shared_array_overload(size, dtype):
 
 @overload(omp_shared_array, target='cuda', inline='always', prefer_literal=True)
 def omp_shared_array_overload(size, dtype):
-    breakpoint()
     assert isinstance(size, types.IntegerLiteral)
     def impl(size, dtype):
         return numba_cuda.shared.array(size, dtype)
