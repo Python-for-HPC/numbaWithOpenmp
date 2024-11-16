@@ -330,7 +330,7 @@ class openmp_tag(object):
                     elif isinstance(arg_str, lir.instructions.AllocaInstr):
                         decl = arg_str.get_decl()
                     else:
-                        assert False
+                        assert False, f"Don't know how to get decl string for variable {arg_str} of type {type(arg_str)}"
 
                 if struct_lower and isinstance(xtyp, types.npytypes.Array):
                     dm = lowerer.context.data_model_manager.lookup(xtyp)
@@ -3744,11 +3744,13 @@ class OpenmpVisitor(Transformer):
                             step = self.func_ir.get_definition(range_args[2])
                             # Only use get_definition to get a const if
                             # available.  Otherwise use the variable.
-                            if not isinstance(step, int):
+                            if not isinstance(step, (int, ir.Const)):
                                 step = range_args[2]
                         except KeyError:
-                            raise NotImplementedError(
-                                "Only known step size is supported for range")
+                            # If there is more than one definition possible for the
+                            # step variable then just use the variable and don't try
+                            # to convert to a const.
+                            step = range_args[2]
                         if isinstance(step, ir.Const):
                             step = step.value
 
