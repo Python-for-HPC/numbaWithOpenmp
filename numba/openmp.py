@@ -330,7 +330,7 @@ class openmp_tag(object):
                     elif isinstance(arg_str, lir.instructions.AllocaInstr):
                         decl = arg_str.get_decl()
                     else:
-                        breakpoint()
+                        assert False, f"Don't know how to get decl string for variable {arg_str} of type {type(arg_str)}"
 
                 if struct_lower and isinstance(xtyp, types.npytypes.Array):
                     dm = lowerer.context.data_model_manager.lookup(xtyp)
@@ -3550,9 +3550,7 @@ class OpenmpVisitor(Transformer):
             if len(call) == 0:
                 return False
 
-            return call[0] # or call[0] == prange
-                    #or call[0] == 'internal_prange' or call[0] == internal_prange
-                    #$or call[0] == 'pndindex' or call[0] == pndindex)
+            return call[0]
 
         loop = loops[0]
         entry = list(loop.entries)[0]
@@ -3744,19 +3742,18 @@ class OpenmpVisitor(Transformer):
                         size_var = range_args[1]
                         try:
                             step = self.func_ir.get_definition(range_args[2])
+                            # Only use get_definition to get a const if
+                            # available.  Otherwise use the variable.
+                            if not isinstance(step, (int, ir.Const)):
+                                step = range_args[2]
                         except KeyError:
-                            raise NotImplementedError(
-                                "Only known step size is supported for prange")
-                        if not isinstance(step, ir.Const):
-                            raise NotImplementedError(
-                                "Only constant step size is supported for prange")
-                        step = step.value
-#                        if step != 1:
-#                            print("unsupported step:", step, type(step))
-#                            raise NotImplementedError(
-#                                "Only constant step size of 1 is supported for prange")
+                            # If there is more than one definition possible for the
+                            # step variable then just use the variable and don't try
+                            # to convert to a const.
+                            step = range_args[2]
+                        if isinstance(step, ir.Const):
+                            step = step.value
 
-                    #assert(start == 0 or (isinstance(start, ir.Const) and start.value == 0))
                     if config.DEBUG_OPENMP >= 1:
                         print("size_var:", size_var, type(size_var))
 
@@ -3848,7 +3845,15 @@ class OpenmpVisitor(Transformer):
                     detect_step_assign = ir.Assign(ir.Const(0, inst.loc), step_var, inst.loc)
                     after_start.append(detect_step_assign)
 
-                    step_assign = ir.Assign(ir.Const(step, inst.loc), step_var, inst.loc)
+                    if isinstance(step, int):
+                        step_assign = ir.Assign(ir.Const(step, inst.loc), step_var, inst.loc)
+                    elif isinstance(step, ir.Var):
+                        step_assign = ir.Assign(step, step_var, inst.loc)
+                        start_tags.append(openmp_tag("QUAL.OMP.FIRSTPRIVATE", step.name))
+                    else:
+                        print("Unsupported step:", step, type(step))
+                        raise NotImplementedError(
+                            f"Unknown step type that isn't a constant or variable but {type(step)} instead.")
                     scale_var = loop_index.scope.redefine("$scale", inst.loc)
                     fake_iternext = ir.Assign(ir.Const(0, inst.loc), iternext_inst.target, inst.loc)
                     fake_second = ir.Assign(ir.Const(0, inst.loc), pair_second_inst.target, inst.loc)
@@ -4606,9 +4611,7 @@ class OpenmpVisitor(Transformer):
                                                      end_tags,
                                                      scope)
             vars_in_explicit_clauses, explicit_privates, non_user_explicits = self.get_explicit_vars(clauses)
-
             found_loop, blocks_for_io, blocks_in_region, entry_pred, exit_block, inst, size_var, step_var, latest_index, loop_index = prepare_out
-
             assert(found_loop)
         else:
             blocks_for_io = self.body_blocks
@@ -6363,7 +6366,6 @@ def omp_shared_array(size, dtype):
 
 @overload(omp_shared_array, target='cpu', inline='always', prefer_literal=True)
 def omp_shared_array_overload(size, dtype):
-    breakpoint()
     assert isinstance(size, types.IntegerLiteral)
     def impl(size, dtype):
         return np.empty(size, dtype=dtype)
@@ -6371,7 +6373,6 @@ def omp_shared_array_overload(size, dtype):
 
 @overload(omp_shared_array, target='cuda', inline='always', prefer_literal=True)
 def omp_shared_array_overload(size, dtype):
-    breakpoint()
     assert isinstance(size, types.IntegerLiteral)
     def impl(size, dtype):
         return numba_cuda.shared.array(size, dtype)
